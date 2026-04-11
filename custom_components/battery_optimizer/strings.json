@@ -1,0 +1,87 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Battery Optimizer",
+        "description": "Configure data sources and battery parameters.",
+        "data": {
+          "spot_price_sensor": "Nordpool spot price sensor",
+          "solcast_today_sensor": "Solcast today forecast sensor",
+          "solcast_tomorrow_sensor": "Solcast tomorrow forecast sensor",
+          "battery_soc_sensor": "Battery SoC sensor (e.g. emaldo)",
+          "vat_multiplier": "VAT multiplier (e.g. 1.255 = 25.5%)",
+          "transfer_fee_buy": "Grid transfer fee (€/kWh)",
+          "sales_commission": "Feed-in sales commission (€/kWh)",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "max_charge_kw": "Max charge power (kW)",
+          "max_discharge_kw": "Max discharge power (kW)",
+          "charge_efficiency": "Charge efficiency (0–1)",
+          "discharge_efficiency": "Discharge efficiency (0–1)",
+          "soc_min": "Min SoC (%)",
+          "soc_max": "Max SoC (%)",
+          "base_load_kw": "Base household load estimate (kW)",
+          "battery_price": "Battery purchase price (€)",
+          "battery_lifetime_cycles": "Battery lifetime (full cycles)",
+          "idle_power_kw": "Battery unit idle power consumption (kW)",
+          "solar_power_sensor": "Solar power sensor (W, realtime)",
+          "grid_power_sensor": "Grid power sensor (W, realtime)",
+          "battery_power_sensor": "Battery power sensor (W, realtime)",
+          "idle_strategy": "Idle slot strategy (full_control = override all idle slots; solar_guard = override idle only before solar; smart_override = override only when internal AI plans charge before solar)",
+          "soc_guard_interval": "SoC guard update interval in minutes (0 = disabled, 15/30/60/120). Actively adjusts the discharge floor to prevent faster-than-planned discharge."
+        }
+      }
+    },
+    "error": {
+      "sensor_not_found": "One or more configured sensors not found.",
+      "invalid_params": "Invalid parameters."
+    },
+    "abort": {
+      "already_configured": "Battery Optimizer is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Battery Optimizer Options",
+        "data": {
+          "spot_price_sensor": "Nordpool spot price sensor",
+          "solcast_today_sensor": "Solcast today forecast sensor",
+          "solcast_tomorrow_sensor": "Solcast tomorrow forecast sensor",
+          "battery_soc_sensor": "Battery SoC sensor",
+          "vat_multiplier": "VAT multiplier",
+          "transfer_fee_buy": "Grid transfer fee (€/kWh)",
+          "sales_commission": "Feed-in sales commission (€/kWh)",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "max_charge_kw": "Max charge power (kW)",
+          "max_discharge_kw": "Max discharge power (kW)",
+          "charge_efficiency": "Charge efficiency (0–1)",
+          "discharge_efficiency": "Discharge efficiency (0–1)",
+          "soc_min": "Min SoC (%)",
+          "soc_max": "Max SoC (%)",
+          "base_load_kw": "Base household load (kW)",
+          "battery_price": "Battery purchase price (€)",
+          "battery_lifetime_cycles": "Battery lifetime (full cycles)",
+          "idle_power_kw": "Battery unit idle power (kW)",
+          "solar_power_sensor": "Solar power sensor (W, realtime)",
+          "grid_power_sensor": "Grid power sensor (W, realtime)",
+          "battery_power_sensor": "Battery power sensor (W, realtime)",
+          "idle_strategy": "Idle slot strategy (full_control / solar_guard / smart_override)",
+          "soc_guard_interval": "SoC guard interval (0=off, 15/30/60/120 min)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "run_optimizer": { "name": "Run Optimizer" },
+      "clear_schedule": { "name": "Clear Schedule" }
+    },
+    "sensor": {
+      "status": { "name": "Optimizer Status" },
+      "last_run": { "name": "Last Optimization" },
+      "current_action": { "name": "Current Slot Action" },
+      "estimated_savings": { "name": "Estimated Daily Savings" },
+      "schedule_chart": { "name": "Schedule Chart" }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+run_optimizer:
+  name: Run Optimizer
+  description: >
+    Trigger a battery optimization run. Gathers current prices,
+    solar forecast, and battery state, then computes and applies
+    the optimal charge/discharge schedule.
+  fields:
+    reason:
+      name: Reason
+      description: Why this optimization was triggered (for logging).
+      required: false
+      default: manual
+      example: manual
+      selector:
+        text:
+    force:
+      name: Force
+      description: >
+        Re-optimize even if conditions haven't changed significantly.
+      required: false
+      default: true
+      selector:
+        boolean:
+
+clear_schedule:
+  name: Clear Schedule
+  description: >
+    Remove all battery override slots, reverting the battery to its
+    internal (built-in) schedule.
