@@ -16,7 +16,7 @@ The optimizer produces a 96-slot (15-minute) schedule per day. When tomorrow's p
 - **Prefer discharge at highest buy-price slots first** — greedy assignment from most expensive grid buy price downward (biggest savings first). Discharge candidates are non-solar slots only.
 - **Prefer charge at cheapest buy-price slots first** — greedy assignment from cheapest buy price upward.
 - **Plan today + tomorrow** — when next-day prices are available (typically after 14:00), the optimizer also plans all 96 slots for tomorrow. Both plans are pushed via a rolling 96-slot E2E window: positions `[now_slot..95]` carry today's plan, positions `[0..now_slot-1]` carry tomorrow's plan.
-- **Re-optimize on schedule and events** — checkpoints at 00:01, 02:00, 06:00, 14:15, 18:00, 22:00 plus immediate re-run when Nordpool publishes new prices. Conditional runs skip if SoC deviation < 10%.
+- **Re-optimize on schedule and events** — fixed midnight checkpoint at 00:01 plus configurable periodic re-runs (15/30/60/120 min, default 120) and immediate re-run when Nordpool publishes new prices. Conditional runs skip if SoC deviation < 10%.
 
 ## Algorithm Overview (Greedy)
 

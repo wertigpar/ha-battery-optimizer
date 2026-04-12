@@ -1,6 +1,8 @@
 # Battery Optimizer — Home Assistant Custom Integration
 
-A Home Assistant custom integration that optimizes battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to an [Emaldo](../emaldo/) battery system via a rolling 24-hour E2E override window.
+A Home Assistant custom integration that optimizes battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to a battery system via a rolling 24-hour E2E override window. Integration in mainly built to work together with Emaldo Home Assistant custom component.
+
+Integration is still prettu much in Proof-of-concept stage 
 
 ## How It Works
 
@@ -299,18 +301,13 @@ service: battery_optimizer.clear_schedule
 
 The optimizer runs automatically based on:
 
-### Checkpoint Times
+### Optimizer Re-run Interval
 
-| Time | Purpose |
-|---|---|
-| **00:01** | Midnight — re-optimize for the new day |
-| **02:00** | Night recheck — adjust for actual overnight consumption |
-| **06:00** | Morning recheck — optimize for the coming day |
-| **14:15** | Post-Nordpool publish — re-optimize with tomorrow's prices |
-| **18:00** | Evening peak preparation |
-| **22:00** | Night preparation |
+The optimizer re-runs periodically based on the **Optimizer re-run interval** setting (configurable: 15 / 30 / 60 / 120 minutes, default 120).
 
-Checkpoint runs are **conditional** (`force=False`) — they will skip if the actual battery SoC is within 10% of the planned SoC.
+In addition, a **fixed midnight checkpoint** always runs at **00:01** to re-optimize for the new day.
+
+All periodic runs are **conditional** (`force=False`) — they will skip if the actual battery SoC is within 10% of the planned SoC.
 
 ### Price Sensor State Change
 
