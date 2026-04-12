@@ -28,7 +28,7 @@ from .const import (
     SLOT_NO_OVERRIDE,
     SLOT_IDLE,
     SLOTS_PER_DAY,
-    CHECKPOINT_TIMES,
+    MIDNIGHT_CHECKPOINT,
     CONF_SPOT_SENSOR,
     CONF_SOLCAST_TODAY,
     CONF_SOLCAST_TOMORROW,
@@ -49,9 +49,11 @@ from .const import (
     CONF_IDLE_POWER_KW,
     CONF_IDLE_STRATEGY,
     CONF_SOC_GUARD_INTERVAL,
+    CONF_OPTIMIZER_INTERVAL,
     CONF_SOLAR_POWER_SENSOR,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
+    DEFAULT_OPTIMIZER_INTERVAL,
     DEFAULT_SOLAR_POWER_SENSOR,
     IDLE_FULL_CONTROL,
     IDLE_SOLAR_GUARD,
@@ -813,18 +815,29 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             unsub()
         self._unsub_listeners.clear()
 
-        # 1) Checkpoint times
-        for hour, minute in CHECKPOINT_TIMES:
-            unsub = async_track_time_change(
-                self.hass,
-                self._checkpoint_callback,
-                hour=hour,
-                minute=minute,
-                second=0,
-            )
-            self._unsub_listeners.append(unsub)
+        # 1) Fixed midnight checkpoint (always runs at 00:01)
+        hour, minute = MIDNIGHT_CHECKPOINT
+        unsub = async_track_time_change(
+            self.hass,
+            self._checkpoint_callback,
+            hour=hour,
+            minute=minute,
+            second=0,
+        )
+        self._unsub_listeners.append(unsub)
 
-        # 2) Nordpool state change — re-run when tomorrow's prices arrive
+        # 2) Configurable periodic optimizer re-run
+        opt_interval = self.config.get(
+            CONF_OPTIMIZER_INTERVAL, DEFAULT_OPTIMIZER_INTERVAL
+        )
+        unsub = async_track_time_interval(
+            self.hass,
+            self._checkpoint_callback,
+            timedelta(minutes=opt_interval),
+        )
+        self._unsub_listeners.append(unsub)
+
+        # 3) Nordpool state change — re-run when tomorrow's prices arrive
         spot_sensor = self.config[CONF_SPOT_SENSOR]
         unsub = async_track_state_change_event(
             self.hass,
@@ -834,11 +847,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_listeners.append(unsub)
 
         _LOGGER.info(
-            "Listeners set up: %d checkpoint times + Nordpool watcher on %s",
-            len(CHECKPOINT_TIMES), spot_sensor,
+            "Listeners set up: midnight checkpoint + %d-min interval + Nordpool watcher on %s",
+            opt_interval, spot_sensor,
         )
 
-        # 3) SoC Guard periodic timer
+        # 4) SoC Guard periodic timer
         guard_interval = self.config.get(
             CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
         )
@@ -858,7 +871,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._unsub_guard()
                 self._unsub_guard = None
 
-        # 4) Delayed startup run — populate sensors after restart
+        # 5) Delayed startup run — populate sensors after restart
         unsub = async_call_later(
             self.hass, 90, self._startup_callback,
         )
