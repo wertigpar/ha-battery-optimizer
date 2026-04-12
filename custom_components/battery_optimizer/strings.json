@@ -27,7 +27,8 @@
           "grid_power_sensor": "Grid power sensor (W, realtime)",
           "battery_power_sensor": "Battery power sensor (W, realtime)",
           "idle_strategy": "Idle slot strategy (full_control = override all idle slots; solar_guard = override idle only before solar; smart_override = override only when internal AI plans charge before solar)",
-          "soc_guard_interval": "SoC guard update interval in minutes (0 = disabled, 15/30/60/120). Actively adjusts the discharge floor to prevent faster-than-planned discharge."
+          "soc_guard_interval": "SoC guard update interval in minutes (0 = disabled, 15/30/60/120). Actively adjusts the discharge floor to prevent faster-than-planned discharge.",
+          "optimizer_interval": "Optimizer re-run interval in minutes (15/30/60/120). How often the optimizer recalculates the schedule."
         }
       }
     },
@@ -66,7 +67,8 @@
           "grid_power_sensor": "Grid power sensor (W, realtime)",
           "battery_power_sensor": "Battery power sensor (W, realtime)",
           "idle_strategy": "Idle slot strategy (full_control / solar_guard / smart_override)",
-          "soc_guard_interval": "SoC guard interval (0=off, 15/30/60/120 min)"
+          "soc_guard_interval": "SoC guard interval (0=off, 15/30/60/120 min)",
+          "optimizer_interval": "Optimizer re-run interval (15/30/60/120 min)"
         }
       }
     }

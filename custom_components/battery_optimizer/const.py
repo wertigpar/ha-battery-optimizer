@@ -33,6 +33,7 @@ CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
 CONF_IDLE_STRATEGY = "idle_strategy"
 
 CONF_SOC_GUARD_INTERVAL = "soc_guard_interval"
+CONF_OPTIMIZER_INTERVAL = "optimizer_interval"
 
 # ── Defaults ─────────────────────────────────────────────────────────
 DEFAULT_VAT_MULTIPLIER = 1.255       # 25.5% Finnish electricity VAT
@@ -55,6 +56,10 @@ DEFAULT_SOLAR_POWER_SENSOR = ""
 DEFAULT_GRID_POWER_SENSOR = ""
 DEFAULT_BATTERY_POWER_SENSOR = ""
 
+# ── Optimizer run interval ────────────────────────────────────────────
+DEFAULT_OPTIMIZER_INTERVAL = 120   # minutes
+OPTIMIZER_INTERVALS = [15, 30, 60, 120]
+
 # ── SoC Guard ────────────────────────────────────────────────────────
 DEFAULT_SOC_GUARD_INTERVAL = 0   # minutes, 0 = disabled
 SOC_GUARD_INTERVALS = [0, 15, 30, 60, 120]
@@ -74,12 +79,5 @@ EMALDO_DOMAIN = "emaldo"
 SLOTS_PER_DAY = 96
 SLOT_DURATION_HOURS = 0.25  # 15 minutes
 
-# Checkpoint times (hour, minute)
-CHECKPOINT_TIMES = [
-    (0, 1),     # midnight — push stored tomorrow plan as today
-    (2, 0),
-    (6, 0),
-    (14, 15),   # shortly after typical Nordpool publish
-    (18, 0),
-    (22, 0),
-]
+# Fixed midnight checkpoint (always runs regardless of interval)
+MIDNIGHT_CHECKPOINT = (0, 1)
