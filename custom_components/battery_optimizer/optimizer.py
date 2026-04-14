@@ -318,8 +318,14 @@ def optimize(
     # Pre-compute expected solar contribution so discharge planning
     # knows how much free energy is coming.  Account for idle drain
     # (battery unit consumes idle_power_kw from stored energy).
+    #
+    # Start the headroom estimate from soc_min, not current_soc.
+    # Discharge before solar hours will lower the SoC, creating more
+    # room for free solar recharging.  Using current_soc artificially
+    # limits the solar estimate and causes the optimizer to skip
+    # profitable overnight discharge slots.
     estimated_solar_kwh = 0.0
-    _tmp_soc = current_soc_kwh
+    _tmp_soc = soc_min_kwh
     for s in solar_surplus_slots:
         surplus_kw = -net_loads[s]
         charge_kw = min(surplus_kw, cfg.max_charge_kw)
