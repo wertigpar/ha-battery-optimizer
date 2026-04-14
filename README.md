@@ -2,29 +2,29 @@
 
 A Home Assistant custom integration that optimizes battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to a battery system via a rolling 24-hour E2E override window. Integration in mainly built to work together with Emaldo Home Assistant custom component.
 
-Integration is still prettu much in Proof-of-concept stage 
+Integration is still pretty much in Proof-of-concept stage. Main purpose is to make evaluating different battery control strategies easier.
 
 ## How It Works
 
 ```
  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
- │  Spot Price   │   │   Solcast     │   │  Battery SoC │
- │   Sensor      │   │  PV Forecast  │   │   Sensor     │
+ │  Spot Price  │   │   Solcast    │   │  Battery SoC │
+ │   Sensor     │   │  PV Forecast │   │   Sensor     │
  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
-        │                  │                   │
-        └──────────┬───────┴───────────────────┘
+        │                  │                  │
+        └──────────┬───────┴──────────────────┘
                    ▼
-          ┌────────────────┐
+          ┌─────────────────┐
           │   Greedy        │
           │   Optimizer     │   96 × 15-min slots
           │   (optimizer.py)│──────────────────────┐
-          └────────────────┘                       │
+          └─────────────────┘                      │
                                                    ▼
-                                           ┌──────────────┐
+                                           ┌───────────────┐
                                            │   Emaldo      │
                                            │   apply_bulk_ │
-                                           │   schedule     │
-                                           └──────────────┘
+                                           │   schedule    │
+                                           └───────────────┘
 ```
 
 **Optimization strategy (greedy, self-consumption model):**
@@ -358,6 +358,8 @@ automation:
 
 Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.
 
+![Example Home Assistant dashboard for Battery Optimizer](dashboard.png)
+
 #### Action Plan
 
 Shows the optimizer's planned battery schedule for every 15-minute slot as
@@ -453,7 +455,7 @@ the optimizer chose each action.
 ```yaml
 type: custom:apexcharts-card
 header:
-  title: Price, SoC & Solar
+  title: Total Price, SoC estimate & Solcast Solar forecast
   show: true
   show_states: false
 graph_span: 48h
@@ -463,25 +465,33 @@ now:
   show: true
   label: Now
   color: red
+yaxis:
+  - id: soc
+    min: 0
+    max: 100
+    apex_config:
+      decimalsInFloat: 0
+      title:
+        text: "SoC %"
+  - id: price
+    opposite: true
+    min: ~0
+    apex_config:
+      decimalsInFloat: 1
+      title:
+        text: "c/kWh"
+  - id: solar
+    show: false
+    min: 0
+    max: 7
+    apex_config:
+      title:
+        text: "kW"
 apex_config:
   chart:
     height: 250px
   legend:
     show: true
-  yaxis:
-    - id: soc
-      min: 0
-      max: 100
-      decimalsInFloat: 0
-      title:
-        text: "SoC %"
-    - id: price
-      opposite: true
-      decimalsInFloat: 1
-      title:
-        text: "c/kWh"
-    - id: solar
-      show: false
 series:
   - entity: sensor.battery_optimizer_schedule_chart
     name: Battery SoC
@@ -502,7 +512,7 @@ series:
         s.soc
       ]);
   - entity: sensor.battery_optimizer_schedule_chart
-    name: Buy Price
+    name: Buy Total Cost
     type: line
     yaxis_id: price
     stroke_width: 2
@@ -519,7 +529,7 @@ series:
         Math.round(s.buy * 10000) / 100
       ]);
   - entity: sensor.battery_optimizer_schedule_chart
-    name: Sell Price
+    name: Sell Total Profit
     type: line
     yaxis_id: price
     stroke_width: 2
