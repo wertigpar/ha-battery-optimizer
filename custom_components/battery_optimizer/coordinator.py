@@ -20,6 +20,7 @@ from homeassistant.helpers.event import (
     async_track_time_change,
     async_track_time_interval,
 )
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
@@ -32,7 +33,6 @@ from .const import (
     CONF_SPOT_SENSOR,
     CONF_SOLCAST_TODAY,
     CONF_SOLCAST_TOMORROW,
-    CONF_BATTERY_SOC_SENSOR,
     CONF_VAT_MULTIPLIER,
     CONF_TRANSFER_FEE_BUY,
     CONF_SALES_COMMISSION,
@@ -44,17 +44,24 @@ from .const import (
     CONF_SOC_MIN,
     CONF_SOC_MAX,
     CONF_BASE_LOAD_KW,
-    CONF_BATTERY_PRICE,
-    CONF_BATTERY_LIFETIME_CYCLES,
+    CONF_BATTERY_WEAR_COST,
     CONF_IDLE_POWER_KW,
     CONF_IDLE_STRATEGY,
     CONF_SOC_GUARD_INTERVAL,
     CONF_OPTIMIZER_INTERVAL,
-    CONF_SOLAR_POWER_SENSOR,
+    CONF_EMALDO_ENTRY_ID,
+    CONF_AUTO_BASE_LOAD,
+    CONF_LOAD_ENERGY_SENSOR,
+    CONF_ENABLE_PV_STRATEGY,
+    CONF_SOLAR_SELL_MIN_FORECAST_KWH,
+    DEFAULT_AUTO_BASE_LOAD,
+    DEFAULT_LOAD_ENERGY_SENSOR,
+    DEFAULT_ENABLE_PV_STRATEGY,
+    DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
+    DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
     DEFAULT_OPTIMIZER_INTERVAL,
-    DEFAULT_SOLAR_POWER_SENSOR,
     IDLE_FULL_CONTROL,
     IDLE_SOLAR_GUARD,
     IDLE_SMART_OVERRIDE,
@@ -114,9 +121,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_guard: CALLBACK_TYPE | None = None
         self._current_guard_marker: int | None = None
         self._last_sent_slots: list[int] | None = None
-        # Solar adaptation state: actual readings per 15-min slot
-        self._actual_solar: list[float | None] = [None] * SLOTS_PER_DAY
-        self._solar_date: datetime | None = None  # date the readings belong to
+        # Balancing state tracking
+        self._balancing_sensor: str | None = None
+        # Pinned Emaldo entry (from config, or auto-detected)
+        self._emaldo_entry_id: str | None = self.config.get(CONF_EMALDO_ENTRY_ID)
+        # Actual SoC history — recorded at each optimizer run for dashboard overlay
+        self._actual_soc: list[dict] = []
+        # Auto base load — cached result from last recorder query
+        self._auto_base_load_value: float | None = None
+        # Plan accuracy — planned vs actual energy for elapsed slots since last run
+        self._last_run_slot: int | None = None
+        self._last_run_initial_soc: float | None = None
+        self._last_run_actual_snapshot: dict | None = None
+        self._plan_accuracy: dict | None = None
+        # PV sell strategy
+        self._pv_strategy_enabled: bool = self.config.get(
+            CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY
+        )
+        self._unsub_pv_transitions: list[CALLBACK_TYPE] = []
+        # Last known PV switch state — used for reconciliation
+        self._pv_switch_state: bool | None = None
 
     @property
     def config(self) -> dict[str, Any]:
@@ -144,6 +168,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self._activated_time
 
     @property
+    def actual_soc_history(self) -> list[dict]:
+        """Actual SoC readings recorded at each optimizer run."""
+        return self._actual_soc
+
+    @property
+    def auto_base_load_value(self) -> float | None:
+        """Last computed auto base load (kW), or None before first run."""
+        return self._auto_base_load_value
+
+    @property
+    def plan_accuracy(self) -> dict | None:
+        """Plan vs actual accuracy dict from the last completed window."""
+        return self._plan_accuracy
+
+    @property
     def soc_guard_marker(self) -> int | None:
         """Current SoC guard high_marker, or None if guard is disabled."""
         guard_interval = self.config.get(
@@ -153,9 +192,50 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return self._current_guard_marker
 
+    def _find_balancing_sensor(self) -> str | None:
+        """Return the balancing state entity_id, auto-discovered from the selected Emaldo entry."""
+        return self._resolve_emaldo_entity("balancing_state")
+
+    def _is_balancing_active(self) -> bool:
+        """Return True when the Emaldo device is under grid-balancing control."""
+        sensor_id = self._balancing_sensor
+        if not sensor_id:
+            return False
+        state = self.hass.states.get(sensor_id)
+        if state is None:
+            return False
+        return state.state not in ("idle", "unknown", "unavailable")
+
+    @callback
+    def _on_balancing_state_change(self, event) -> None:
+        """Trigger a forced replan when balancing ends (any state → idle)."""
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+        if (
+            old_state is not None
+            and old_state.state not in ("idle", "unknown", "unavailable")
+            and new_state is not None
+            and new_state.state == "idle"
+        ):
+            _LOGGER.info(
+                "Balancing ended (%s → idle) — scheduling immediate replan",
+                old_state.state,
+            )
+            self.hass.async_create_task(
+                self.run_optimizer(reason="balancing_ended", force=True)
+            )
+
     def _build_battery_config(self) -> BatteryConfig:
         """Create a BatteryConfig from the current HA config."""
         c = self.config
+        # Use auto-tuned base load if enabled and a value has been computed;
+        # otherwise fall back to the configured static value.
+        base_load_kw = (
+            self._auto_base_load_value
+            if self._auto_base_load_value is not None
+            and c.get(CONF_AUTO_BASE_LOAD, DEFAULT_AUTO_BASE_LOAD)
+            else c.get(CONF_BASE_LOAD_KW, 0.5)
+        )
         return BatteryConfig(
             capacity_kwh=c.get(CONF_BATTERY_CAPACITY_KWH, 5.0),
             max_charge_kw=c.get(CONF_MAX_CHARGE_KW, 2.5),
@@ -167,9 +247,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             vat_multiplier=c.get(CONF_VAT_MULTIPLIER, 1.255),
             transfer_fee_buy=c.get(CONF_TRANSFER_FEE_BUY, 0.0572),
             sales_commission=c.get(CONF_SALES_COMMISSION, 0.002),
-            base_load_kw=c.get(CONF_BASE_LOAD_KW, 0.5),
-            battery_price=c.get(CONF_BATTERY_PRICE, 9000.0),
-            battery_lifetime_cycles=c.get(CONF_BATTERY_LIFETIME_CYCLES, 10000),
+            base_load_kw=base_load_kw,
+            wear_cost_per_kwh=c.get(CONF_BATTERY_WEAR_COST, 0.03),
             idle_power_kw=c.get(CONF_IDLE_POWER_KW, 0.1),
         )
 
@@ -300,9 +379,50 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         slots_30min = [s.get("pv_estimate", 0.0) for s in detailed]
         return interpolate_solar_to_15min(slots_30min)
 
+    def _resolve_emaldo_entity(self, key: str, domain: str = "sensor") -> str | None:
+        """Resolve an Emaldo entity_id from the entity registry.
+
+        Uses the emaldo coordinator's home_id to construct the unique_id
+        pattern ``{home_id}_{key}``.  This works for any Emaldo device model
+        (Power Store, Power Core, …) regardless of the slugified device name.
+
+        Args:
+            key: The key suffix as used in the Emaldo unique_id (e.g. ``battery_soc``).
+            domain: HA entity domain to look in (default ``"sensor"``; use
+                    ``"switch"`` for switch entities).
+
+        Returns:
+            entity_id string, or None if not found.
+        """
+        emaldo_data = self.hass.data.get(EMALDO_DOMAIN)
+        if not emaldo_data:
+            return None
+        # Use pinned entry if available, otherwise iterate
+        entries = (
+            [(self._emaldo_entry_id, emaldo_data[self._emaldo_entry_id])]
+            if self._emaldo_entry_id and self._emaldo_entry_id in emaldo_data
+            else emaldo_data.items()
+        )
+        for entry_id, entry_data in entries:
+            coord = entry_data.get("power")  # EmaldoCoordinator — holds home_id
+            if coord is None:
+                continue
+            home_id = getattr(coord, "home_id", None)
+            if not home_id:
+                continue
+            unique_id = f"{home_id}_{key}"
+            registry = er.async_get(self.hass)
+            entity_id = registry.async_get_entity_id(domain, EMALDO_DOMAIN, unique_id)
+            if entity_id:
+                return entity_id
+        return None
+
     def _get_battery_soc(self) -> float | None:
-        """Read current battery SoC from sensor."""
-        sensor_id = self.config[CONF_BATTERY_SOC_SENSOR]
+        """Read current battery SoC, auto-discovered from the selected Emaldo entry."""
+        sensor_id = self._resolve_emaldo_entity("battery_soc")
+        if not sensor_id:
+            _LOGGER.warning("Battery SoC sensor could not be auto-discovered from the Emaldo integration")
+            return None
         state = self.hass.states.get(sensor_id)
         if state is None or state.state in ("unknown", "unavailable"):
             return None
@@ -311,92 +431,176 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (ValueError, TypeError):
             return None
 
-    # ── Solar forecast adaptation ─────────────────────────────────────
-
-    def _read_solar_power_kw(self) -> float | None:
-        """Read current solar production from the configured power sensor.
-
-        The sensor is expected to report watts — we convert to kW.
-        Returns None if sensor is unavailable.
-        """
-        sensor_id = self.config.get(
-            CONF_SOLAR_POWER_SENSOR, DEFAULT_SOLAR_POWER_SENSOR
-        )
+    def _read_emaldo_sensor_float(self, key: str) -> float | None:
+        """Read a float value from an Emaldo sensor by emaldo key."""
+        sensor_id = self._resolve_emaldo_entity(key)
+        if not sensor_id:
+            return None
         state = self.hass.states.get(sensor_id)
         if state is None or state.state in ("unknown", "unavailable"):
             return None
         try:
-            value = float(state.state)
+            return float(state.state)
         except (ValueError, TypeError):
             return None
-        # Convert watts to kW (handle sensors that already report kW)
-        unit = str(state.attributes.get("unit_of_measurement", "")).lower()
-        if "kw" in unit:
-            return max(value, 0.0)
-        return max(value / 1000.0, 0.0)
 
-    def _record_current_solar(self) -> None:
-        """Record the current solar power reading for the current slot.
+    # ── Auto base load ────────────────────────────────────────────────
 
-        Resets all readings at the start of a new day.
+    async def _fetch_auto_base_load_kw(self) -> float:
+        """Return auto-tuned base load kW from 14-day HA recorder statistics.
+
+        Queries the daily ``mean`` of the configured household load power sensor
+        (W, ``state_class: measurement``) over the last 14 days, converts to kW,
+        and returns the 7-day rolling average clamped to ±50 % of the configured
+        ``base_load_kw``.
+
+        Configure with a combined household load power sensor in Watts, e.g.
+        ``sensor.emhass_combined_power``.
+
+        Falls back to the configured ``base_load_kw`` if:
+        - auto-tune is disabled,
+        - no sensor is configured,
+        - the recorder component is unavailable, or
+        - fewer than 3 days of data exist.
         """
-        today = dt_util.now().date()
-        if self._solar_date != today:
-            self._actual_solar = [None] * SLOTS_PER_DAY
-            self._solar_date = today
+        configured = self.config.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW)
+        if not self.config.get(CONF_AUTO_BASE_LOAD, DEFAULT_AUTO_BASE_LOAD):
+            return configured
 
-        reading = self._read_solar_power_kw()
-        if reading is not None:
-            slot = _current_slot_index()
-            self._actual_solar[slot] = reading
+        load_sensor = self.config.get(CONF_LOAD_ENERGY_SENSOR, DEFAULT_LOAD_ENERGY_SENSOR)
+        if not load_sensor:
+            _LOGGER.debug("Auto base load: no sensor configured, using %.2f kW", configured)
+            return configured
 
-    def _adapt_solar_forecast(self, forecast: list[float]) -> list[float]:
-        """Adapt Solcast forecast using actual solar power measurements.
-
-        For elapsed slots with actual data, replace forecast values.
-        For future slots, apply a dampening factor derived from the ratio
-        of actual vs forecast production over recent daylight slots.
-        """
-        self._record_current_solar()
-        now_slot = _current_slot_index()
-
-        adapted = list(forecast)
-
-        # Replace past slots with actual measurements where available
-        for s in range(min(now_slot + 1, SLOTS_PER_DAY)):
-            if self._actual_solar[s] is not None:
-                adapted[s] = self._actual_solar[s]
-
-        # Compute dampening factor from daylight slots with both readings.
-        # Only use slots where forecast predicts meaningful solar (>0.1 kW).
-        forecast_sum = 0.0
-        actual_sum = 0.0
-        count = 0
-        for s in range(min(now_slot, SLOTS_PER_DAY)):
-            if forecast[s] > 0.1 and self._actual_solar[s] is not None:
-                forecast_sum += forecast[s]
-                actual_sum += self._actual_solar[s]
-                count += 1
-
-        if count >= 2 and forecast_sum > 0:
-            ratio = actual_sum / forecast_sum
-            # Clamp: don't over-correct in either direction
-            dampening = max(0.3, min(1.5, ratio))
-            _LOGGER.info(
-                "Solar adaptation: %d slots, actual/forecast ratio=%.2f, "
-                "dampening=%.2f",
-                count, ratio, dampening,
+        try:
+            from homeassistant.components.recorder import get_instance  # noqa: PLC0415
+            from homeassistant.components.recorder.statistics import (  # noqa: PLC0415
+                statistics_during_period,
             )
-            for s in range(now_slot + 1, SLOTS_PER_DAY):
-                adapted[s] = forecast[s] * dampening
-        else:
+        except ImportError:
+            _LOGGER.debug("Recorder not available — using configured base_load_kw")
+            return configured
+
+        now = dt_util.now()
+        start = now - timedelta(days=14)
+        try:
+            stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                start,
+                None,
+                {load_sensor},
+                "day",
+                None,
+                {"mean"},
+            )
+        except Exception:
             _LOGGER.debug(
-                "Solar adaptation: insufficient data (%d daylight slots), "
-                "using raw forecast",
-                count,
+                "Recorder query failed — using configured base_load_kw", exc_info=True
             )
+            return configured
 
-        return adapted
+        rows = stats.get(load_sensor, [])
+        # mean is in W; convert to kW and keep only positive (load) values
+        daily_kw = [row["mean"] / 1000.0 for row in rows if row.get("mean") is not None and row["mean"] > 0]
+
+        if len(daily_kw) < 3:
+            _LOGGER.debug(
+                "Auto base load: only %d days of data (need ≥3) — using %.2f kW",
+                len(daily_kw),
+                configured,
+            )
+            return configured
+
+        window = daily_kw[-7:]
+        avg_kw = sum(window) / len(window)
+        lo = configured * 0.5
+        hi = configured * 2.0
+        result = max(lo, min(hi, avg_kw))
+        _LOGGER.info(
+            "Auto base load: %d-day window, daily avg=%.3f kW "
+            "(configured=%.3f kW, clamped [%.3f, %.3f]) → %.3f kW",
+            len(window),
+            avg_kw,
+            configured,
+            lo,
+            hi,
+            result,
+        )
+        return result
+
+    # ── Plan accuracy ─────────────────────────────────────────────────
+
+    def _compute_plan_accuracy(self, now_slot: int) -> dict | None:
+        """Compare planned vs actual energy for slots elapsed since the last run.
+
+        Sums planned charge/discharge/solar kWh from the previous optimizer
+        result for the elapsed slots and compares with the delta of actual
+        Emaldo sensor readings since the last run snapshot.
+
+        Returns None if insufficient data (no prior result or no elapsed slots).
+        """
+        if (
+            self._last_result is None
+            or self._last_run_slot is None
+            or self._last_run_initial_soc is None
+            or now_slot <= self._last_run_slot
+        ):
+            return None
+
+        cfg = self._build_battery_config()
+        capacity = cfg.capacity_kwh
+
+        slot_plan = {sp.index: sp for sp in self._last_result.slots}
+        planned_discharge = 0.0
+        planned_charge = 0.0
+        planned_solar = 0.0
+        elapsed = 0
+        prev_soc: float | None = self._last_run_initial_soc
+
+        for s in range(self._last_run_slot, now_slot):
+            sp = slot_plan.get(s)
+            if sp is None:
+                prev_soc = None
+                elapsed += 1
+                continue
+            if prev_soc is not None:
+                soc_delta = sp.soc_after - prev_soc
+                kwh = abs(soc_delta) * capacity / 100.0
+                if sp.action == "charge":
+                    planned_charge += kwh
+                elif sp.action == "discharge":
+                    planned_discharge += kwh
+            planned_solar += sp.solar_kw * 0.25
+            prev_soc = sp.soc_after
+            elapsed += 1
+
+        snap = self._last_run_actual_snapshot or {}
+        accuracy: dict = {
+            "elapsed_slots": elapsed,
+            "planned_discharge_kwh": round(planned_discharge, 3),
+            "planned_charge_kwh": round(planned_charge, 3),
+            "planned_solar_kwh": round(planned_solar, 3),
+            "last_run": self._last_run.isoformat() if self._last_run else None,
+        }
+
+        for emaldo_key, snap_key in [
+            ("battery_discharged_today", "discharge"),
+            ("battery_charged_today", "charge"),
+            ("solar_energy_today", "solar"),
+        ]:
+            actual = self._read_emaldo_sensor_float(emaldo_key)
+            if actual is not None and snap_key in snap and snap[snap_key] is not None:
+                delta = actual - snap[snap_key]
+                # Guard against midnight sensor reset (values drop back to 0)
+                if delta >= -0.1:
+                    actual_kwh = round(max(delta, 0.0), 3)
+                    accuracy[f"actual_{snap_key}_kwh"] = actual_kwh
+                    accuracy[f"{snap_key}_error_kwh"] = round(
+                        actual_kwh - accuracy[f"planned_{snap_key}_kwh"], 3
+                    )
+
+        return accuracy
 
     # ── Optimizer entry point ─────────────────────────────────────────
 
@@ -427,25 +631,48 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             len(prices_today), min(prices_today), max(prices_today),
         )
 
-        solar = self._adapt_solar_forecast(self._get_solcast_forecast("today"))
+        solar = self._get_solcast_forecast("today")
         soc = self._get_battery_soc()
+        self._auto_base_load_value = await self._fetch_auto_base_load_kw()
         cfg = self._build_battery_config()
         now_slot = _current_slot_index()
 
         if soc is None:
             _LOGGER.error(
-                "Cannot optimize: battery SoC sensor '%s' returned None. "
-                "Check that the sensor exists and is not 'unknown'/'unavailable'.",
-                self.config.get(CONF_BATTERY_SOC_SENSOR, "(not configured)"),
+                "Cannot optimize: battery SoC could not be read. "
+                "Ensure the Emaldo integration is loaded and the device is online.",
             )
             return None
 
         _LOGGER.info("Battery SoC: %.1f%%, start_slot: %d", soc, now_slot)
 
+        # Record actual SoC for dashboard overlay
+        self._actual_soc.append({"t": dt_util.now().isoformat(), "soc": round(soc, 1)})
+        if len(self._actual_soc) > 192:  # cap at ~2 days of 15-min readings
+            self._actual_soc = self._actual_soc[-192:]
+
         if not force and self._last_result is not None:
             if not self._should_reoptimize(soc, cfg):
                 _LOGGER.info("Skipping optimization — no significant changes")
                 return self._last_result
+
+        # Compute plan accuracy from the previous result before overwriting
+        new_accuracy = self._compute_plan_accuracy(now_slot)
+        if new_accuracy is not None:
+            self._plan_accuracy = new_accuracy
+            _LOGGER.info(
+                "Plan accuracy (%d slots): "
+                "discharge planned=%.3f actual=%s kWh, "
+                "charge planned=%.3f actual=%s kWh, "
+                "solar planned=%.3f actual=%s kWh",
+                new_accuracy["elapsed_slots"],
+                new_accuracy["planned_discharge_kwh"],
+                new_accuracy.get("actual_discharge_kwh", "N/A"),
+                new_accuracy["planned_charge_kwh"],
+                new_accuracy.get("actual_charge_kwh", "N/A"),
+                new_accuracy["planned_solar_kwh"],
+                new_accuracy.get("actual_solar_kwh", "N/A"),
+            )
 
         # Run optimizer — prices_today is already 96 x 15-min in €/kWh
         buy_prices, sell_prices = compute_prices(prices_today, cfg)
@@ -456,12 +683,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             cfg,
             start_slot=now_slot,
             initial_soc_pct=soc,
+            enable_pv_strategy=self._pv_strategy_enabled,
         )
         result.reason = reason
 
         self._last_result = result
         self._last_run = dt_util.now()
         self._last_reason = reason
+
+        # Snapshot actual values for next accuracy comparison
+        self._last_run_slot = now_slot
+        self._last_run_initial_soc = soc
+        self._last_run_actual_snapshot = {
+            "discharge": self._read_emaldo_sensor_float("battery_discharged_today"),
+            "charge": self._read_emaldo_sensor_float("battery_charged_today"),
+            "solar": self._read_emaldo_sensor_float("solar_energy_today"),
+        }
 
         # Optimize tomorrow if prices available
         if prices_tomorrow is not None:
@@ -475,6 +712,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 cfg,
                 start_slot=0,
                 initial_soc_pct=end_soc,
+                enable_pv_strategy=self._pv_strategy_enabled,
             )
             self._last_result_tomorrow = result_tomorrow
             _LOGGER.info(
@@ -489,6 +727,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Push today (+ tomorrow if available) to Emaldo
         await self._push_schedule(result, self._last_result_tomorrow)
+
+        # Apply PV sell strategy (controls Emaldo third-party PV switch)
+        await self._apply_pv_strategy(result)
 
         # Compute activated time window
         self._compute_activated_time(result, self._last_result_tomorrow)
@@ -549,6 +790,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning(
                 "Emaldo service 'apply_bulk_schedule' not available — "
                 "schedule computed but not applied"
+            )
+            return
+
+        if self._is_balancing_active():
+            _LOGGER.info(
+                "Balancing active (%s) — skipping schedule push",
+                self.hass.states.get(self._balancing_sensor).state,
             )
             return
 
@@ -773,7 +1021,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Emaldo integration data not available for smart diff")
             return None
 
-        for entry_data in emaldo_data.values():
+        entries = (
+            [(self._emaldo_entry_id, emaldo_data[self._emaldo_entry_id])]
+            if self._emaldo_entry_id and self._emaldo_entry_id in emaldo_data
+            else emaldo_data.items()
+        )
+        for entry_id, entry_data in entries:
             sched_coord = entry_data.get("schedule")
             if sched_coord is None or sched_coord.data is None:
                 continue
@@ -799,7 +1052,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         emaldo_data = self.hass.data.get(EMALDO_DOMAIN)
         if not emaldo_data:
             return
-        for entry_data in emaldo_data.values():
+        entries = (
+            [(self._emaldo_entry_id, emaldo_data[self._emaldo_entry_id])]
+            if self._emaldo_entry_id and self._emaldo_entry_id in emaldo_data
+            else emaldo_data.items()
+        )
+        for entry_id, entry_data in entries:
             sched_coord = entry_data.get("schedule")
             if sched_coord is not None:
                 await sched_coord.async_request_refresh()
@@ -846,6 +1104,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._unsub_listeners.append(unsub)
 
+        # 4a) Balancing state watcher — replan when balancing ends
+        self._balancing_sensor = self._find_balancing_sensor()
+        if self._balancing_sensor:
+            unsub = async_track_state_change_event(
+                self.hass,
+                [self._balancing_sensor],
+                self._on_balancing_state_change,
+            )
+            self._unsub_listeners.append(unsub)
+            _LOGGER.info(
+                "Balancing watcher registered on %s", self._balancing_sensor
+            )
+        else:
+            _LOGGER.debug("Balancing sensor not found — balancing replan disabled")
+
         _LOGGER.info(
             "Listeners set up: midnight checkpoint + %d-min interval + Nordpool watcher on %s",
             opt_interval, spot_sensor,
@@ -874,6 +1147,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # 5) Delayed startup run — populate sensors after restart
         unsub = async_call_later(
             self.hass, 90, self._startup_callback,
+        )
+        self._unsub_listeners.append(unsub)
+
+        # 6) PV switch reconciliation — checks every 5 min that the switch
+        #    matches the plan, catching restarts that lost transition timers
+        unsub = async_track_time_interval(
+            self.hass,
+            self._pv_reconcile_callback,
+            timedelta(minutes=5),
         )
         self._unsub_listeners.append(unsub)
 
@@ -996,9 +1278,164 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:
             _LOGGER.error("SoC guard push failed: %s", err)
 
+    async def set_pv_strategy_enabled(self, enabled: bool, rerun: bool = True) -> None:
+        """Set PV sell strategy enabled state.  Called by the switch entity.
+
+        When rerun=True and the state changes, immediately re-runs the optimizer
+        so the new strategy is reflected in the schedule and PV switch state.
+        When rerun=False (e.g. called during HA startup restore), only updates
+        the flag without triggering an optimizer run.
+        """
+        changed = self._pv_strategy_enabled != enabled
+        self._pv_strategy_enabled = enabled
+        if changed:
+            _LOGGER.info("PV sell strategy %s", "enabled" if enabled else "disabled")
+        if rerun and changed:
+            await self.run_optimizer(reason="pv_strategy_changed", force=True)
+
+    async def _set_pv_switch(self, turn_on: bool) -> None:
+        """Turn the Emaldo third-party PV switch on or off.
+
+        The Emaldo unique_id key for the PV switch is ``thirdparty_pv_on``
+        (domain: switch).  Falls back to ``switch.power_store_third_party_pv``
+        if auto-discovery fails.
+        """
+        entity_id = self._resolve_emaldo_entity("thirdparty_pv_on", domain="switch")
+        if entity_id is None:
+            entity_id = "switch.power_store_third_party_pv"
+            _LOGGER.debug(
+                "PV switch auto-discovery failed — using fallback '%s'", entity_id
+            )
+        service = "turn_on" if turn_on else "turn_off"
+        try:
+            await self.hass.services.async_call(
+                "switch", service, {"entity_id": entity_id}, blocking=True,
+            )
+            self._pv_switch_state = turn_on
+            _LOGGER.debug("PV switch %s: %s", entity_id, service)
+        except Exception as err:
+            _LOGGER.error(
+                "Failed to %s PV switch '%s': %s", service, entity_id, err
+            )
+
+    async def _apply_pv_strategy(self, result: OptimizationResult) -> None:
+        """Apply the PV sell strategy by controlling the Emaldo PV switch.
+
+        Reads result.thirdparty_pv_slots for the current slot, applies the
+        desired PV switch state immediately, then schedules async_call_later
+        callbacks for each upcoming slot-boundary state transition.
+
+        Guard: if today's total Solcast forecast < CONF_SOLAR_SELL_MIN_FORECAST_KWH,
+        the strategy is skipped (keep PV on — cloudy day).
+        """
+        # Cancel all pending transition timers from the previous run.
+        for unsub in self._unsub_pv_transitions:
+            unsub()
+        self._unsub_pv_transitions.clear()
+
+        if not self._pv_strategy_enabled:
+            # Strategy is off — restore PV to on.
+            await self._set_pv_switch(True)
+            return
+
+        # Solar forecast guard: skip on cloudy days.
+        solar_today = self._get_solcast_forecast("today")
+        total_solar_kwh = sum(solar_today) * 0.25  # SLOT_DURATION_HOURS
+        min_forecast = self.config.get(
+            CONF_SOLAR_SELL_MIN_FORECAST_KWH, DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH
+        )
+        if total_solar_kwh < min_forecast:
+            _LOGGER.debug(
+                "PV strategy: solar forecast %.1f kWh < %.1f kWh threshold — "
+                "strategy inactive today",
+                total_solar_kwh, min_forecast,
+            )
+            await self._set_pv_switch(True)
+            return
+
+        now_slot = _current_slot_index()
+        pv_slots = result.thirdparty_pv_slots
+
+        # Apply current slot's desired state.
+        current_pv_on = pv_slots[now_slot] if now_slot < len(pv_slots) else True
+        await self._set_pv_switch(current_pv_on)
+
+        # Schedule transition callbacks for each upcoming state change.
+        now = dt_util.now()
+        n_transitions = 0
+        for s in range(now_slot + 1, SLOTS_PER_DAY):
+            desired = pv_slots[s] if s < len(pv_slots) else True
+            prev_desired = pv_slots[s - 1] if (s - 1) < len(pv_slots) else True
+            if desired == prev_desired:
+                continue  # No state change at this boundary
+
+            slot_start_hour = (s * 15) // 60
+            slot_start_min = (s * 15) % 60
+            target_dt = now.replace(
+                hour=slot_start_hour,
+                minute=slot_start_min,
+                second=0,
+                microsecond=0,
+            )
+            if target_dt <= now:
+                continue  # Already past (shouldn't happen for s > now_slot)
+
+            delay_seconds = (target_dt - now).total_seconds()
+            pv_on = desired
+
+            def _make_transition_cb(switch_on: bool) -> CALLBACK_TYPE:
+                @callback
+                def _transition(_now) -> None:
+                    self.hass.async_create_task(self._set_pv_switch(switch_on))
+                return _transition
+
+            unsub = async_call_later(
+                self.hass, delay_seconds, _make_transition_cb(pv_on)
+            )
+            self._unsub_pv_transitions.append(unsub)
+            n_transitions += 1
+            _LOGGER.debug(
+                "PV transition at slot %d (%02d:%02d): PV %s",
+                s, slot_start_hour, slot_start_min,
+                "on" if pv_on else "off",
+            )
+
+        if n_transitions:
+            _LOGGER.info(
+                "PV sell strategy: %d transitions scheduled", n_transitions
+            )
+
+    @callback
+    def _pv_reconcile_callback(self, _now) -> None:
+        """Periodic check: correct the PV switch if it diverged from the plan."""
+        if not self._pv_strategy_enabled or self._last_result is None:
+            return
+        self.hass.async_create_task(self._reconcile_pv_switch())
+
+    async def _reconcile_pv_switch(self) -> None:
+        """Verify the PV switch state matches the current plan and fix if not."""
+        if not self._pv_strategy_enabled or self._last_result is None:
+            return
+        now_slot = _current_slot_index()
+        pv_slots = self._last_result.thirdparty_pv_slots
+        desired = pv_slots[now_slot] if now_slot < len(pv_slots) else True
+        if self._pv_switch_state != desired:
+            _LOGGER.warning(
+                "PV switch reconciliation: was %s, plan says %s for slot %d (%02d:%02d) — correcting",
+                "on" if self._pv_switch_state else "off" if self._pv_switch_state is not None else "unknown",
+                "on" if desired else "off",
+                now_slot,
+                (now_slot * 15) // 60,
+                (now_slot * 15) % 60,
+            )
+            await self._set_pv_switch(desired)
+
     @callback
     def async_shutdown(self) -> None:
         """Clean up listeners."""
+        for unsub in self._unsub_pv_transitions:
+            unsub()
+        self._unsub_pv_transitions.clear()
         for unsub in self._unsub_listeners:
             unsub()
         self._unsub_listeners.clear()

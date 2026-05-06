@@ -42,16 +42,8 @@ class BatteryConfig:
 
     base_load_kw: float = 0.5
 
-    battery_price: float = 9000.0           # € purchase cost
-    battery_lifetime_cycles: int = 10000    # full charge-discharge cycles
-    idle_power_kw: float = 0.1              # battery unit idle consumption (kW)
-
-    @property
-    def wear_cost_per_kwh(self) -> float:
-        """Battery degradation cost per kWh cycled (€/kWh, full round-trip)."""
-        if self.battery_lifetime_cycles <= 0 or self.capacity_kwh <= 0:
-            return 0.0
-        return self.battery_price / (self.battery_lifetime_cycles * self.capacity_kwh)
+    wear_cost_per_kwh: float = 0.03  # € per kWh cycled (default 3 snt/kWh)
+    idle_power_kw: float = 0.1       # battery unit idle consumption (kW)
 
     @property
     def usable_kwh(self) -> float:
@@ -102,6 +94,11 @@ class OptimizationResult:
     discharge_slots: int = 0
     idle_slots: int = 0
     reason: str = ""
+    # Parallel per-slot PV switch plan (F2 — PV sell strategy).
+    # True = third-party PV enabled (battery charges from solar).
+    # False = third-party PV disabled (solar sells to grid at spot price).
+    # Defaults to all-True (no change in behaviour until _plan_pv_sell_slots fills it).
+    thirdparty_pv_slots: list[bool] = field(default_factory=lambda: [True] * 96)
 
     @property
     def slot_values(self) -> list[int]:
@@ -176,6 +173,244 @@ def _soc_to_discharge_target(soc_min: float) -> int:
     return (256 - target) & 0xFF
 
 
+def _plan_pv_sell_slots(
+    cfg: BatteryConfig,
+    slots: list[SlotPlan],
+    solar_15min: list[float],
+    buy_prices: list[float],
+    sell_prices: list[float],
+    *,
+    start_slot: int = 0,
+) -> list[bool]:
+    """Plan which solar slots should sell to grid vs charge the battery.
+
+    Two pathways to mark a slot as PV-off (sell to grid):
+
+    1. **Opportunity-value path** (original logic):
+       sell_price > best_future_buy × round_trip_factor − wear_cost
+       AND recharge feasibility holds.
+
+    2. **Excess-solar path** (new):
+       The remaining capturable solar from the NEXT slot onwards is enough
+       to fill the battery to soc_max even after giving up this slot's PV
+       charge.  When excess solar covers the gap, selling at any price above
+       wear_cost is pure extra income — the battery will be full regardless.
+       Recharge feasibility check still applies.
+
+    PV selling is considered for idle, none, AND discharge slots.
+    Grid-charge slots (action == "charge") are never overridden.
+
+    Returns:
+        list[bool] of length 96.
+        True  = third-party PV enabled  (solar charges battery — default).
+        False = third-party PV disabled (solar exported to grid at spot price).
+    """
+    n = SLOTS_PER_DAY
+    pv_slots = [True] * n
+
+    _MIN_SOLAR_KW = 0.1  # Below this threshold, not worth switching PV off
+
+    soc_min_kwh = cfg.capacity_kwh * cfg.soc_min / 100.0
+    soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
+    cap = cfg.capacity_kwh
+
+    # Build slot lookup by actual slot index (slots list may start at start_slot,
+    # so list-position indexing is wrong — always use the dict).
+    slot_map: dict[int, SlotPlan] = {sp.index: sp for sp in slots}
+    slot_soc_kwh: dict[int, float] = {sp.index: sp.soc_after * cap / 100.0 for sp in slots}
+
+    # Discharge slots (actual indices) for feasibility checks.
+    discharge_set = {sp.index for sp in slots if sp.action == "discharge"}
+
+    # For each slot, opportunity value = best future buy price across discharge
+    # slots at later indices.  Scan backwards to build cheaply.
+    future_max_buy = [0.0] * n
+    running_max = 0.0
+    for s in range(n - 1, -1, -1):
+        if s in discharge_set:
+            running_max = max(running_max, buy_prices[s])
+        future_max_buy[s] = running_max
+
+    # Remaining capturable solar energy (kWh) from each slot onwards.
+    # remaining_solar[s] = total for slots s, s+1, ..., 95.
+    # remaining_solar[s+1] is what is available AFTER slot s.
+    remaining_solar = [0.0] * (n + 1)
+    for s in range(n - 1, -1, -1):
+        slot_solar_kwh = (
+            min(solar_15min[s], cfg.max_charge_kw)
+            * SLOT_DURATION_HOURS
+            * cfg.charge_efficiency
+        )
+        remaining_solar[s] = remaining_solar[s + 1] + slot_solar_kwh
+
+    # Cumulative SoC reduction from sell decisions committed so far.
+    soc_reduction = 0.0
+
+    for s in range(start_slot, n):
+        if solar_15min[s] < _MIN_SOLAR_KW:
+            continue
+
+        sp = slot_map.get(s)
+        if sp is None:
+            continue
+
+        # Never override active grid-charge slots.
+        if sp.action == "charge":
+            continue
+
+        charge_kw = min(solar_15min[s], cfg.max_charge_kw)
+        charge_kwh_lost = charge_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
+
+        sell_pr = sell_prices[s]
+        charge_pr = future_max_buy[s] * cfg.round_trip_factor - cfg.wear_cost_per_kwh
+
+        # --- Excess-solar check ---
+        # SoC at end of slot s if we sell PV here (vs baseline).
+        soc_after_sell = slot_soc_kwh[s] - soc_reduction - charge_kwh_lost
+        needed_to_fill = max(0.0, soc_max_kwh - soc_after_sell)
+        excess_solar = remaining_solar[s + 1] >= needed_to_fill
+
+        # Choose the profitability threshold based on whether excess solar
+        # makes this slot's PV opportunity-cost zero.
+        min_sell_pr = cfg.wear_cost_per_kwh if excess_solar else charge_pr
+
+        if sell_pr <= min_sell_pr:
+            continue
+
+        # --- Recharge feasibility ---
+        # Disabling PV here reduces SoC entering every subsequent slot by
+        # charge_kwh_lost.  Verify no planned discharge slot drops to soc_min.
+        feasible = True
+        for d in sorted(discharge_set):
+            if d <= s:
+                continue
+            # SoC entering slot d = soc_after of slot d-1.
+            entering_soc = slot_soc_kwh.get(d - 1, soc_min_kwh)
+            if entering_soc - soc_reduction - charge_kwh_lost <= soc_min_kwh:
+                feasible = False
+                break
+
+        if feasible:
+            pv_slots[s] = False
+            soc_reduction += charge_kwh_lost
+            _LOGGER.debug(
+                "PV sell slot %d (%s): sell=%.4f > min_sell=%.4f €/kWh "
+                "(excess_solar=%s, %.3f kWh solar foregone, remaining=%.2f kWh)",
+                s, sp.action, sell_pr, min_sell_pr, excess_solar,
+                charge_kwh_lost, remaining_solar[s + 1],
+            )
+
+    # --- Fill short gaps to prevent rapid toggling ---
+    # A single True (PV-on) slot sandwiched between two False (PV-sell) slots
+    # causes the PV relay to switch off→on→off within 30 minutes.  Close gaps
+    # of up to 3 consecutive non-sell slots that are bounded on both sides by
+    # sell slots, but only when the gap slots are not active grid-charge slots.
+    _MAX_GAP = 3
+    sell_indices_sorted = sorted(s for s in range(n) if not pv_slots[s])
+    for i in range(len(sell_indices_sorted) - 1):
+        left = sell_indices_sorted[i]
+        right = sell_indices_sorted[i + 1]
+        gap = right - left - 1
+        if 0 < gap <= _MAX_GAP:
+            # Fill the gap only if no charge slot sits inside it.
+            gap_has_charge = any(
+                slot_map.get(g) is not None and slot_map[g].action == "charge"
+                for g in range(left + 1, right)
+            )
+            if not gap_has_charge:
+                for g in range(left + 1, right):
+                    pv_slots[g] = False
+
+    n_sell = pv_slots.count(False)
+    if n_sell:
+        _LOGGER.info("PV sell strategy: %d sell slots planned", n_sell)
+    return pv_slots
+
+
+def _correct_soc_for_pv_sells(
+    slots: list[SlotPlan],
+    pv_slots: list[bool],
+    solar_15min: list[float],
+    cfg: BatteryConfig,
+) -> None:
+    """Recompute soc_after for slots affected by PV sell decisions.
+
+    The optimizer builds soc_after assuming all solar charges the battery.
+    When _plan_pv_sell_slots() marks a slot as pv_sell=True (PV off), that
+    slot's solar energy goes to the grid instead.  The SoC trajectory must
+    be corrected forward from the first sell slot so the dashboard chart
+    doesn't show phantom battery charging during sell windows.
+
+    Mutates SlotPlan.soc_after in-place.
+    """
+    soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
+    soc_min_kwh = cfg.capacity_kwh * cfg.soc_min / 100.0
+    cap = cfg.capacity_kwh
+
+    # Find the first sell slot — no work needed before it.
+    sell_indices = [sp.index for sp in slots if not pv_slots[sp.index]]
+    if not sell_indices:
+        return
+    first_sell = min(sell_indices)
+
+    # Build a mutable SoC map from the existing (pre-correction) values.
+    # We'll do a forward pass from the slot before the first sell slot.
+    slot_list = sorted(slots, key=lambda sp: sp.index)
+    soc_map: dict[int, float] = {sp.index: sp.soc_after * cap / 100.0 for sp in slot_list}
+
+    # Find the SoC entering the first sell slot (= soc_after of the previous slot).
+    prev_idx = first_sell - 1
+    if prev_idx in soc_map:
+        soc = soc_map[prev_idx]
+    else:
+        # first_sell is the very first slot — use the raw value before correction
+        # (soc_after already correct since no prior adjustments).
+        # Recover the entering SoC by reversing the original slot's contribution.
+        first_sp = next(sp for sp in slot_list if sp.index == first_sell)
+        solar_kwh = min(solar_15min[first_sell], cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
+        soc = first_sp.soc_after * cap / 100.0 - solar_kwh  # approximate entering SoC
+
+    # Forward pass: recompute soc_after for every slot from first_sell onward.
+    slot_map: dict[int, SlotPlan] = {sp.index: sp for sp in slot_list}
+    for sp in slot_list:
+        s = sp.index
+        if s < first_sell:
+            soc = sp.soc_after * cap / 100.0
+            continue
+
+        selling = not pv_slots[s]
+        solar_kw = solar_15min[s] if s < len(solar_15min) else 0.0
+        charge_kw = min(solar_kw, cfg.max_charge_kw)
+        solar_kwh = charge_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
+
+        if sp.action == "charge":
+            # Grid charge: solar contribution doesn't change (charge slot not overridden).
+            # Re-apply the grid charge + any solar.
+            grid_charge_kwh = cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
+            soc = min(soc + grid_charge_kwh - cfg.idle_drain_per_slot_kwh, soc_max_kwh)
+        elif sp.action == "discharge":
+            net_load = cfg.base_load_kw - solar_kw
+            if net_load > 0:
+                load_kwh = min(net_load, cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+            else:
+                # Solar surplus during discharge: if selling, no solar to battery.
+                load_kwh = 0.0
+                if not selling:
+                    surplus_kwh = min(-net_load, cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
+                    soc = max(min(soc + surplus_kwh - cfg.idle_drain_per_slot_kwh, soc_max_kwh), soc_min_kwh)
+            soc = max(soc - load_kwh - cfg.idle_drain_per_slot_kwh, soc_min_kwh)
+        else:
+            # idle / none
+            if not selling and solar_kw > cfg.base_load_kw:
+                net_kwh = solar_kwh - cfg.idle_drain_per_slot_kwh
+                soc = max(min(soc + net_kwh, soc_max_kwh), soc_min_kwh)
+            else:
+                soc = max(soc - cfg.idle_drain_per_slot_kwh, soc_min_kwh)
+
+        # Patch the SlotPlan in-place.
+        sp.soc_after = round(soc / cap * 100.0, 1)
+
+
 def optimize(
     buy_prices: list[float],
     sell_prices: list[float],
@@ -184,6 +419,7 @@ def optimize(
     *,
     start_slot: int = 0,
     initial_soc_pct: float | None = None,
+    enable_pv_strategy: bool = False,
 ) -> OptimizationResult:
     """Run greedy optimization over 96 slots.
 
@@ -266,21 +502,88 @@ def optimize(
         candidates, key=lambda s: buy_prices[s], reverse=True
     )
 
+    # Forward idle-only SoC simulation — determines the peak SoC the battery
+    # will reach by letting solar charge it without active discharge.
+    # A second parallel simulation starts from soc_min instead of current_soc
+    # to compute the two-cycle discharge budget.
+    #
+    # Two-cycle budget rationale:
+    #   When the battery has stored energy AND solar will refill it, we can
+    #   discharge in TWO cycles: (1) drain pre-solar overnight from current_soc
+    #   down to soc_min, (2) solar recharges with extra headroom because it
+    #   starts from soc_min instead of current_soc, (3) drain again post-solar.
+    #   Example: current_soc=60%, soc_min=20%, solar fills to 100%.
+    #   Single-cycle budget: 100-20 = 80% = 12 kWh.
+    #   Two-cycle budget: (60-20)% + (100-20)% = 40+80 = 120% = 18 kWh.
+    #   The 6 kWh discharged overnight frees 6 kWh of additional solar headroom,
+    #   which is itself dischargeable during the next peak window.
+    #   Without this fix, overnight slots with buy_price >> wear_cost are skipped
+    #   because the budget is fully consumed by the (cheaper) peak daytime slots.
+    _soc_fwd = current_soc_kwh
+    peak_soc_kwh = current_soc_kwh
+    _soc_fwd2 = soc_min_kwh          # second sim: battery starts empty
+    peak_soc_from_min_kwh = soc_min_kwh
+    for s in range(start_slot, n):
+        if net_loads[s] < 0:
+            charge_kw = min(-net_loads[s], cfg.max_charge_kw)
+            charge_kwh = charge_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
+            _soc_fwd = min(_soc_fwd + charge_kwh - idle_drain, soc_max_kwh)
+            _soc_fwd2 = min(_soc_fwd2 + charge_kwh - idle_drain, soc_max_kwh)
+        else:
+            _soc_fwd = _soc_fwd - idle_drain
+            _soc_fwd2 = _soc_fwd2 - idle_drain
+        _soc_fwd = max(_soc_fwd, soc_min_kwh)
+        _soc_fwd2 = max(_soc_fwd2, soc_min_kwh)
+        if _soc_fwd > peak_soc_kwh:
+            peak_soc_kwh = _soc_fwd
+        if _soc_fwd2 > peak_soc_from_min_kwh:
+            peak_soc_from_min_kwh = _soc_fwd2
+
+    # Two-cycle discharge budget:
+    # — initial_usable: energy in battery right now, dischargeable before solar.
+    # — post_solar_usable: peak SoC reachable from solar when starting at soc_min
+    #   (models the case where all pre-solar energy was discharged first, giving
+    #   maximum solar absorption headroom).
+    # Without solar (winter), post_solar_usable = 0 and budget = initial_usable,
+    # identical to the old single-cycle formula.
+    initial_usable_kwh = max(current_soc_kwh - soc_min_kwh, 0.0)
+    post_solar_usable_kwh = max(peak_soc_from_min_kwh - soc_min_kwh, 0.0)
+    total_discharge_budget = initial_usable_kwh + post_solar_usable_kwh
+
+    # Find the first slot with meaningful solar production.  Used to split the
+    # discharge budget into two independent pools when solar can fully refill
+    # the battery (see allocation section below).
+    _SOLAR_FLOOR_KW = 0.05
+    first_solar_slot = n  # default: no solar today
+    for _s in range(start_slot, n):
+        if solar_15min[_s] > _SOLAR_FLOOR_KW:
+            first_solar_slot = _s
+            break
+
+    # When solar can fully recharge the battery from empty, overnight discharge
+    # has zero net energy cost — solar replaces it for free.  In this case the
+    # pre-solar (overnight) and post-solar (daytime) discharge budgets should
+    # be independent pools so that high-price daytime slots do NOT crowd out
+    # lower-price overnight slots.
+    # Threshold: solar raises battery to ≥ 95 % of soc_max from an empty start.
+    solar_full_recharge = post_solar_usable_kwh >= (soc_max_kwh - soc_min_kwh) * 0.95
+
     # Find profitable discharge and charge slots.
     #
     # Two distinct cases:
-    # A) Existing stored energy (SoC > min) — discharge for self-consumption
-    #    when the avoided grid buy price exceeds the wear cost.
+    # A) Energy available (existing + solar − idle drain) — discharge at any
+    #    slot where the avoided grid buy price exceeds the wear cost.
     # B) Round-trip trades (buy low → discharge later to avoid expensive
     #    buy) — only worthwhile when the price spread covers round-trip
     #    losses + wear.
     profitable_charge: list[int] = []
     profitable_discharge: list[int] = []
 
-    # Case A: discharge existing energy when the avoided grid purchase
-    # (buy_price) exceeds the battery wear cost.  The battery load-matches
-    # during discharge — all energy offsets grid purchases at buy_price.
-    if current_soc_kwh > soc_min_kwh and discharge_candidates:
+    # Case A: discharge when total available energy (current usable + expected
+    # solar − idle drain) is positive.  Battery charges from solar excess in
+    # idle and discharge states, so SoC being below soc_min at optimisation
+    # time does not preclude profitable evening discharge.
+    if total_discharge_budget > 0 and discharge_candidates:
         for s in discharge_candidates:
             if buy_prices[s] > wear_cost:
                 profitable_discharge.append(s)
@@ -314,60 +617,84 @@ def optimize(
     # It does NOT draw from the grid.  So IDLE = "solar-only charge".
     # We use IDLE for solar surplus slots to capture free solar energy
     # without triggering grid import.
-
-    # Pre-compute expected solar contribution so discharge planning
-    # knows how much free energy is coming.  Account for idle drain
-    # (battery unit consumes idle_power_kw from stored energy).
     #
-    # Start the headroom estimate from soc_min, not current_soc.
-    # Discharge before solar hours will lower the SoC, creating more
-    # room for free solar recharging.  Using current_soc artificially
-    # limits the solar estimate and causes the optimizer to skip
-    # profitable overnight discharge slots.
-    estimated_solar_kwh = 0.0
-    _tmp_soc = soc_min_kwh
-    for s in solar_surplus_slots:
-        surplus_kw = -net_loads[s]
-        charge_kw = min(surplus_kw, cfg.max_charge_kw)
-        charge_kwh = charge_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
-        net_gain = charge_kwh - idle_drain
-        if net_gain > 0 and _tmp_soc + net_gain <= soc_max_kwh:
-            estimated_solar_kwh += net_gain
-            _tmp_soc += net_gain
+    # (peak_soc_kwh computed above from forward idle-only SoC simulation)
 
     plan_actions: dict[int, str] = {}
 
-    # First, assign discharge slots (most expensive first).
-    # Energy budget: existing usable + expected solar.  If grid
-    # charging is also profitable, include the remaining headroom.
-    # Subtract idle drain over remaining slots.
-    remaining_slots = n - start_slot
-    total_idle_drain = idle_drain * remaining_slots
-    discharge_energy_available = (
-        (current_soc_kwh - soc_min_kwh) + estimated_solar_kwh
-        - total_idle_drain
-    )
-    if profitable_charge:
-        remaining_headroom = soc_max_kwh - (current_soc_kwh + estimated_solar_kwh)
-        discharge_energy_available += max(0.0, remaining_headroom)
+    # Discharge allocation — two modes depending on whether solar fully refills:
+    #
+    # SPLIT MODE (solar_full_recharge=True): two independent budget pools.
+    #   Pre-solar slots  → budget = initial_usable_kwh  (stored energy now)
+    #   Post-solar slots → budget = post_solar_usable_kwh (solar-recharged energy)
+    #   Overnight slots (buy ≫ wear_cost) are no longer crowded out by
+    #   higher-priced daytime slots that consume from the same shared pool.
+    #
+    # COMBINED MODE (no/partial solar): single pool = total_discharge_budget,
+    #   identical to the previous behaviour — optimal for winter/cloudy days.
+    if solar_full_recharge:
+        pre_sol_dis = [s for s in profitable_discharge if s < first_solar_slot]
+        post_sol_dis = [s for s in profitable_discharge if s >= first_solar_slot]
+        pre_budget = initial_usable_kwh
+        post_budget = post_solar_usable_kwh
+        if profitable_charge:
+            post_budget += max(0.0, soc_max_kwh - peak_soc_kwh)
 
-    for s in profitable_discharge:
-        if net_loads[s] > 0:
-            # Grid slot — discharge covers household load from battery
-            load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
-        else:
-            # Solar surplus slot — discharge is a safety net.  The battery
-            # firmware will charge from excess solar; if real solar is less
-            # than forecast, the battery covers the shortfall.  Budget the
-            # full base-load as the worst case (no solar at all).
-            load_kwh = cfg.base_load_kw * SLOT_DURATION_HOURS
-        if load_kwh <= 0:
-            continue
-        if discharge_energy_available >= load_kwh:
-            plan_actions[s] = "discharge"
-            discharge_energy_available -= load_kwh
-        else:
-            break  # Not enough energy
+        _LOGGER.warning(
+            "SPLIT MODE: first_solar_slot=%d initial_usable=%.2f post_solar_usable=%.2f "
+            "pre_sol_dis=%d post_sol_dis=%d pre_budget=%.2f post_budget=%.2f",
+            first_solar_slot, initial_usable_kwh, post_solar_usable_kwh,
+            len(pre_sol_dis), len(post_sol_dis), pre_budget, post_budget,
+        )
+
+        for s in pre_sol_dis:
+            if net_loads[s] > 0:
+                load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+            else:
+                load_kwh = cfg.base_load_kw * SLOT_DURATION_HOURS
+            if load_kwh <= 0:
+                continue
+            if pre_budget >= load_kwh:
+                plan_actions[s] = "discharge"
+                pre_budget -= load_kwh
+            else:
+                break
+
+        for s in post_sol_dis:
+            if net_loads[s] > 0:
+                load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+            else:
+                load_kwh = cfg.base_load_kw * SLOT_DURATION_HOURS
+            if load_kwh <= 0:
+                continue
+            if post_budget >= load_kwh:
+                plan_actions[s] = "discharge"
+                post_budget -= load_kwh
+            else:
+                break
+    else:
+        # Combined budget: no full solar recharge, no split needed.
+        discharge_energy_available = total_discharge_budget
+        if profitable_charge:
+            discharge_energy_available += max(0.0, soc_max_kwh - peak_soc_kwh)
+
+        for s in profitable_discharge:
+            if net_loads[s] > 0:
+                # Grid slot — discharge covers household load from battery
+                load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+            else:
+                # Solar surplus slot — discharge is a safety net.  The battery
+                # firmware will charge from excess solar; if real solar is less
+                # than forecast, the battery covers the shortfall.  Budget the
+                # full base-load as the worst case (no solar at all).
+                load_kwh = cfg.base_load_kw * SLOT_DURATION_HOURS
+            if load_kwh <= 0:
+                continue
+            if discharge_energy_available >= load_kwh:
+                plan_actions[s] = "discharge"
+                discharge_energy_available -= load_kwh
+            else:
+                break  # Not enough energy
 
     # Assign solar surplus slots as idle (battery absorbs excess solar).
     # IDLE (0x00) lets the battery absorb solar without grid draw.
@@ -502,6 +829,15 @@ def optimize(
         discharge_slots=n_discharge,
         idle_slots=n_idle,
     )
+
+    if enable_pv_strategy:
+        result.thirdparty_pv_slots = _plan_pv_sell_slots(
+            cfg, result_slots, solar_15min, buy_prices, sell_prices,
+            start_slot=start_slot,
+        )
+        _correct_soc_for_pv_sells(
+            result_slots, result.thirdparty_pv_slots, solar_15min, cfg
+        )
 
     _LOGGER.info(
         "Optimization complete: profit=%.4f€, charge=%d, discharge=%d, "

@@ -6,7 +6,6 @@ DOMAIN = "battery_optimizer"
 CONF_SPOT_SENSOR = "spot_price_sensor"
 CONF_SOLCAST_TODAY = "solcast_today_sensor"
 CONF_SOLCAST_TOMORROW = "solcast_tomorrow_sensor"
-CONF_BATTERY_SOC_SENSOR = "battery_soc_sensor"
 
 CONF_VAT_MULTIPLIER = "vat_multiplier"
 CONF_TRANSFER_FEE_BUY = "transfer_fee_buy"
@@ -22,18 +21,18 @@ CONF_SOC_MAX = "soc_max"
 
 CONF_BASE_LOAD_KW = "base_load_kw"
 
-CONF_BATTERY_PRICE = "battery_price"
-CONF_BATTERY_LIFETIME_CYCLES = "battery_lifetime_cycles"
+CONF_BATTERY_WEAR_COST = "battery_wear_cost"
 CONF_IDLE_POWER_KW = "idle_power_kw"
-
-CONF_SOLAR_POWER_SENSOR = "solar_power_sensor"
-CONF_GRID_POWER_SENSOR = "grid_power_sensor"
-CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
 
 CONF_IDLE_STRATEGY = "idle_strategy"
 
 CONF_SOC_GUARD_INTERVAL = "soc_guard_interval"
 CONF_OPTIMIZER_INTERVAL = "optimizer_interval"
+CONF_EMALDO_ENTRY_ID = "emaldo_entry_id"
+CONF_AUTO_BASE_LOAD = "auto_base_load"
+CONF_LOAD_ENERGY_SENSOR = "load_energy_sensor"
+CONF_ENABLE_PV_STRATEGY = "enable_pv_strategy"
+CONF_SOLAR_SELL_MIN_FORECAST_KWH = "solar_sell_min_forecast_kwh"
 
 # ── Defaults ─────────────────────────────────────────────────────────
 DEFAULT_VAT_MULTIPLIER = 1.255       # 25.5% Finnish electricity VAT
@@ -48,13 +47,17 @@ DEFAULT_SOC_MIN = 20
 DEFAULT_SOC_MAX = 100
 DEFAULT_BASE_LOAD_KW = 1.0
 
-DEFAULT_BATTERY_PRICE = 9000.0         # € purchase price
-DEFAULT_BATTERY_LIFETIME_CYCLES = 10000  # full charge-discharge cycles
-DEFAULT_IDLE_POWER_KW = 0.1             # 100W battery unit idle consumption
+DEFAULT_BATTERY_WEAR_COST = 0.03           # €/kWh cycled (3 snt/kWh)
+DEFAULT_IDLE_POWER_KW = 0.1               # 100W battery unit idle consumption
 
 DEFAULT_SOLAR_POWER_SENSOR = ""
 DEFAULT_GRID_POWER_SENSOR = ""
 DEFAULT_BATTERY_POWER_SENSOR = ""
+
+DEFAULT_AUTO_BASE_LOAD = False
+DEFAULT_LOAD_ENERGY_SENSOR = ""
+DEFAULT_ENABLE_PV_STRATEGY = False
+DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH = 10.0  # kWh; below this, cloudy day → skip
 
 # ── Optimizer run interval ────────────────────────────────────────────
 DEFAULT_OPTIMIZER_INTERVAL = 120   # minutes
