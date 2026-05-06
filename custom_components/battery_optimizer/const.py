@@ -26,6 +26,11 @@ CONF_IDLE_POWER_KW = "idle_power_kw"
 
 CONF_IDLE_STRATEGY = "idle_strategy"
 
+CONF_PRICE_SOURCE = "price_source"
+PRICE_SOURCE_EMALDO = "emaldo"
+PRICE_SOURCE_SENSOR = "sensor"
+DEFAULT_PRICE_SOURCE = PRICE_SOURCE_EMALDO
+
 CONF_SOC_GUARD_INTERVAL = "soc_guard_interval"
 CONF_OPTIMIZER_INTERVAL = "optimizer_interval"
 CONF_EMALDO_ENTRY_ID = "emaldo_entry_id"

@@ -35,6 +35,10 @@ from .const import (
     CONF_BATTERY_WEAR_COST,
     CONF_IDLE_POWER_KW,
     CONF_IDLE_STRATEGY,
+    CONF_PRICE_SOURCE,
+    PRICE_SOURCE_EMALDO,
+    PRICE_SOURCE_SENSOR,
+    DEFAULT_PRICE_SOURCE,
     CONF_SOC_GUARD_INTERVAL,
     CONF_OPTIMIZER_INTERVAL,
     CONF_EMALDO_ENTRY_ID,
@@ -67,6 +71,7 @@ from .const import (
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
+    DEFAULT_PRICE_SOURCE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,13 +104,31 @@ def _build_schema(
                 default=d.get(CONF_EMALDO_ENTRY_ID, next(iter(emaldo_options))),
             ): vol.In(emaldo_options)
         }
+    price_source = d.get(CONF_PRICE_SOURCE, DEFAULT_PRICE_SOURCE)
+    # CONF_SPOT_SENSOR is only required when price source is "sensor"
+    spot_sensor_field: dict
+    if price_source == PRICE_SOURCE_SENSOR:
+        spot_sensor_field = {
+            vol.Required(
+                CONF_SPOT_SENSOR,
+                default=d.get(CONF_SPOT_SENSOR, "sensor.electricity_prices"),
+            ): str
+        }
+    else:
+        spot_sensor_field = {
+            vol.Optional(
+                CONF_SPOT_SENSOR,
+                default=d.get(CONF_SPOT_SENSOR, ""),
+            ): str
+        }
     return vol.Schema(
         {
             **emaldo_field,
             vol.Required(
-                CONF_SPOT_SENSOR,
-                default=d.get(CONF_SPOT_SENSOR, "sensor.electricity_prices"),
-            ): str,
+                CONF_PRICE_SOURCE,
+                default=price_source,
+            ): vol.In([PRICE_SOURCE_EMALDO, PRICE_SOURCE_SENSOR]),
+            **spot_sensor_field,
             vol.Required(
                 CONF_SOLCAST_TODAY,
                 default=d.get(CONF_SOLCAST_TODAY, "sensor.solcast_pv_forecast_forecast_today"),
@@ -220,11 +243,11 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
         emaldo_options = _get_emaldo_options(self.hass)
 
         if user_input is not None:
-            # Validate that sensors exist
-            for key in (CONF_SPOT_SENSOR,):
-                if not self.hass.states.get(user_input[key]):
+            # Only validate spot sensor if external sensor source is selected
+            if user_input.get(CONF_PRICE_SOURCE) == PRICE_SOURCE_SENSOR:
+                sensor_id = user_input.get(CONF_SPOT_SENSOR, "")
+                if not sensor_id or not self.hass.states.get(sensor_id):
                     errors["base"] = "sensor_not_found"
-                    break
 
             if not errors:
                 await self.async_set_unique_id(DOMAIN)
