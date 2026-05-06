@@ -1,8 +1,8 @@
 # Battery Optimizer — Home Assistant Custom Integration
 
-A Home Assistant custom integration that optimizes battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to a battery system via a rolling 24-hour E2E override window. Integration in mainly built to work together with Emaldo Home Assistant custom component.
+![Example Home Assistant dashboard for Battery Optimizer](dashboard.png)
 
-Integration is still pretty much in Proof-of-concept stage. Main purpose is to make evaluating different battery control strategies easier.
+A Home Assistant custom integration that optimizes battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to a battery system via a rolling 24-hour E2E override window. Integration is mainly built to work together with Emaldo Home Assistant custom component.
 
 ## How It Works
 
@@ -14,17 +14,18 @@ Integration is still pretty much in Proof-of-concept stage. Main purpose is to m
         │                  │                  │
         └──────────┬───────┴──────────────────┘
                    ▼
-          ┌─────────────────┐
-          │   Greedy        │
-          │   Optimizer     │   96 × 15-min slots
-          │   (optimizer.py)│──────────────────────┐
-          └─────────────────┘                      │
-                                                   ▼
-                                           ┌───────────────┐
-                                           │   Emaldo      │
-                                           │   apply_bulk_ │
-                                           │   schedule    │
-                                           └───────────────┘
+          ┌─────────────────────────────────────┐
+          │          Greedy Optimizer           │
+          │             (optimizer.py)          │
+          │  • 96-slot battery schedule         │
+          │  • thirdparty_pv_slots[96] (bool)   │
+          └────────────┬──────────────┬─────────┘
+                       │              │
+           ┌───────────▼──┐   ┌───────▼────────────────┐
+           │   Emaldo     │   │  switch.power_store_   │
+           │ apply_bulk_  │   │  third_party_pv         │
+           │  schedule    │   │  (PV sell strategy)     │
+           └──────────────┘   └─────────────────────────┘
 ```
 
 **Optimization strategy (greedy, self-consumption model):**
@@ -38,6 +39,7 @@ buy price avoided (self-consumption), not the sell/export price.
 3. Discharge existing energy when `buy_price > wear_cost` (self-consumption saves money).
 4. Round-trip trades when the price spread covers efficiency losses + wear.
 5. Grid charge only the deficit that solar + existing SoC cannot cover.
+6. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. Morning solar slots where sufficient remaining solar will still fill the battery are sold to the grid (PV switch OFF) instead of charging the battery, turning otherwise-free energy into direct revenue.
 
 **Smart override logic:**
 
@@ -48,10 +50,9 @@ The optimizer compares its plan against the battery's internal AI schedule (read
 | Requirement | Details |
 |---|---|
 | **Home Assistant** | 2024.1+ |
-| **Emaldo integration** | Must be installed and configured. The optimizer calls `emaldo.apply_bulk_schedule` to push the schedule. |
+| **Emaldo integration** | Must be installed and configured. The optimizer calls `emaldo.apply_bulk_schedule` to push the schedule. Battery SoC and balancing state are auto-discovered from the selected Emaldo entry. |
 | **Spot price sensor** | A sensor with a `data` attribute containing 15-minute price entries (e.g. an Entso-E / Nordpool integration). See [Price Sensor Format](#price-sensor-format). |
 | **Solcast PV integration** *(optional)* | [Solcast PV Forecast](https://github.com/BJReplay/ha-solcast-solar) with `detailedForecast` attribute on today/tomorrow sensors. If not available, solar production is assumed zero. |
-| **Battery SoC sensor** | A sensor reporting battery state of charge as a percentage (0–100). Typically `sensor.emaldo_battery_soc`. |
 
 ## Installation
 
@@ -89,7 +90,6 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Spot price sensor** | Entity ID of your electricity price sensor | `sensor.electricity_prices` |
 | **Solcast today sensor** | Entity ID of the Solcast today forecast sensor | `sensor.solcast_pv_forecast_forecast_today` |
 | **Solcast tomorrow sensor** | Entity ID of the Solcast tomorrow forecast sensor | `sensor.solcast_pv_forecast_forecast_tomorrow` |
-| **Battery SoC sensor** | Entity ID of battery state of charge sensor | `sensor.power_store_battery_soc` |
 | **VAT multiplier** | VAT multiplier applied to spot price when buying (1.255 = 25.5% Finnish VAT) | `1.255` |
 | **Grid transfer fee** | Transfer fee added to buy price (€/kWh) | `0.0776` |
 | **Sales commission** | Commission deducted from sell price (€/kWh) | `0.003` |
@@ -100,12 +100,16 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Discharge efficiency** | Discharge efficiency (0.5–1.0) | `0.9` |
 | **Min SoC** | Minimum allowed state of charge (%) | `20` |
 | **Max SoC** | Maximum allowed state of charge (%) | `100` |
-| **Base household load** | Estimated constant household load in kW | `1.0` |
-| **Battery purchase price** | Purchase price of the battery system (€) for wear cost calculation | `9000` |
-| **Battery lifetime cycles** | Expected number of full charge-discharge cycles | `10000` |
+| **Base household load** | Estimated constant household load in kW. Used when auto-tune is disabled. | `1.0` |
+| **Battery wear cost** | Cost per kWh cycled (€/kWh) — accounts for battery degradation. Typical LFP: 1–5 snt/kWh. | `0.03` |
 | **Idle power consumption** | Constant power draw of the battery unit itself (kW). Drains SoC even when idle. | `0.1` |
+| **Auto-tune base load** | When enabled, the optimizer computes base load from recorder history instead of using the static value above. | `false` |
+| **Household load power sensor** | Entity ID of a combined household load power sensor in Watts (e.g. `sensor.emhass_combined_power`). Required when auto-tune is enabled. | `sensor.emhass_combined_power` |
 | **Idle slot strategy** | Controls what happens for slots where the optimizer has no action (see below). | `full_control` |
 | **SoC guard interval** | How often (minutes) to actively update the discharge floor marker. See [SoC Guard](#soc-guard). | `0` (disabled) |
+| **Emaldo battery device** | Emaldo config entry to use. Shown as a dropdown — select the correct system when multiple Emaldo devices are installed. | first found |
+| **Enable PV sell strategy** | Initial default for the live `switch.battery_optimizer_pv_strategy` entity. When `true`, the optimizer will plan PV-to-grid slots on sunny days instead of always charging the battery. See [PV Sell Strategy](#pv-sell-strategy). | `false` |
+| **Min solar forecast for PV sell** | Minimum Solcast forecast (kWh) required to activate PV sell strategy. Below this threshold the strategy is skipped (cloudy day guard). | `10.0` |
 
 All parameters can be changed later via **Settings → Devices & Services → Battery Optimizer → Configure**.
 
@@ -148,6 +152,29 @@ At each interval tick, the optimizer looks forward in the current schedule by th
 
 The current SoC guard marker is exposed in the **Optimizer Status** and **Schedule Chart** sensor attributes as `soc_guard_marker`.
 
+### Auto Base Load
+
+When **Auto-tune base load** is enabled, the optimizer queries the HA recorder for 14 days of daily statistics from the configured **Household load power sensor** (W), computes a 7-day rolling average, and uses that as the base load for every optimization run.
+
+**How it works:**
+
+1. At each optimizer run, `statistics_during_period` is called for the load sensor with `"day"` bucket and `"mean"` statistic.
+2. Daily mean values (W) are converted to kW. Days with no positive data are skipped.
+3. The most recent 7 days of daily average kW are averaged.
+4. The result is clamped to ±50% of the configured static base load (to limit the effect of anomalous days).
+5. The final value is applied for this run and exposed on the **Auto Base Load** sensor.
+
+**Falls back to the static `base_load_kw` if:**
+- Auto-tune is disabled
+- No sensor is configured
+- The recorder component is unavailable
+- Fewer than 3 days of data exist
+
+**Recommended sensor:** `sensor.emhass_combined_power` — a template sensor that calculates actual household consumption from all sources:
+```
+grid_power - battery_power + solar_power  (in Watts)
+```
+
 ### Price Model
 
 The optimizer applies fees to the raw spot price for each 15-minute slot:
@@ -169,8 +196,7 @@ Round-trip trades (buy cheap → discharge later) are scheduled when:
 buy_saved > buy_charged / (η_charge × η_discharge) + wear_cost
 ```
 
-where `wear_cost = battery_price / (lifetime_cycles × capacity_kwh)` is the full
-round-trip degradation cost per kWh (e.g. 9000 / 10000 / 15 = 0.06 €/kWh).
+where `wear_cost` is configured directly as **Battery wear cost** (default 0.03 €/kWh = 3 snt/kWh).
 
 ### Idle Power Drain
 
@@ -186,8 +212,7 @@ The optimizer accounts for this in all calculations:
 
 - **SoC simulation**: idle drain is subtracted from every planned slot (charge, discharge, and idle).
   During idle slots with solar surplus the solar energy offsets the drain, so a full battery stays at 100 % when surplus exceeds idle draw.
-- **Solar pre-computation**: estimated solar energy per slot is reduced by idle drain.
-- **Discharge budget**: available usable energy is discounted by the cumulative idle drain of remaining slots.
+- **Discharge budget**: a forward idle-only SoC simulation runs before planning to find the peak SoC the battery will reach from solar charging. The discharge budget equals `peak_soc − soc_min`, ensuring evening discharge is planned even when the current SoC is below `soc_min` at optimization time (e.g. SoC 12% at 8:30 AM with full solar fill expected by 13:00).
 
 ## Price Sensor Format
 
@@ -216,15 +241,18 @@ The sensor may include both today's and tomorrow's data in the same list — ent
 
 ## Sensors
 
-The integration creates 5 sensor entities:
+The integration creates 6 sensor entities and 1 switch entity:
 
-| Sensor | Description | Attributes |
-|---|---|---|
-| **Optimizer Status** | Current state: `idle`, `active`, or `scheduled` | `reason`, `charge_slots`, `discharge_slots`, `idle_slots`, `soc_guard_marker` |
-| **Last Optimization** | Timestamp (device class: timestamp) of the last optimizer run | — |
-| **Current Slot Action** | What the battery is doing right now: `charge`, `discharge`, `idle`, `none`, `unknown` | `slot_index`, `slot_value`, `buy_price`, `sell_price`, `solar_kw`, `soc_after` |
-| **Estimated Daily Savings** | Estimated profit/savings for the current schedule (€) | — |
-| **Schedule Chart** | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `activated_time`, `soc_guard_marker` |
+| Entity | Type | Description | Attributes |
+|---|---|---|---|
+| **Optimizer Status** | sensor | Current state: `idle`, `active`, or `scheduled` | `reason`, `charge_slots`, `discharge_slots`, `idle_slots`, `soc_guard_marker`, `balancing_active` |
+| **Last Optimization** | sensor | Timestamp of the last optimizer run | — |
+| **Current Slot Action** | sensor | What the battery is doing right now: `charge`, `discharge`, `idle`, `none`, `unknown` | `slot_index`, `slot_value`, `buy_price`, `sell_price`, `solar_kw`, `soc_after` |
+| **Estimated Daily Savings** | sensor | Estimated profit/savings for the current schedule (€) | — |
+| **Schedule Chart** | sensor | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `activated_time`, `soc_guard_marker`, `soc_history` |
+| **Auto Base Load** | sensor | The base load value (kW) currently used by the optimizer. | — |
+| **Plan Accuracy** | sensor | Ratio of actual vs. planned SoC from last cycle. | — |
+| **PV Sell Strategy** | switch | Enable/disable the PV sell strategy at runtime. Toggling triggers an immediate optimizer re-run and re-schedules PV switch transitions for the rest of the day. State persists across HA restarts. | — |
 
 ### Schedule Chart Attribute Format
 
@@ -244,7 +272,23 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
     "sell": 0.0003,
     "solar": 0.0,
     "soc": 20.0,
-    "profit": 0.0
+    "profit": 0.0,
+    "pv_sell": false
+  },
+  {
+    "slot": 22,
+    "time": "05:30",
+    "day": 1,
+    "action": "idle",
+    "state": "Idle",
+    "target_soc": null,
+    "value": 0,
+    "buy": 0.1415,
+    "sell": 0.0479,
+    "solar": 0.844,
+    "soc": 70.3,
+    "profit": 0.0,
+    "pv_sell": true
   },
   {
     "slot": 32,
@@ -258,13 +302,16 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
     "sell": 0.0003,
     "solar": 2.5,
     "soc": 45.0,
-    "profit": -0.0132
+    "profit": -0.0132,
+    "pv_sell": false
   },
   ...
 ]
 ```
 
 When tomorrow's prices are available, the list extends to 192 entries. Each entry has `day: 0` (today) or `day: 1` (tomorrow). The `slot` field is 0–95 within each day.
+
+**`pv_sell`** — `true` means the third-party PV switch is planned to be OFF for this slot — solar energy is exported to the grid at spot price rather than charging the battery. Always `false` when the PV sell strategy switch is disabled or solar is below 0.05 kW.
 
 The `activated_time` attribute shows the time window that was sent to the battery as override commands, e.g. `"Today 14:15–23:45 + Tomorrow 00:00–06:30"`. This indicates how far forward the schedule has been activated on the battery hardware. The Emaldo E2E override uses a rolling 24-hour window: a single 96-slot push covers today's remaining slots plus (when tomorrow's prices are available) tomorrow's early slots.
 
@@ -357,8 +404,6 @@ automation:
 ### Dashboard card (ApexCharts)
 
 Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.
-
-![Example Home Assistant dashboard for Battery Optimizer](dashboard.png)
 
 #### Action Plan
 
@@ -455,7 +500,7 @@ the optimizer chose each action.
 ```yaml
 type: custom:apexcharts-card
 header:
-  title: Total Price, SoC estimate & Solcast Solar forecast
+  title: Total Price, SoC estimate & Solar forecast
   show: true
   show_states: false
 graph_span: 48h
@@ -494,7 +539,7 @@ apex_config:
     show: true
 series:
   - entity: sensor.battery_optimizer_schedule_chart
-    name: Battery SoC
+    name: Battery SoC Forecast
     type: area
     yaxis_id: soc
     stroke_width: 2
@@ -507,10 +552,10 @@ series:
       const schedule = entity.attributes.schedule || [];
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
-        s.soc
-      ]);
+      const now = Date.now();
+      return schedule
+        .filter(s => today.getTime() + s.day * 86400000 + s.slot * 15 * 60000 >= now)
+        .map(s => [today.getTime() + s.day * 86400000 + s.slot * 15 * 60000, s.soc]);
   - entity: sensor.battery_optimizer_schedule_chart
     name: Buy Total Cost
     type: line
@@ -563,7 +608,157 @@ series:
         today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
         s.solar
       ]);
+  - entity: sensor.power_store_battery_soc
+    name: Actual SoC History
+    type: line
+    yaxis_id: soc
+    stroke_width: 2
+    color: "#e74c3c"
+    extend_to: false
+    show:
+      in_header: false
+      legend_value: false
 ```
+
+## PV Sell Strategy
+
+The PV sell strategy controls `switch.power_store_third_party_pv` (the Emaldo "third-party PV" switch) slot by slot to sell morning solar energy directly to the grid at a better price instead of always charging the battery first.
+
+### Background
+
+Without this feature the battery always absorbs available PV before selling. On a clear summer day the battery fills by mid-morning (~09:00), and all subsequent solar is sold at whatever the current (often low) midday spot price is.
+
+The optimizer can plan a more profitable sequence:
+
+1. Morning solar (05:00–08:00): PV switch **OFF** → solar sells to grid at the higher morning spot price.
+2. Mid-morning (08:00–10:00): PV switch **ON** → solar charges battery at zero cost.
+3. Afternoon / evening: battery discharges during expensive peak hours as usual.
+
+### How the planner works (`_plan_pv_sell_slots`)
+
+The function runs after the main greedy optimizer has computed the battery action schedule. It evaluates each slot that has solar production and is not a grid-charge slot (charge slots are never overridden):
+
+**Pathway A — Excess-solar sell (new, primary):**
+If the total capturable solar energy remaining after this slot is enough to fully fill the battery anyway (`remaining_solar[s+1] ≥ needed_to_fill`), then selling this slot costs nothing — the battery will still be full. Any sell price above `wear_cost` is pure profit.
+
+**Pathway B — Opportunity-value sell (original):**
+If excess solar is not available, compare:
+```
+sell_pr   = spot_price − sales_commission
+charge_pr = future_max_buy_price × round_trip_efficiency − wear_cost
+```
+Sell only when `sell_pr > charge_pr` (selling now is more profitable than saving the energy for the best future discharge slot).
+
+**Recharge feasibility check (both pathways):**
+Before marking any slot as sell, verify that skipping this PV charge does not cause any planned discharge slot to drop below `soc_min`. Sell decisions are accumulated greedily from earliest to latest; each commitment reduces the SoC headroom for subsequent checks.
+
+**SoC trajectory correction — `_correct_soc_for_pv_sells`:**
+After sell slots are finalised, the `SlotPlan.soc_after` values computed during the main greedy pass are wrong: they assumed all solar charged the battery. `_correct_soc_for_pv_sells()` does a forward pass from the first sell slot, recomputing `soc_after` in-place so the dashboard SoC forecast correctly shows a flat/draining battery during sell windows instead of phantom charging. Both today and tomorrow plans are corrected.
+
+### Guard conditions
+
+| Condition | Behaviour |
+|---|---|
+| PV strategy switch OFF | All slots default to PV enabled (no grid interaction) |
+| Solcast forecast < `solar_sell_min_forecast_kwh` (default 10 kWh) | Strategy skipped for the day — cloudy-day guard |
+| Solcast data unavailable | Strategy skipped |
+| Grid-charge slot | Never overridden regardless of sell price |
+
+### Live control — `switch.battery_optimizer_pv_strategy`
+
+The strategy is toggled via the **PV Sell Strategy** switch entity. It uses `RestoreEntity` so the state survives HA restarts. Toggling it immediately triggers an optimizer re-run, which recomputes `thirdparty_pv_slots` and re-schedules all PV switch transitions for the rest of the day.
+
+The coordinator cancels and rebuilds the `async_call_later` transition callbacks on every optimizer run, so the physical switch always follows the current plan.
+
+---
+
+#### Dashboard chart — Third-Party PV Plan
+
+Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.
+
+Shows three states per 15-minute slot over 48 hours:
+- **Green** (`PV → Battery`): solar production present, PV switch ON — charging battery
+- **Orange** (`PV → Grid`): solar production present, PV switch OFF — selling to grid
+- **Grey** (`No Solar`): solar ≤ 0.05 kW — night or overcast
+
+```yaml
+type: custom:apexcharts-card
+header:
+  title: Third-Party PV Plan
+  show: true
+  show_states: false
+graph_span: 48h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+  color: red
+apex_config:
+  chart:
+    height: 150px
+    stacked: true
+  plotOptions:
+    bar:
+      columnWidth: "100%"
+  legend:
+    show: true
+  yaxis:
+    - show: false
+      min: 0
+      max: 1.1
+series:
+  - entity: sensor.battery_optimizer_schedule_chart
+    name: PV → Battery
+    type: column
+    color: "#2ecc71"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return schedule.map(s => [
+        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        s.solar > 0.05 && !s.pv_sell ? 1 : null
+      ]);
+  - entity: sensor.battery_optimizer_schedule_chart
+    name: PV → Grid
+    type: column
+    color: "#f39c12"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return schedule.map(s => [
+        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        s.solar > 0.05 && s.pv_sell ? 1 : null
+      ]);
+  - entity: sensor.battery_optimizer_schedule_chart
+    name: No Solar
+    type: column
+    color: "#bdc3c7"
+    opacity: 0.3
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return schedule.map(s => [
+        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        s.solar <= 0.05 ? 1 : null
+      ]);
+```
+
+---
 
 ## Troubleshooting
 
@@ -590,14 +785,15 @@ The Emaldo integration is not loaded or its services haven't registered yet. The
 
 ```
 battery_optimizer/
-├── __init__.py          # HA entry setup, platform forwarding
-├── config_flow.py       # UI config + options flow (14 parameters)
+├── __init__.py          # HA entry setup, platform forwarding (sensor + button + switch)
+├── config_flow.py       # UI config + options flow
 ├── const.py             # All constants, defaults, slot encoding
-├── coordinator.py       # Data gathering, trigger management, Emaldo push
+├── coordinator.py       # Data gathering, trigger management, Emaldo push, PV strategy
 ├── manifest.json        # Integration metadata
-├── optimizer.py         # Greedy solver — core optimization algorithm
-├── sensor.py            # 5 sensor entities
+├── optimizer.py         # Greedy solver — core optimization algorithm + PV sell planner
+├── sensor.py            # 7 sensor entities including plan_accuracy, schedule_chart
 ├── services.py          # run_optimizer + clear_schedule services
 ├── services.yaml        # Service descriptions for UI
+├── switch.py            # PvStrategySwitch — PV sell strategy toggle entity
 └── strings.json         # Translation strings
 ```

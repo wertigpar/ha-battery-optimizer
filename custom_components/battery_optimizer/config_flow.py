@@ -21,7 +21,6 @@ from .const import (
     CONF_SPOT_SENSOR,
     CONF_SOLCAST_TODAY,
     CONF_SOLCAST_TOMORROW,
-    CONF_BATTERY_SOC_SENSOR,
     CONF_VAT_MULTIPLIER,
     CONF_TRANSFER_FEE_BUY,
     CONF_SALES_COMMISSION,
@@ -33,15 +32,16 @@ from .const import (
     CONF_SOC_MIN,
     CONF_SOC_MAX,
     CONF_BASE_LOAD_KW,
-    CONF_BATTERY_PRICE,
-    CONF_BATTERY_LIFETIME_CYCLES,
+    CONF_BATTERY_WEAR_COST,
     CONF_IDLE_POWER_KW,
-    CONF_SOLAR_POWER_SENSOR,
-    CONF_GRID_POWER_SENSOR,
-    CONF_BATTERY_POWER_SENSOR,
     CONF_IDLE_STRATEGY,
     CONF_SOC_GUARD_INTERVAL,
     CONF_OPTIMIZER_INTERVAL,
+    CONF_EMALDO_ENTRY_ID,
+    CONF_AUTO_BASE_LOAD,
+    CONF_LOAD_ENERGY_SENSOR,
+    CONF_ENABLE_PV_STRATEGY,
+    CONF_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_TRANSFER_FEE_BUY,
     DEFAULT_SALES_COMMISSION,
@@ -53,12 +53,8 @@ from .const import (
     DEFAULT_SOC_MIN,
     DEFAULT_SOC_MAX,
     DEFAULT_BASE_LOAD_KW,
-    DEFAULT_BATTERY_PRICE,
-    DEFAULT_BATTERY_LIFETIME_CYCLES,
+    DEFAULT_BATTERY_WEAR_COST,
     DEFAULT_IDLE_POWER_KW,
-    DEFAULT_SOLAR_POWER_SENSOR,
-    DEFAULT_GRID_POWER_SENSOR,
-    DEFAULT_BATTERY_POWER_SENSOR,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
     DEFAULT_OPTIMIZER_INTERVAL,
@@ -67,18 +63,45 @@ from .const import (
     IDLE_FULL_CONTROL,
     IDLE_SOLAR_GUARD,
     IDLE_SMART_OVERRIDE,
+    DEFAULT_AUTO_BASE_LOAD,
+    DEFAULT_LOAD_ENERGY_SENSOR,
+    DEFAULT_ENABLE_PV_STRATEGY,
+    DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
+def _get_emaldo_options(hass) -> dict[str, str]:
+    """Return {entry_id: display_label} for all loaded Emaldo entries."""
+    from homeassistant.const import CONF_NAME  # noqa: PLC0415
+    emaldo_data = hass.data.get("emaldo") or {}
+    options: dict[str, str] = {}
+    for entry_id, entry_data in emaldo_data.items():
+        coord = entry_data.get("coordinator")
+        home_id = getattr(coord, "home_id", None) if coord else None
+        label = home_id or entry_id
+        options[entry_id] = label
+    return options
+
+
 def _build_schema(
     defaults: dict[str, Any] | None = None,
+    emaldo_options: dict[str, str] | None = None,
 ) -> vol.Schema:
     """Build the config / options schema with optional defaults."""
     d = defaults or {}
+    emaldo_field: dict = {}
+    if emaldo_options:
+        emaldo_field = {
+            vol.Required(
+                CONF_EMALDO_ENTRY_ID,
+                default=d.get(CONF_EMALDO_ENTRY_ID, next(iter(emaldo_options))),
+            ): vol.In(emaldo_options)
+        }
     return vol.Schema(
         {
+            **emaldo_field,
             vol.Required(
                 CONF_SPOT_SENSOR,
                 default=d.get(CONF_SPOT_SENSOR, "sensor.electricity_prices"),
@@ -90,10 +113,6 @@ def _build_schema(
             vol.Required(
                 CONF_SOLCAST_TOMORROW,
                 default=d.get(CONF_SOLCAST_TOMORROW, "sensor.solcast_pv_forecast_forecast_tomorrow"),
-            ): str,
-            vol.Required(
-                CONF_BATTERY_SOC_SENSOR,
-                default=d.get(CONF_BATTERY_SOC_SENSOR, "sensor.power_store_battery_soc"),
             ): str,
             vol.Required(
                 CONF_VAT_MULTIPLIER,
@@ -140,29 +159,13 @@ def _build_schema(
                 default=d.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW),
             ): vol.Coerce(float),
             vol.Required(
-                CONF_BATTERY_PRICE,
-                default=d.get(CONF_BATTERY_PRICE, DEFAULT_BATTERY_PRICE),
-            ): vol.Coerce(float),
-            vol.Required(
-                CONF_BATTERY_LIFETIME_CYCLES,
-                default=d.get(CONF_BATTERY_LIFETIME_CYCLES, DEFAULT_BATTERY_LIFETIME_CYCLES),
-            ): vol.All(vol.Coerce(int), vol.Range(min=100)),
+                CONF_BATTERY_WEAR_COST,
+                default=d.get(CONF_BATTERY_WEAR_COST, DEFAULT_BATTERY_WEAR_COST),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
             vol.Required(
                 CONF_IDLE_POWER_KW,
                 default=d.get(CONF_IDLE_POWER_KW, DEFAULT_IDLE_POWER_KW),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            vol.Optional(
-                CONF_SOLAR_POWER_SENSOR,
-                default=d.get(CONF_SOLAR_POWER_SENSOR, DEFAULT_SOLAR_POWER_SENSOR),
-            ): str,
-            vol.Optional(
-                CONF_GRID_POWER_SENSOR,
-                default=d.get(CONF_GRID_POWER_SENSOR, DEFAULT_GRID_POWER_SENSOR),
-            ): str,
-            vol.Optional(
-                CONF_BATTERY_POWER_SENSOR,
-                default=d.get(CONF_BATTERY_POWER_SENSOR, DEFAULT_BATTERY_POWER_SENSOR),
-            ): str,
             vol.Required(
                 CONF_IDLE_STRATEGY,
                 default=d.get(CONF_IDLE_STRATEGY, DEFAULT_IDLE_STRATEGY),
@@ -177,6 +180,25 @@ def _build_schema(
                 CONF_OPTIMIZER_INTERVAL,
                 default=d.get(CONF_OPTIMIZER_INTERVAL, DEFAULT_OPTIMIZER_INTERVAL),
             ): vol.In(OPTIMIZER_INTERVALS),
+            vol.Optional(
+                CONF_AUTO_BASE_LOAD,
+                default=d.get(CONF_AUTO_BASE_LOAD, DEFAULT_AUTO_BASE_LOAD),
+            ): bool,
+            vol.Optional(
+                CONF_LOAD_ENERGY_SENSOR,
+                default=d.get(CONF_LOAD_ENERGY_SENSOR, DEFAULT_LOAD_ENERGY_SENSOR),
+            ): str,
+            vol.Optional(
+                CONF_ENABLE_PV_STRATEGY,
+                default=d.get(CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY),
+            ): bool,
+            vol.Optional(
+                CONF_SOLAR_SELL_MIN_FORECAST_KWH,
+                default=d.get(
+                    CONF_SOLAR_SELL_MIN_FORECAST_KWH,
+                    DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
         }
     )
 
@@ -195,10 +217,11 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        emaldo_options = _get_emaldo_options(self.hass)
 
         if user_input is not None:
             # Validate that sensors exist
-            for key in (CONF_SPOT_SENSOR, CONF_BATTERY_SOC_SENSOR):
+            for key in (CONF_SPOT_SENSOR,):
                 if not self.hass.states.get(user_input[key]):
                     errors["base"] = "sensor_not_found"
                     break
@@ -213,7 +236,7 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_build_schema(),
+            data_schema=_build_schema(emaldo_options=emaldo_options),
             errors=errors,
         )
 
@@ -224,6 +247,8 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        emaldo_options = _get_emaldo_options(self.hass)
+
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -231,5 +256,5 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
         current = {**self.config_entry.data, **self.config_entry.options}
         return self.async_show_form(
             step_id="init",
-            data_schema=_build_schema(current),
+            data_schema=_build_schema(current, emaldo_options=emaldo_options),
         )
