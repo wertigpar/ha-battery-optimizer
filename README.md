@@ -1,8 +1,8 @@
-# Battery Optimizer — Home Assistant Custom Integration
+# Emaldo Battery Optimizer — Home Assistant Custom Integration
 
 ![Example Home Assistant dashboard for Battery Optimizer](dashboard.png)
 
-A Home Assistant custom integration that optimizes battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to a battery system via a rolling 24-hour E2E override window. Integration is mainly built to work together with Emaldo Home Assistant custom component.
+A Home Assistant custom integration that optimizes Emaldo battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to a battery system via a rolling 24-hour E2E override window. Integration is mainly built to work together with Emaldo Home Assistant custom component.
 
 ## How It Works
 
@@ -51,7 +51,7 @@ The optimizer compares its plan against the battery's internal AI schedule (read
 |---|---|
 | **Home Assistant** | 2024.1+ |
 | **Emaldo integration** | Must be installed and configured. The optimizer calls `emaldo.apply_bulk_schedule` to push the schedule. Battery SoC and balancing state are auto-discovered from the selected Emaldo entry. |
-| **Spot price sensor** | A sensor with a `data` attribute containing 15-minute price entries (e.g. an Entso-E / Nordpool integration). See [Price Sensor Format](#price-sensor-format). |
+| **Spot price sensor** | Required only when **Price data source** is set to `sensor`. A sensor with a `data` attribute containing 15-minute price entries (e.g. an Entso-E / Nordpool integration). See [Price Sensor Format](#price-sensor-format). When using `emaldo` (default), prices come from the Emaldo integration automatically. |
 | **Solcast PV integration** *(optional)* | [Solcast PV Forecast](https://github.com/BJReplay/ha-solcast-solar) with `detailedForecast` attribute on today/tomorrow sensors. If not available, solar production is assumed zero. |
 
 ## Installation
@@ -87,7 +87,8 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 
 | Field | Description | Default |
 |---|---|---|
-| **Spot price sensor** | Entity ID of your electricity price sensor | `sensor.electricity_prices` |
+| **Price data source** | Where to read spot prices from. `emaldo` = use Emaldo's internal Nord Pool data (no extra sensor needed, 15-min resolution). `sensor` = use an external price sensor. | `emaldo` |
+| **Spot price sensor** | Entity ID of your electricity price sensor. Only used when **Price data source** is `sensor`. | `sensor.electricity_prices` |
 | **Solcast today sensor** | Entity ID of the Solcast today forecast sensor | `sensor.solcast_pv_forecast_forecast_today` |
 | **Solcast tomorrow sensor** | Entity ID of the Solcast tomorrow forecast sensor | `sensor.solcast_pv_forecast_forecast_tomorrow` |
 | **VAT multiplier** | VAT multiplier applied to spot price when buying (1.255 = 25.5% Finnish VAT) | `1.255` |

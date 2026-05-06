@@ -47,6 +47,8 @@ from .const import (
     CONF_BATTERY_WEAR_COST,
     CONF_IDLE_POWER_KW,
     CONF_IDLE_STRATEGY,
+    CONF_PRICE_SOURCE,
+    PRICE_SOURCE_EMALDO,
     CONF_SOC_GUARD_INTERVAL,
     CONF_OPTIMIZER_INTERVAL,
     CONF_EMALDO_ENTRY_ID,
@@ -257,14 +259,68 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _parse_price_data(
         self,
     ) -> tuple[list[float] | None, list[float] | None]:
-        """Parse the sensor 'data' attribute into today/tomorrow 96-slot prices.
+        """Return today/tomorrow 96-slot spot prices in €/kWh.
+
+        Dispatches to the Emaldo internal source or the external sensor
+        depending on the CONF_PRICE_SOURCE setting.
+        """
+        if self.config.get(CONF_PRICE_SOURCE, PRICE_SOURCE_EMALDO) == PRICE_SOURCE_EMALDO:
+            return self._parse_emaldo_price_data()
+        return self._parse_sensor_price_data()
+
+    def _parse_emaldo_price_data(
+        self,
+    ) -> tuple[list[float] | None, list[float] | None]:
+        """Read prices from sensor.power_store_schedule_chart (Emaldo internal).
+
+        The schedule attribute contains a flat list of 192 × 15-min dicts:
+          {"t": "2026-05-06T00:00:00+03:00", "price": 5.0, ...}
+        Prices are raw Nord Pool spot in ct/kWh (snt/kWh).  Converted to
+        €/kWh by dividing by 100.  Today = first 96 slots, tomorrow = last 96.
+        Returns None for tomorrow if all prices are zero (data not yet published).
+        """
+        # Resolve the Emaldo schedule_chart entity dynamically
+        sensor_id = self._resolve_emaldo_entity("schedule_chart")
+        if not sensor_id:
+            _LOGGER.warning(
+                "Emaldo schedule_chart sensor not found — falling back to external price sensor"
+            )
+            return self._parse_sensor_price_data()
+
+        state = self.hass.states.get(sensor_id)
+        if state is None:
+            _LOGGER.warning("Emaldo schedule_chart sensor %s unavailable", sensor_id)
+            return self._parse_sensor_price_data()
+
+        schedule = state.attributes.get("schedule")
+        if not schedule or not isinstance(schedule, list) or len(schedule) < SLOTS_PER_DAY:
+            _LOGGER.warning("Emaldo schedule_chart has no usable schedule attribute")
+            return self._parse_sensor_price_data()
+
+        today_prices = [s["price"] / 100.0 for s in schedule[:SLOTS_PER_DAY]]
+
+        tomorrow_raw = schedule[SLOTS_PER_DAY : SLOTS_PER_DAY * 2]
+        if len(tomorrow_raw) == SLOTS_PER_DAY and any(s["price"] != 0 for s in tomorrow_raw):
+            tomorrow_prices: list[float] | None = [s["price"] / 100.0 for s in tomorrow_raw]
+        else:
+            tomorrow_prices = None
+
+        return today_prices, tomorrow_prices
+
+    def _parse_sensor_price_data(
+        self,
+    ) -> tuple[list[float] | None, list[float] | None]:
+        """Parse the external Nordpool sensor 'data' attribute into today/tomorrow 96-slot prices.
 
         The sensor stores a flat list of {start, end, price} dicts at 15-min
         resolution, with prices in snt/kWh.  We split by date, convert to
         €/kWh, and return (today_96, tomorrow_96).  Either may be None if
         insufficient data exists.
         """
-        sensor_id = self.config[CONF_SPOT_SENSOR]
+        sensor_id = self.config.get(CONF_SPOT_SENSOR, "")
+        if not sensor_id:
+            _LOGGER.warning("Price source is 'sensor' but no sensor is configured")
+            return None, None
         state = self.hass.states.get(sensor_id)
         if state is None:
             _LOGGER.warning("Price sensor %s not found", sensor_id)
@@ -342,14 +398,20 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _has_tomorrow_prices(self) -> bool:
         """Check if tomorrow's prices are available."""
-        sensor_id = self.config[CONF_SPOT_SENSOR]
+        if self.config.get(CONF_PRICE_SOURCE, PRICE_SOURCE_EMALDO) == PRICE_SOURCE_EMALDO:
+            _, tomorrow = self._parse_emaldo_price_data()
+            return tomorrow is not None
+        # External sensor path
+        sensor_id = self.config.get(CONF_SPOT_SENSOR, "")
+        if not sensor_id:
+            return False
         state = self.hass.states.get(sensor_id)
         if state is None:
             return False
         if state.attributes.get("tomorrow_valid", False):
             return True
         # Fallback: parse and check
-        _, tomorrow = self._parse_price_data()
+        _, tomorrow = self._parse_sensor_price_data()
         return tomorrow is not None
 
     def _get_solcast_forecast(self, which: str = "today") -> list[float]:
@@ -1095,14 +1157,32 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._unsub_listeners.append(unsub)
 
-        # 3) Nordpool state change — re-run when tomorrow's prices arrive
-        spot_sensor = self.config[CONF_SPOT_SENSOR]
-        unsub = async_track_state_change_event(
-            self.hass,
-            [spot_sensor],
-            self._nordpool_state_change,
-        )
-        self._unsub_listeners.append(unsub)
+        # 3) Price-source state change — re-run when tomorrow's prices arrive
+        if self.config.get(CONF_PRICE_SOURCE, PRICE_SOURCE_EMALDO) == PRICE_SOURCE_EMALDO:
+            # Watch Emaldo schedule_chart for tomorrow price updates
+            emaldo_chart = self._resolve_emaldo_entity("schedule_chart")
+            if emaldo_chart:
+                unsub = async_track_state_change_event(
+                    self.hass,
+                    [emaldo_chart],
+                    self._nordpool_state_change,
+                )
+                self._unsub_listeners.append(unsub)
+                price_watcher_label = emaldo_chart
+            else:
+                price_watcher_label = "(emaldo chart not found)"
+        else:
+            spot_sensor = self.config.get(CONF_SPOT_SENSOR, "")
+            if spot_sensor:
+                unsub = async_track_state_change_event(
+                    self.hass,
+                    [spot_sensor],
+                    self._nordpool_state_change,
+                )
+                self._unsub_listeners.append(unsub)
+                price_watcher_label = spot_sensor
+            else:
+                price_watcher_label = "(no sensor configured)"
 
         # 4a) Balancing state watcher — replan when balancing ends
         self._balancing_sensor = self._find_balancing_sensor()
@@ -1120,8 +1200,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Balancing sensor not found — balancing replan disabled")
 
         _LOGGER.info(
-            "Listeners set up: midnight checkpoint + %d-min interval + Nordpool watcher on %s",
-            opt_interval, spot_sensor,
+            "Listeners set up: midnight checkpoint + %d-min interval + price watcher on %s",
+            opt_interval, price_watcher_label,
         )
 
         # 4) SoC Guard periodic timer

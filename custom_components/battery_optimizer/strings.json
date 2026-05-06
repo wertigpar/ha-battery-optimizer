@@ -6,10 +6,9 @@
         "description": "Configure data sources and battery parameters.",
         "data": {
           "emaldo_entry_id": "Emaldo battery device",
-          "spot_price_sensor": "Nordpool spot price sensor",
+          "price_source": "Price data source (emaldo = Emaldo internal, sensor = external sensor)",
+          "spot_price_sensor": "Nordpool spot price sensor (only when source is 'sensor')",
           "solcast_today_sensor": "Solcast today forecast sensor",
-          "solcast_tomorrow_sensor": "Solcast tomorrow forecast sensor",
-          "vat_multiplier": "VAT multiplier (e.g. 1.255 = 25.5%)",
           "transfer_fee_buy": "Grid transfer fee (€/kWh)",
           "sales_commission": "Feed-in sales commission (€/kWh)",
           "battery_capacity_kwh": "Battery capacity (kWh)",
@@ -46,7 +45,8 @@
         "title": "Battery Optimizer Options",
         "data": {
           "emaldo_entry_id": "Emaldo battery device",
-          "spot_price_sensor": "Nordpool spot price sensor",
+          "price_source": "Price data source (emaldo = Emaldo internal, sensor = external sensor)",
+          "spot_price_sensor": "Nordpool spot price sensor (only when source is 'sensor')",
           "solcast_today_sensor": "Solcast today forecast sensor",
           "solcast_tomorrow_sensor": "Solcast tomorrow forecast sensor",
           "vat_multiplier": "VAT multiplier",
