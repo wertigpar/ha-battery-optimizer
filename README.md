@@ -39,7 +39,7 @@ buy price avoided (self-consumption), not the sell/export price.
 3. Discharge existing energy when `buy_price > wear_cost` (self-consumption saves money).
 4. Round-trip trades when the price spread covers efficiency losses + wear.
 5. Grid charge only the deficit that solar + existing SoC cannot cover.
-6. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. Morning solar slots where sufficient remaining solar will still fill the battery are sold to the grid (PV switch OFF) instead of charging the battery, turning otherwise-free energy into direct revenue.
+6. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. A single cutover time T (≤ noon by default) is chosen as the latest moment where solar energy remaining after T can still fill the battery to 100%. Solar before T is sold to the grid (PV switch OFF) for revenue; solar from T onward charges the battery uninterrupted.
 
 **Smart override logic:**
 
@@ -107,7 +107,7 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Battery wear cost** | Cost per kWh cycled (€/kWh) — accounts for battery degradation. Typical LFP: 1–5 snt/kWh. | `0.03` |
 | **Idle power consumption** | Constant power draw of the battery unit itself (kW). Drains SoC even when idle. | `0.1` |
 | **Auto-tune base load** | When enabled, the optimizer computes base load from recorder history instead of using the static value above. | `false` |
-| **Household load power sensor** | Entity ID of a combined household load power sensor in Watts (e.g. `sensor.emhass_combined_power`). Required when auto-tune is enabled. | `sensor.emhass_combined_power` |
+| **Household load power sensor** | Entity ID of a combined household load power sensor in Watts (e.g. `sensor.combined_power`). Required when auto-tune is enabled. | *(empty)* |
 | **Idle slot strategy** | Controls what happens for slots where the optimizer has no action (see below). | `full_control` |
 | **SoC guard interval** | How often (minutes) to actively update the discharge floor marker. See [SoC Guard](#soc-guard). | `0` (disabled) |
 | **Emaldo battery device** | Emaldo config entry to use. Shown as a dropdown — select the correct system when multiple Emaldo devices are installed. | first found |
@@ -173,7 +173,7 @@ When **Auto-tune base load** is enabled, the optimizer queries the HA recorder f
 - The recorder component is unavailable
 - Fewer than 3 days of data exist
 
-**Recommended sensor:** `sensor.emhass_combined_power` — a template sensor that calculates actual household consumption from all sources:
+**Recommended sensor:** `sensor.combined_power` — a template sensor that calculates actual household consumption from all sources:
 ```
 grid_power - battery_power + solar_power  (in Watts)
 ```
@@ -184,7 +184,7 @@ The optimizer applies fees to the raw spot price for each 15-minute slot:
 
 ```
 buy_price  = spot_price × VAT_multiplier + transfer_fee_buy
-sell_price = max(spot_price − sales_commission, 0)
+sell_price = spot_price − sales_commission
 ```
 
 Self-consumption discharge (existing stored energy) is scheduled when:
@@ -314,7 +314,7 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
 
 When tomorrow's prices are available, the list extends to 192 entries. Each entry has `day: 0` (today) or `day: 1` (tomorrow). The `slot` field is 0–95 within each day.
 
-**`pv_sell`** — `true` means the third-party PV switch is planned to be OFF for this slot — solar energy is exported to the grid at spot price rather than charging the battery. Always `false` when the PV sell strategy switch is disabled or solar is below 0.05 kW.
+**`pv_sell`** — `true` means the third-party PV switch is planned to be OFF for this slot — solar energy is exported to the grid at spot price rather than charging the battery. Always `false` when the PV sell strategy switch is disabled or solar is below 0.1 kW.
 
 The `activated_time` attribute shows the time window that was sent to the battery as override commands, e.g. `"Today 14:15–23:45 + Tomorrow 00:00–06:30"`. This indicates how far forward the schedule has been activated on the battery hardware. The Emaldo E2E override uses a rolling 24-hour window: a single 96-slot push covers today's remaining slots plus (when tomorrow's prices are available) tomorrow's early slots.
 
@@ -639,24 +639,22 @@ The optimizer can plan a more profitable sequence:
 
 ### How the planner works (`_plan_pv_sell_slots`)
 
-The function runs after the main greedy optimizer has computed the battery action schedule. It evaluates each slot that has solar production and is not a grid-charge slot (charge slots are never overridden):
+The function runs after the main greedy optimizer has computed the battery action schedule.
 
-**Pathway A — Excess-solar sell (new, primary):**
-If the total capturable solar energy remaining after this slot is enough to fully fill the battery anyway (`remaining_solar[s+1] ≥ needed_to_fill`), then selling this slot costs nothing — the battery will still be full. Any sell price above `wear_cost` is pure profit.
+**Step 1 — Compute remaining solar (backward scan):**
+A backward pass builds `remaining_solar[s]` = total net solar energy (after base load, capped at `max_charge_kw`, times `charge_efficiency`) available from slot `s` to end-of-day. Grid-charge slots (`action == "charge"`) are excluded — they already fill the battery and are never overridden.
 
-**Pathway B — Opportunity-value sell (original):**
-If excess solar is not available, compare:
-```
-sell_pr   = spot_price − sales_commission
-charge_pr = future_max_buy_price × round_trip_efficiency − wear_cost
-```
-Sell only when `sell_pr > charge_pr` (selling now is more profitable than saving the energy for the best future discharge slot).
+**Step 2 — Guard: insufficient total solar:**
+If `remaining_solar[start_slot] < needed_kwh × 0.95`, selling would risk not filling the battery — strategy is skipped and all slots default to PV-on.
 
-**Recharge feasibility check (both pathways):**
-Before marking any slot as sell, verify that skipping this PV charge does not cause any planned discharge slot to drop below `soc_min`. Sell decisions are accumulated greedily from earliest to latest; each commitment reduces the SoC headroom for subsequent checks.
+**Step 3 — Find cutover T:**
+T is the **latest** slot ≤ noon (slot 48, 12:00) where `remaining_solar[T] ≥ needed_kwh`. If post-noon solar alone is enough, T = noon and the full morning window is available for selling. If post-noon solar is insufficient (e.g. partial cloud), T is moved earlier until the remaining solar constraint is satisfied.
 
-**SoC trajectory correction — `_correct_soc_for_pv_sells`:**
-After sell slots are finalised, the `SlotPlan.soc_after` values computed during the main greedy pass are wrong: they assumed all solar charged the battery. `_correct_soc_for_pv_sells()` does a forward pass from the first sell slot, recomputing `soc_after` in-place so the dashboard SoC forecast correctly shows a flat/draining battery during sell windows instead of phantom charging. Both today and tomorrow plans are corrected.
+**Step 4 — Mark sell slots:**
+All solar slots in `[start_slot, T)` with `sell_price > wear_cost` are marked as sell (PV switch OFF). Solar slots from T onward are always kept as charge (PV switch ON).
+
+**Step 5 — SoC trajectory correction (`_correct_soc_for_pv_sells`):**
+After sell slots are finalised, `SlotPlan.soc_after` values (computed during the main greedy pass assuming all solar charged the battery) are corrected. A forward pass from the first sell slot recomputes `soc_after` in-place so the dashboard SoC forecast correctly shows a flat/draining morning and a rising ramp from the cutover time onward. Both today and tomorrow plans are corrected.
 
 ### Guard conditions
 

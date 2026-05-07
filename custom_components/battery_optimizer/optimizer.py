@@ -128,12 +128,12 @@ def compute_prices(
         # Already 15-minute resolution
         for spot in spot_prices[:SLOTS_PER_DAY]:
             buy.append(spot * cfg.vat_multiplier + cfg.transfer_fee_buy)
-            sell.append(max(spot - cfg.sales_commission, 0.0))
+            sell.append(spot - cfg.sales_commission)
     else:
         # Hourly — expand each to 4 slots
         for spot in spot_prices[:24]:
             b = spot * cfg.vat_multiplier + cfg.transfer_fee_buy
-            s = max(spot - cfg.sales_commission, 0.0)
+            s = spot - cfg.sales_commission
             for _ in range(4):
                 buy.append(b)
                 sell.append(s)
