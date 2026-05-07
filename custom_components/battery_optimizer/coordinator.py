@@ -276,8 +276,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         The schedule attribute contains a flat list of 192 × 15-min dicts:
           {"t": "2026-05-06T00:00:00+03:00", "price": 5.0, ...}
         Prices are raw Nord Pool spot in ct/kWh (snt/kWh).  Converted to
-        €/kWh by dividing by 100.  Today = first 96 slots, tomorrow = last 96.
-        Returns None for tomorrow if all prices are zero (data not yet published).
+        €/kWh by dividing by 100.
+        Slots are grouped by local date from the "t" field — the schedule is a
+        rolling 48-hour window and the first slot is not necessarily today midnight.
+        Returns None for tomorrow if its 96 slots are missing or all zero.
         """
         # Resolve the Emaldo schedule_chart entity dynamically
         sensor_id = self._resolve_emaldo_entity("schedule_chart")
@@ -297,11 +299,38 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("Emaldo schedule_chart has no usable schedule attribute")
             return self._parse_sensor_price_data()
 
-        today_prices = [s["price"] / 100.0 for s in schedule[:SLOTS_PER_DAY]]
+        # Group slots by local date using the "t" timestamp in each slot.
+        # The schedule is a rolling window — the first slot is NOT necessarily
+        # midnight of today, so we must not blindly split at index 96.
+        local_tz = dt_util.get_time_zone(self.hass.config.time_zone)
+        today_date = dt_util.now().date()
+        tomorrow_date = today_date + timedelta(days=1)
 
-        tomorrow_raw = schedule[SLOTS_PER_DAY : SLOTS_PER_DAY * 2]
-        if len(tomorrow_raw) == SLOTS_PER_DAY and any(s["price"] != 0 for s in tomorrow_raw):
-            tomorrow_prices: list[float] | None = [s["price"] / 100.0 for s in tomorrow_raw]
+        today_slots: list[dict] = []
+        tomorrow_slots: list[dict] = []
+        for slot in schedule:
+            try:
+                slot_dt = datetime.fromisoformat(slot["t"])
+                slot_date = slot_dt.astimezone(local_tz).date()
+            except (KeyError, ValueError, TypeError):
+                continue
+            if slot_date == today_date:
+                today_slots.append(slot)
+            elif slot_date == tomorrow_date:
+                tomorrow_slots.append(slot)
+
+        if len(today_slots) < SLOTS_PER_DAY:
+            _LOGGER.warning(
+                "Emaldo schedule_chart has only %d slots for today (expected %d)",
+                len(today_slots),
+                SLOTS_PER_DAY,
+            )
+            return self._parse_sensor_price_data()
+
+        today_prices = [s["price"] / 100.0 for s in today_slots[:SLOTS_PER_DAY]]
+
+        if len(tomorrow_slots) == SLOTS_PER_DAY and any(s["price"] != 0 for s in tomorrow_slots):
+            tomorrow_prices: list[float] | None = [s["price"] / 100.0 for s in tomorrow_slots]
         else:
             tomorrow_prices = None
 
@@ -1493,16 +1522,34 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hass.async_create_task(self._reconcile_pv_switch())
 
     async def _reconcile_pv_switch(self) -> None:
-        """Verify the PV switch state matches the current plan and fix if not."""
+        """Verify the PV switch state matches the current plan and fix if not.
+
+        Reads the actual entity state from HA rather than relying on the internal
+        _pv_switch_state cache.  This catches cases where the service call was
+        accepted by HA but the Emaldo device did not apply it (e.g. dropped
+        connection), which would leave _pv_switch_state out of sync with reality.
+        """
         if not self._pv_strategy_enabled or self._last_result is None:
             return
         now_slot = _current_slot_index()
         pv_slots = self._last_result.thirdparty_pv_slots
         desired = pv_slots[now_slot] if now_slot < len(pv_slots) else True
-        if self._pv_switch_state != desired:
+
+        # Read actual entity state (authoritative) rather than cached command state.
+        entity_id = self._resolve_emaldo_entity("thirdparty_pv_on", domain="switch")
+        if entity_id is None:
+            entity_id = "switch.power_store_third_party_pv"
+        actual_state = self.hass.states.get(entity_id)
+        if actual_state is not None:
+            actual_on = actual_state.state == "on"
+        else:
+            # Entity unavailable — fall back to cached value.
+            actual_on = self._pv_switch_state
+
+        if actual_on != desired:
             _LOGGER.warning(
-                "PV switch reconciliation: was %s, plan says %s for slot %d (%02d:%02d) — correcting",
-                "on" if self._pv_switch_state else "off" if self._pv_switch_state is not None else "unknown",
+                "PV switch reconciliation: actual=%s, plan says %s for slot %d (%02d:%02d) — correcting",
+                "on" if actual_on else "off",
                 "on" if desired else "off",
                 now_slot,
                 (now_slot * 15) // 60,
