@@ -244,7 +244,7 @@ The sensor may include both today's and tomorrow's data in the same list — ent
 
 ## Sensors
 
-The integration creates 6 sensor entities and 1 switch entity:
+The integration creates 7 sensor entities:
 
 | Entity | Type | Description | Attributes |
 |---|---|---|---|
@@ -255,7 +255,15 @@ The integration creates 6 sensor entities and 1 switch entity:
 | **Schedule Chart** | sensor | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `activated_time`, `soc_guard_marker`, `soc_history` |
 | **Auto Base Load** | sensor | The base load value (kW) currently used by the optimizer. | — |
 | **Plan Accuracy** | sensor | Ratio of actual vs. planned SoC from last cycle. | — |
-| **PV Sell Strategy** | switch | Enable/disable the PV sell strategy at runtime. Toggling triggers an immediate optimizer re-run and re-schedules PV switch transitions for the rest of the day. State persists across HA restarts. | — |
+
+## Switches
+
+The integration creates 2 switch entities:
+
+| Entity | Description |
+|---|---|
+| **PV Sell Strategy** | Enable/disable the PV sell strategy at runtime. When ON, the optimizer plans solar slots where third-party PV is disabled so solar is exported to grid at spot price. When OFF, solar is always used to charge the battery. Toggling triggers an immediate optimizer re-run and re-schedules PV switch transitions for the rest of the day. State persists across HA restarts. |
+| **Enable Emaldo control** | Enable/disable battery control via the Emaldo integration. When ON (default), the optimizer can push schedules to the battery via `apply_bulk_schedule`. When OFF, the optimizer runs and computes the schedule but does not send any commands to Emaldo — useful for testing, debugging, or running in "dry-run" mode. State persists across HA restarts. |
 
 ### Schedule Chart Attribute Format
 
