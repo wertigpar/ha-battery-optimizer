@@ -1427,6 +1427,51 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Failed to %s PV switch '%s': %s", service, entity_id, err
             )
 
+    def _desired_pv_state_now(self, result: OptimizationResult | None) -> bool:
+        """Return the effective desired PV switch state for the current slot.
+
+        This folds in all runtime guards (strategy disabled, cloudy-day guard)
+        so both immediate apply and periodic reconciliation use identical logic.
+        """
+        if not self._pv_strategy_enabled or result is None:
+            return True
+
+        # Solar forecast guard: skip strategy on cloudy days.
+        solar_today = self._get_solcast_forecast("today")
+        total_solar_kwh = sum(solar_today) * 0.25  # SLOT_DURATION_HOURS
+        min_forecast = self.config.get(
+            CONF_SOLAR_SELL_MIN_FORECAST_KWH, DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH
+        )
+        if total_solar_kwh < min_forecast:
+            return True
+
+        now_slot = _current_slot_index()
+        pv_slots = result.thirdparty_pv_slots
+        return pv_slots[now_slot] if now_slot < len(pv_slots) else True
+
+    async def _ensure_pv_switch_matches_plan(self, desired_on: bool) -> None:
+        """Ensure actual Emaldo third-party PV switch state matches desired state."""
+        entity_id = self._resolve_emaldo_entity("thirdparty_pv_on", domain="switch")
+        if entity_id is None:
+            entity_id = "switch.power_store_third_party_pv"
+
+        state_obj = self.hass.states.get(entity_id)
+        actual_on: bool | None = None
+        if state_obj is not None and state_obj.state in ("on", "off"):
+            actual_on = state_obj.state == "on"
+
+        # Keep cache aligned with authoritative HA state when available.
+        if actual_on is not None:
+            self._pv_switch_state = actual_on
+
+        if actual_on != desired_on:
+            _LOGGER.warning(
+                "PV switch mismatch: actual=%s, desired=%s — correcting",
+                "on" if actual_on else "off",
+                "on" if desired_on else "off",
+            )
+            await self._set_pv_switch(desired_on)
+
     async def _apply_pv_strategy(self, result: OptimizationResult) -> None:
         """Apply the PV sell strategy by controlling the Emaldo PV switch.
 
@@ -1444,7 +1489,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if not self._pv_strategy_enabled:
             # Strategy is off — restore PV to on.
-            await self._set_pv_switch(True)
+            await self._ensure_pv_switch_matches_plan(True)
             return
 
         # Solar forecast guard: skip on cloudy days.
@@ -1459,7 +1504,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "strategy inactive today",
                 total_solar_kwh, min_forecast,
             )
-            await self._set_pv_switch(True)
+            await self._ensure_pv_switch_matches_plan(True)
             return
 
         now_slot = _current_slot_index()
@@ -1467,7 +1512,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Apply current slot's desired state.
         current_pv_on = pv_slots[now_slot] if now_slot < len(pv_slots) else True
-        await self._set_pv_switch(current_pv_on)
+        await self._ensure_pv_switch_matches_plan(current_pv_on)
 
         # Schedule transition callbacks for each upcoming state change.
         now = dt_util.now()
@@ -1529,33 +1574,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         accepted by HA but the Emaldo device did not apply it (e.g. dropped
         connection), which would leave _pv_switch_state out of sync with reality.
         """
-        if not self._pv_strategy_enabled or self._last_result is None:
+        if self._last_result is None:
             return
-        now_slot = _current_slot_index()
-        pv_slots = self._last_result.thirdparty_pv_slots
-        desired = pv_slots[now_slot] if now_slot < len(pv_slots) else True
-
-        # Read actual entity state (authoritative) rather than cached command state.
-        entity_id = self._resolve_emaldo_entity("thirdparty_pv_on", domain="switch")
-        if entity_id is None:
-            entity_id = "switch.power_store_third_party_pv"
-        actual_state = self.hass.states.get(entity_id)
-        if actual_state is not None:
-            actual_on = actual_state.state == "on"
-        else:
-            # Entity unavailable — fall back to cached value.
-            actual_on = self._pv_switch_state
-
-        if actual_on != desired:
-            _LOGGER.warning(
-                "PV switch reconciliation: actual=%s, plan says %s for slot %d (%02d:%02d) — correcting",
-                "on" if actual_on else "off",
-                "on" if desired else "off",
-                now_slot,
-                (now_slot * 15) // 60,
-                (now_slot * 15) % 60,
-            )
-            await self._set_pv_switch(desired)
+        desired = self._desired_pv_state_now(self._last_result)
+        await self._ensure_pv_switch_matches_plan(desired)
 
     @callback
     def async_shutdown(self) -> None:
