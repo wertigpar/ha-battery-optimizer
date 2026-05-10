@@ -24,7 +24,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up Battery Optimizer switch entities from a config entry."""
     coordinator: BatteryOptimizerCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([PvStrategySwitch(coordinator, entry)])
+    async_add_entities([
+        PvStrategySwitch(coordinator, entry),
+        EmaldoControlEnableSwitch(coordinator, entry),
+    ])
 
 
 class PvStrategySwitch(
@@ -87,3 +90,68 @@ class PvStrategySwitch(
         self._attr_is_on = False
         self.async_write_ha_state()
         await self.coordinator.set_pv_strategy_enabled(False, rerun=True)
+
+
+class EmaldoControlEnableSwitch(
+    CoordinatorEntity[BatteryOptimizerCoordinator],
+    SwitchEntity,
+    RestoreEntity,
+):
+    """Switch that enables/disables Emaldo battery control.
+
+    When ON: the optimizer can push schedules to the battery via apply_bulk_schedule.
+    When OFF: the optimizer runs but does not send any commands to Emaldo.
+
+    This allows users to run the optimizer in "dry-run" mode for testing or
+    debugging without actually affecting the battery schedule.
+
+    State survives HA restarts via RestoreEntity.  Toggling triggers an
+    immediate optimizer re-run via coordinator.set_emaldo_control_enabled().
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:battery-lock"
+    _attr_translation_key = "emaldo_control_enable"
+
+    def __init__(
+        self,
+        coordinator: BatteryOptimizerCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_emaldo_control_enable"
+        # Initial default from config; overridden by restored state on startup.
+        from .const import CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
+        self._attr_is_on: bool = entry.options.get(
+            CONF_ENABLE_EMALDO_CONTROL,
+            entry.data.get(CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL),
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous state and sync coordinator on startup."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state in ("on", "off"):
+            self._attr_is_on = last_state.state == "on"
+            _LOGGER.debug(
+                "Emaldo control enable switch: restored state '%s'", last_state.state
+            )
+        # Inform coordinator of the current state without triggering a re-run
+        # (optimizer hasn't run yet at this point during HA startup).
+        await self.coordinator.set_emaldo_control_enabled(self._attr_is_on, rerun=False)
+
+    @property
+    def is_on(self) -> bool:
+        return self._attr_is_on
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable Emaldo control and trigger immediate re-optimisation."""
+        self._attr_is_on = True
+        self.async_write_ha_state()
+        await self.coordinator.set_emaldo_control_enabled(True, rerun=True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Disable Emaldo control and trigger immediate re-optimisation."""
+        self._attr_is_on = False
+        self.async_write_ha_state()
+        await self.coordinator.set_emaldo_control_enabled(False, rerun=True)

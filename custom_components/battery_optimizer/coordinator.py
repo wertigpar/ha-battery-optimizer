@@ -56,9 +56,11 @@ from .const import (
     CONF_LOAD_ENERGY_SENSOR,
     CONF_ENABLE_PV_STRATEGY,
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
+    CONF_ENABLE_EMALDO_CONTROL,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
+    DEFAULT_ENABLE_EMALDO_CONTROL,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
@@ -143,6 +145,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_pv_transitions: list[CALLBACK_TYPE] = []
         # Last known PV switch state — used for reconciliation
         self._pv_switch_state: bool | None = None
+        # Emaldo control enable/disable
+        self._emaldo_control_enabled: bool = self.config.get(
+            CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
+        )
 
     @property
     def config(self) -> dict[str, Any]:
@@ -877,6 +883,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Uses smart diffing: compares the optimizer plan against the battery's
         internal AI schedule and only overrides slots that differ.
         """
+        if not self._emaldo_control_enabled:
+            _LOGGER.debug(
+                "Emaldo control disabled — schedule computed but not applied"
+            )
+            return
+
         if not self.hass.services.has_service(EMALDO_DOMAIN, "apply_bulk_schedule"):
             _LOGGER.warning(
                 "Emaldo service 'apply_bulk_schedule' not available — "
@@ -1401,6 +1413,23 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info("PV sell strategy %s", "enabled" if enabled else "disabled")
         if rerun and changed:
             await self.run_optimizer(reason="pv_strategy_changed", force=True)
+
+    async def set_emaldo_control_enabled(self, enabled: bool, rerun: bool = True) -> None:
+        """Set Emaldo control enabled state. Called by the switch entity.
+
+        When enabled: optimizer can push schedules to the battery via apply_bulk_schedule.
+        When disabled: optimizer runs but does not send any commands to Emaldo.
+
+        When rerun=True and the state changes, immediately re-runs the optimizer.
+        When rerun=False (e.g. called during HA startup restore), only updates
+        the flag without triggering an optimizer run.
+        """
+        changed = self._emaldo_control_enabled != enabled
+        self._emaldo_control_enabled = enabled
+        if changed:
+            _LOGGER.info("Emaldo control %s", "enabled" if enabled else "disabled")
+        if rerun and changed:
+            await self.run_optimizer(reason="emaldo_control_changed", force=True)
 
     async def _set_pv_switch(self, turn_on: bool) -> None:
         """Turn the Emaldo third-party PV switch on or off.
