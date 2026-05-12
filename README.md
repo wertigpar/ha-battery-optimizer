@@ -652,8 +652,11 @@ The function runs after the main greedy optimizer has computed the battery actio
 **Step 1 — Compute remaining solar (backward scan):**
 A backward pass builds `remaining_solar[s]` = total net solar energy (after base load, capped at `max_charge_kw`, times `charge_efficiency`) available from slot `s` to end-of-day. Grid-charge slots (`action == "charge"`) are excluded — they already fill the battery and are never overridden.
 
-**Step 2 — Guard: insufficient total solar:**
-If `remaining_solar[start_slot] < needed_kwh × 0.95`, selling would risk not filling the battery — strategy is skipped and all slots default to PV-on.
+**Step 2 — Guards: strategy activation conditions:**
+Two guards are checked before the cutover search proceeds:
+
+- **Solar surplus guard**: if `remaining_solar[start_slot] < needed_kwh × pv_sell_solar_margin` (default 1.5), the forecast solar is insufficient — strategy is skipped. A margin > 1.0 ensures a genuine surplus is available, preventing undercharge on cloudy days.
+- **Price spread guard**: the average sell price in the morning window `[start_slot, noon]` is compared to the average of the cheapest 25% of buy prices outside that window. If the spread is below `pv_sell_min_price_spread` (default 0.03 EUR/kWh), there is no financial incentive and the strategy is skipped.
 
 **Step 3 — Find cutover T:**
 T is the **latest** slot ≤ noon (slot 48, 12:00) where `remaining_solar[T] ≥ needed_kwh`. If post-noon solar alone is enough, T = noon and the full morning window is available for selling. If post-noon solar is insufficient (e.g. partial cloud), T is moved earlier until the remaining solar constraint is satisfied.
@@ -672,6 +675,15 @@ After sell slots are finalised, `SlotPlan.soc_after` values (computed during the
 | Solcast forecast < `solar_sell_min_forecast_kwh` (default 10 kWh) | Strategy skipped for the day — cloudy-day guard |
 | Solcast data unavailable | Strategy skipped |
 | Grid-charge slot | Never overridden regardless of sell price |
+| Remaining solar < battery need × `pv_sell_solar_margin` (default 1.5) | Strategy skipped — insufficient solar surplus |
+| Morning avg sell price − cheapest-25% night buy price < `pv_sell_min_price_spread` (default 0.03 EUR/kWh) | Strategy skipped — no price incentive |
+
+### Tunable guard parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `pv_sell_solar_margin` | 1.5 | Solar surplus margin. Remaining solar must cover `needed_kwh × this value`. Raise to 2.0+ in cloudy climates; lower to 1.1 on reliably sunny sites. |
+| `pv_sell_min_price_spread` | 0.03 | Minimum price advantage (EUR/kWh) of morning sell prices over cheapest night buy prices to activate the strategy. Set to 0 to disable the price check. |
 
 ### Live control — `switch.battery_optimizer_pv_strategy`
 

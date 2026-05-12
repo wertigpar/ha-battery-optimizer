@@ -38,6 +38,8 @@ CONF_AUTO_BASE_LOAD = "auto_base_load"
 CONF_LOAD_ENERGY_SENSOR = "load_energy_sensor"
 CONF_ENABLE_PV_STRATEGY = "enable_pv_strategy"
 CONF_SOLAR_SELL_MIN_FORECAST_KWH = "solar_sell_min_forecast_kwh"
+CONF_PV_SELL_SOLAR_MARGIN = "pv_sell_solar_margin"
+CONF_PV_SELL_MIN_PRICE_SPREAD = "pv_sell_min_price_spread"
 CONF_ENABLE_EMALDO_CONTROL = "enable_emaldo_control"
 
 # ── Defaults ─────────────────────────────────────────────────────────
@@ -65,6 +67,8 @@ DEFAULT_LOAD_ENERGY_SENSOR = ""
 DEFAULT_ENABLE_PV_STRATEGY = False
 DEFAULT_ENABLE_EMALDO_CONTROL = True
 DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH = 10.0  # kWh; below this, cloudy day → skip
+DEFAULT_PV_SELL_SOLAR_MARGIN = 1.5          # solar must cover needed_kwh * this factor
+DEFAULT_PV_SELL_MIN_PRICE_SPREAD = 0.03     # min avg sell - avg cheap-night buy (EUR/kWh)
 
 # ── Optimizer run interval ────────────────────────────────────────────
 DEFAULT_OPTIMIZER_INTERVAL = 120   # minutes
