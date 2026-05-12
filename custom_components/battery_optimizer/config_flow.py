@@ -46,6 +46,8 @@ from .const import (
     CONF_LOAD_ENERGY_SENSOR,
     CONF_ENABLE_PV_STRATEGY,
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
+    CONF_PV_SELL_SOLAR_MARGIN,
+    CONF_PV_SELL_MIN_PRICE_SPREAD,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_TRANSFER_FEE_BUY,
     DEFAULT_SALES_COMMISSION,
@@ -71,6 +73,8 @@ from .const import (
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
+    DEFAULT_PV_SELL_SOLAR_MARGIN,
+    DEFAULT_PV_SELL_MIN_PRICE_SPREAD,
     DEFAULT_PRICE_SOURCE,
 )
 
@@ -222,6 +226,16 @@ def _build_schema(
                     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
                 ),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
+            vol.Optional(
+                CONF_PV_SELL_SOLAR_MARGIN,
+                default=d.get(CONF_PV_SELL_SOLAR_MARGIN, DEFAULT_PV_SELL_SOLAR_MARGIN),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=5.0)),
+            vol.Optional(
+                CONF_PV_SELL_MIN_PRICE_SPREAD,
+                default=d.get(
+                    CONF_PV_SELL_MIN_PRICE_SPREAD, DEFAULT_PV_SELL_MIN_PRICE_SPREAD
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
         }
     )
 

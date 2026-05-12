@@ -56,12 +56,16 @@ from .const import (
     CONF_LOAD_ENERGY_SENSOR,
     CONF_ENABLE_PV_STRATEGY,
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
+    CONF_PV_SELL_SOLAR_MARGIN,
+    CONF_PV_SELL_MIN_PRICE_SPREAD,
     CONF_ENABLE_EMALDO_CONTROL,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_ENABLE_EMALDO_CONTROL,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
+    DEFAULT_PV_SELL_SOLAR_MARGIN,
+    DEFAULT_PV_SELL_MIN_PRICE_SPREAD,
     DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
@@ -258,6 +262,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             base_load_kw=base_load_kw,
             wear_cost_per_kwh=c.get(CONF_BATTERY_WEAR_COST, 0.03),
             idle_power_kw=c.get(CONF_IDLE_POWER_KW, 0.1),
+            pv_sell_solar_margin=float(
+                c.get(CONF_PV_SELL_SOLAR_MARGIN, DEFAULT_PV_SELL_SOLAR_MARGIN)
+            ),
+            pv_sell_min_price_spread=float(
+                c.get(CONF_PV_SELL_MIN_PRICE_SPREAD, DEFAULT_PV_SELL_MIN_PRICE_SPREAD)
+            ),
         )
 
     # ── Data readers ──────────────────────────────────────────────────
