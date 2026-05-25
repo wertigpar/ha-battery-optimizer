@@ -13,6 +13,7 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_call_later,
@@ -56,16 +57,12 @@ from .const import (
     CONF_LOAD_ENERGY_SENSOR,
     CONF_ENABLE_PV_STRATEGY,
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
-    CONF_PV_SELL_SOLAR_MARGIN,
-    CONF_PV_SELL_MIN_PRICE_SPREAD,
     CONF_ENABLE_EMALDO_CONTROL,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_ENABLE_EMALDO_CONTROL,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
-    DEFAULT_PV_SELL_SOLAR_MARGIN,
-    DEFAULT_PV_SELL_MIN_PRICE_SPREAD,
     DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
@@ -153,6 +150,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._emaldo_control_enabled: bool = self.config.get(
             CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
         )
+        # Startup flag — suppresses false-positive warnings before HA has fully started
+        self._ha_started: bool = False
 
     @property
     def config(self) -> dict[str, Any]:
@@ -262,12 +261,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             base_load_kw=base_load_kw,
             wear_cost_per_kwh=c.get(CONF_BATTERY_WEAR_COST, 0.03),
             idle_power_kw=c.get(CONF_IDLE_POWER_KW, 0.1),
-            pv_sell_solar_margin=float(
-                c.get(CONF_PV_SELL_SOLAR_MARGIN, DEFAULT_PV_SELL_SOLAR_MARGIN)
-            ),
-            pv_sell_min_price_spread=float(
-                c.get(CONF_PV_SELL_MIN_PRICE_SPREAD, DEFAULT_PV_SELL_MIN_PRICE_SPREAD)
-            ),
         )
 
     # ── Data readers ──────────────────────────────────────────────────
@@ -528,7 +521,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Read current battery SoC, auto-discovered from the selected Emaldo entry."""
         sensor_id = self._resolve_emaldo_entity("battery_soc")
         if not sensor_id:
-            _LOGGER.warning("Battery SoC sensor could not be auto-discovered from the Emaldo integration")
+            if self._ha_started:
+                _LOGGER.warning(
+                    "Battery SoC sensor could not be auto-discovered from the Emaldo integration"
+                )
             return None
         state = self.hass.states.get(sensor_id)
         if state is None or state.state in ("unknown", "unavailable"):
@@ -745,10 +741,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now_slot = _current_slot_index()
 
         if soc is None:
-            _LOGGER.error(
-                "Cannot optimize: battery SoC could not be read. "
-                "Ensure the Emaldo integration is loaded and the device is online.",
-            )
+            if self._ha_started:
+                _LOGGER.error(
+                    "Cannot optimize: battery SoC could not be read. "
+                    "Ensure the Emaldo integration is loaded and the device is online.",
+                )
+            else:
+                _LOGGER.debug(
+                    "Skipping startup optimizer run — Emaldo integration not ready yet"
+                )
             return None
 
         _LOGGER.info("Battery SoC: %.1f%%, start_slot: %d", soc, now_slot)
@@ -1281,6 +1282,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._unsub_listeners.append(unsub)
 
+        # 6) Track HA startup completion — suppresses race-condition warnings
+        if not self._ha_started:
+            unsub = self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED, self._on_ha_started
+            )
+            self._unsub_listeners.append(unsub)
+
         # 6) PV switch reconciliation — checks every 5 min that the switch
         #    matches the plan, catching restarts that lost transition timers
         unsub = async_track_time_interval(
@@ -1289,6 +1297,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             timedelta(minutes=5),
         )
         self._unsub_listeners.append(unsub)
+
+    @callback
+    def _on_ha_started(self, _event) -> None:
+        """Mark that HA has fully started — enables startup-suppressed warnings."""
+        self._ha_started = True
 
     @callback
     def _startup_callback(self, _now) -> None:
