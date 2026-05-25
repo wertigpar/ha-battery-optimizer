@@ -18,9 +18,8 @@ The optimizer produces a 96-slot (15-minute) schedule per day. When tomorrow's p
 - **Plan today + tomorrow** — when next-day prices are available (typically after 14:00), the optimizer also plans all 96 slots for tomorrow. Both plans are pushed via a rolling 96-slot E2E window: positions `[now_slot..95]` carry today's plan, positions `[0..now_slot-1]` carry tomorrow's plan.
 - **Re-optimize on schedule and events** — fixed midnight checkpoint at 00:01 plus configurable periodic re-runs (15/30/60/120 min, default 120) and immediate re-run when Nordpool publishes new prices. Immediate re-run also triggered when grid balancing ends (FCR-N/mFRR → idle transition). Conditional runs skip if SoC deviation < 10%.
 - **Auto-adjust base load** — `base_load_kw` can be auto-tuned from a 7-day rolling average of `load_energy_today` statistics. Exposed as `sensor.battery_optimizer_auto_base_load_kw`. Falls back to configured value when fewer than 3 days of data are available.
-- **PV sell strategy** — after the main greedy pass, `_plan_pv_sell_slots()` selects a single **cutover slot T** (≤ noon) and sells all solar before T to the grid (PV switch OFF), then charges the battery uninterrupted from T onward. T is the latest slot where remaining solar after T can still fill the battery to `soc_max`. Two guards protect against activating the strategy on unsuitable days:
-  1. **Solar surplus margin** (`pv_sell_solar_margin`, default 1.5): total remaining solar must be ≥ `needed_kwh × margin`. Raising this above 1.0 ensures a genuine solar surplus is forecast before the strategy engages — preventing undercharge on cloudy days.
-  2. **Price spread guard** (`pv_sell_min_price_spread`, default 0.03 €/kWh): the average sell price in the morning window must exceed the average cheapest-25% night buy price by at least this margin. Flat-price days with no financial incentive are skipped automatically. Grid-charge slots are never overridden. Enabled via `switch.battery_optimizer_pv_strategy`. After sell slots are planned, `_correct_soc_for_pv_sells()` recomputes the SoC trajectory so the dashboard forecast is accurate.
+- **PV sell strategy** — after the main greedy pass, `_plan_pv_sell_slots()` selects a single **cutover slot T** (≤ noon) and sells all solar before T to the grid (PV switch OFF), then charges the battery uninterrupted from T onward. T is the latest slot where remaining solar after T can still fill the battery to `soc_max`. If total solar is insufficient to fill the battery (< 95 % of needed), selling is skipped entirely. Grid-charge slots are never overridden. Enabled via `switch.battery_optimizer_pv_strategy`. After sell slots are planned, `_correct_soc_for_pv_sells()` recomputes the SoC trajectory so the dashboard forecast is accurate.
+- **Battery-to-grid arbitrage** _(future enhancement)_ — the Emaldo HA component supports exporting stored battery energy to the grid (user sets kWh amount + enables selling). This is not yet planned by the optimizer. When implemented, a grid-sell slot would be profitable when `(spot − commission) > (stored_energy_cost / η_d) + wear_cost`. This threshold is higher than battery-to-house discharge (which avoids a grid buy) because it requires clearing commission, round-trip losses, and wear on top of the original storage cost.
 
 ## Algorithm Overview (Greedy)
 
@@ -33,9 +32,24 @@ The optimizer produces a 96-slot (15-minute) schedule per day. When tomorrow's p
    **SPLIT MODE** (solar-full-recharge days): when `post_solar_usable_kwh ≥ 95 %` of the full usable range, the pre-solar and post-solar discharge candidates are allocated from independent pools (`pre_budget = initial_usable_kwh`, `post_budget = post_solar_usable_kwh`). This prevents high-priced daytime slots from consuming the pre-solar budget needed for overnight discharge.
 
 4. **Find Case B round-trip pairs** — grid charge is added when `buy_saved > buy_charged / round_trip + wear_cost` (buy cheap now, discharge later to avoid expensive grid purchases)
-5. **Assign discharge** (highest buy price first), then **solar idle** (free energy), then **grid charge** (deficit only). Discharge energy per slot = `min(net_load, max_discharge) × slot_duration` (load-matched, not full-rate)
-6. **Simulate SoC** through all 96 slots and build the Emaldo byte schedule
+5. **Assign discharge** (highest buy price first), then **solar idle** (free energy), then **grid charge** (deficit only). Discharge energy per slot = `min(net_load, max_discharge) × slot_duration` (load-matched, not full-rate). Battery SoC decreases by `discharge_kwh / η_d` per slot — the inverter draws more energy from the cells than it delivers to the house. Both the discharge budget and the grid-charge-needed calculation use battery-internal kWh (`delivered_kwh / η_d`) throughout, so the energy balance is consistent.
+6. **Simulate SoC** through all 96 slots and build the Emaldo byte schedule. Per slot: charge adds `charge_kw × slot_duration × η_c`; discharge subtracts `discharge_kwh / η_d` plus `idle_drain`; idle subtracts `idle_drain`.
 7. **Plan PV sell slots** (when `enable_pv_strategy=True`) — `_plan_pv_sell_slots()` finds a single cutover slot T ≤ noon and marks all solar slots before T as sell-to-grid (if `sell_price > wear_cost`). Solar from T onward is kept for uninterrupted battery charging. Then `_correct_soc_for_pv_sells()` does a forward SoC correction pass. Both today and tomorrow plans go through this step.
+
+## Price Calculation
+
+Effective buy and sell prices (€/kWh) are derived from raw Nordpool spot prices by `compute_prices()`:
+
+| Price type | Formula | Notes |
+|---|---|---|
+| **Buy price** | `spot × VAT_multiplier + transfer_fee_buy` | When `spot < 0`, `VAT_multiplier` is clamped to `1.0` — negative spot subsidies pass through at face value, not amplified |
+| **Sell price** | `spot − sales_commission` | Commission always subtracted; sell price can go negative in extreme markets |
+
+**Default values**: `VAT_multiplier = 1.255` (Finnish 25.5 % electricity VAT), `transfer_fee_buy = 0.0572 €/kWh`, `sales_commission = 0.002 €/kWh`. All configurable.
+
+**Negative spot prices**: Nordpool spot can go negative (typically −0.01 to −0.10 €/kWh during excess wind/nuclear periods). The optimizer treats a negative effective buy price as a strong incentive to charge from the grid. Without the VAT clamp, the multiplier (1.255) would amplify the negative subsidy beyond what consumers actually receive on their electricity bill.
+
+**Per-slot profit estimate** (discharge): `profit = (buy_price − wear_cost_per_kwh) × discharge_kwh`, where `discharge_kwh` is energy delivered to the house. `wear_cost_per_kwh` is configured in € per delivered kWh, so no efficiency division is applied to the profit formula itself — only to the SoC/budget energy balance.
 
 ## Emaldo Slot Encoding & Battery Behaviour
 
@@ -45,10 +59,12 @@ The optimizer produces a 96-slot (15-minute) schedule per day. When tomorrow's p
 | **1–100** | Charge to N% SoC from any source | **Yes** | Yes |
 | **128** | No override — follow built-in AI schedule | AI decides | AI decides |
 | **129–255** | Discharge to (256 − N)% SoC | **No** — load-matched, covers household load only | N/A |
+| **Battery sell** _(future)_ | Set kWh amount + enable sell mode via Emaldo service | **Yes** — exports stored energy to grid at spot price | N/A |
 
 **Key insights**:
 - IDLE (0x00) is effectively "solar-only charge" — the battery absorbs free solar surplus without drawing from the grid. This makes IDLE the correct command for solar surplus slots.
 - Discharge (129–255) is **load-matched** — the battery automatically adjusts its discharge rate to match household load. It does not export to grid during discharge.
+- **Battery-to-grid sell** is a separate Emaldo API mechanism (not a slot byte). The HA component exposes this as a service: set kWh to sell + enable selling. The optimizer does not yet plan this; see Feature 5 in `FEATURES_PLAN.md`.
 
 ---
 
@@ -107,6 +123,7 @@ The optimizer produces a 96-slot (15-minute) schedule per day. When tomorrow's p
 | Linear battery wear model | Real degradation depends on SoC, temperature, C-rate, cycling depth | Minor for LFP at moderate cycling rates |
 | Solcast forecast is accurate | Clouds cause 50-80% forecast errors on individual 30-min slots | Can lead to over-reliance on solar, leaving discharge slots un-covered |
 | No grid export limits | Some grid connections have export caps | Could lead to curtailment — planned discharge revenue never materializes |
+| Battery-to-grid export not planned | The Emaldo component supports selling stored battery energy to the grid (kWh amount + enable). The optimizer never schedules this. | Arbitrage opportunities that clear round-trip losses and wear cost are missed; see Feature 5 in `FEATURES_PLAN.md` for design |
 | Today and tomorrow planned independently | Both days are fully planned with their own prices and solar forecast. However, end-of-day SoC carryover is not jointly optimized — today's discharge is chosen solely based on today's prices regardless of tomorrow's peak. Storing cheap energy tonight for a high-priced tomorrow morning is not modelled. | Lost cross-day arbitrage; carryover SoC may not be optimal |
 
 ---
