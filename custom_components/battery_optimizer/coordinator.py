@@ -47,6 +47,12 @@ from .const import (
     CONF_BASE_LOAD_KW,
     CONF_BATTERY_WEAR_COST,
     CONF_IDLE_POWER_KW,
+    CONF_ENABLE_SOC_SAFEGUARD,
+    CONF_SOC_RECOVERY_BUFFER,
+    DEFAULT_ENABLE_SOC_SAFEGUARD,
+    DEFAULT_SOC_RECOVERY_BUFFER_PCT,
+    LOW_SOC_RERUN_MARGIN_PCT,
+    LOW_SOC_RERUN_THROTTLE_MIN,
     CONF_IDLE_STRATEGY,
     CONF_PRICE_SOURCE,
     PRICE_SOURCE_EMALDO,
@@ -58,11 +64,14 @@ from .const import (
     CONF_ENABLE_PV_STRATEGY,
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
     CONF_ENABLE_EMALDO_CONTROL,
+    CONF_SOLAR_FORECAST_MODE,
+    SOLAR_FORECAST_P10,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_ENABLE_EMALDO_CONTROL,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
+    DEFAULT_SOLAR_FORECAST_MODE,
     DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
@@ -90,7 +99,7 @@ def _current_slot_index() -> int:
 
 def _action_to_mode(action: str) -> int:
     """Convert optimizer action string to numeric mode (1=charge, -1=discharge, 0=idle)."""
-    if action == "charge":
+    if action in ("charge", "charge_floor"):
         return 1
     if action == "discharge":
         return -1
@@ -150,6 +159,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._emaldo_control_enabled: bool = self.config.get(
             CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
         )
+        # Low-SoC forced re-run throttle
+        self._last_low_soc_rerun: datetime | None = None
         # Startup flag — suppresses false-positive warnings before HA has fully started
         self._ha_started: bool = False
 
@@ -236,6 +247,58 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.run_optimizer(reason="balancing_ended", force=True)
             )
 
+    @callback
+    def _on_soc_state_change(self, event) -> None:
+        """Trigger a forced replan when actual SoC nears the configured floor.
+
+        The optimizer plan is built from a forecast — unexpected loads or a
+        worse-than-forecast cloudy day can pull real SoC toward soc_min while
+        the plan still shows healthy levels.  When SoC crosses
+        soc_min + LOW_SOC_RERUN_MARGIN_PCT and no charge slot is imminent,
+        force a re-run so the SoC safeguard can insert a keep-alive charge.
+        """
+        new_state = event.data.get("new_state")
+        if new_state is None or new_state.state in ("unknown", "unavailable"):
+            return
+        try:
+            soc = float(new_state.state)
+        except (ValueError, TypeError):
+            return
+
+        cfg = self._build_battery_config()
+        if not cfg.enable_soc_safeguard:
+            return
+        if soc >= cfg.soc_min + LOW_SOC_RERUN_MARGIN_PCT:
+            return
+
+        # Throttle — SoC updates arrive frequently near the threshold
+        now = dt_util.now()
+        if (
+            self._last_low_soc_rerun is not None
+            and (now - self._last_low_soc_rerun).total_seconds()
+            < LOW_SOC_RERUN_THROTTLE_MIN * 60
+        ):
+            return
+
+        # Skip if the current plan already charges within the next 2 hours
+        if self._last_result is not None:
+            now_slot = _current_slot_index()
+            plan = {sp.index: sp for sp in self._last_result.slots}
+            for s in range(now_slot, min(now_slot + 8, SLOTS_PER_DAY)):
+                sp = plan.get(s)
+                if sp is not None and sp.action in ("charge", "charge_floor"):
+                    return
+
+        self._last_low_soc_rerun = now
+        _LOGGER.info(
+            "Battery SoC %.1f%% below floor margin (%.0f%% + %.0f%%) with no "
+            "imminent charge slot — forcing replan for keep-alive charge",
+            soc, cfg.soc_min, LOW_SOC_RERUN_MARGIN_PCT,
+        )
+        self.hass.async_create_task(
+            self.run_optimizer(reason="low_soc", force=True)
+        )
+
     def _build_battery_config(self) -> BatteryConfig:
         """Create a BatteryConfig from the current HA config."""
         c = self.config
@@ -261,6 +324,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             base_load_kw=base_load_kw,
             wear_cost_per_kwh=c.get(CONF_BATTERY_WEAR_COST, 0.03),
             idle_power_kw=c.get(CONF_IDLE_POWER_KW, 0.1),
+            enable_soc_safeguard=c.get(
+                CONF_ENABLE_SOC_SAFEGUARD, DEFAULT_ENABLE_SOC_SAFEGUARD
+            ),
+            soc_recovery_buffer_pct=c.get(
+                CONF_SOC_RECOVERY_BUFFER, DEFAULT_SOC_RECOVERY_BUFFER_PCT
+            ),
         )
 
     # ── Data readers ──────────────────────────────────────────────────
@@ -363,6 +432,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if state is None:
             _LOGGER.warning("Price sensor %s not found", sensor_id)
             return None, None
+        if state.state in ("unavailable", "unknown"):
+            return None, None
 
         data = state.attributes.get("data")
         if not data or not isinstance(data, list):
@@ -446,9 +517,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         state = self.hass.states.get(sensor_id)
         if state is None:
             return False
-        if state.attributes.get("tomorrow_valid", False):
+        tomorrow_valid = state.attributes.get("tomorrow_valid")
+        if tomorrow_valid is True:
             return True
-        # Fallback: parse and check
+        if tomorrow_valid is False:
+            return False  # sensor explicitly reports no tomorrow prices — skip parse
+        # tomorrow_valid key absent — fall back to parsing data array
         _, tomorrow = self._parse_sensor_price_data()
         return tomorrow is not None
 
@@ -476,7 +550,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Solcast sensor %s has no detailedForecast", sensor_id)
             return [0.0] * SLOTS_PER_DAY
 
-        slots_30min = [s.get("pv_estimate", 0.0) for s in detailed]
+        forecast_mode = self.config.get(CONF_SOLAR_FORECAST_MODE, DEFAULT_SOLAR_FORECAST_MODE)
+        if forecast_mode == SOLAR_FORECAST_P10:
+            _LOGGER.debug("Solar forecast mode: P10 (pessimistic/weather-aware)")
+            slots_30min = [
+                s.get("pv_estimate10", s.get("pv_estimate", 0.0)) for s in detailed
+            ]
+        else:
+            _LOGGER.debug("Solar forecast mode: P50 (median)")
+            slots_30min = [s.get("pv_estimate", 0.0) for s in detailed]
         return interpolate_solar_to_15min(slots_30min)
 
     def _resolve_emaldo_entity(self, key: str, domain: str = "sensor") -> str | None:
@@ -670,7 +752,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if prev_soc is not None:
                 soc_delta = sp.soc_after - prev_soc
                 kwh = abs(soc_delta) * capacity / 100.0
-                if sp.action == "charge":
+                if sp.action in ("charge", "charge_floor"):
                     planned_charge += kwh
                 elif sp.action == "discharge":
                     planned_discharge += kwh
@@ -943,11 +1025,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     slot_values[e2e_pos] = SLOT_IDLE
                     overrides_needed += 1
                 continue
-            # Smart diff against internal AI schedule (today = first 96)
-            # Skip smart diff for idle overrides in full_control mode —
-            # the AI can change its mind after we read it, so we must
-            # always send the explicit SLOT_IDLE byte.
-            if sp.action != "idle" or idle_strategy != IDLE_FULL_CONTROL:
+            # Decide whether to defer this slot to the battery's internal
+            # AI schedule (i.e. skip the override).  The internal schedule
+            # is volatile: the AI recomputes it continuously, so a slot
+            # that "matches" our plan at read time can silently revert to a
+            # different mode minutes later — leaving our plan unenforced and
+            # the active schedule diverging from the optimization plan.
+            # Therefore active actions (charge / charge_floor / discharge)
+            # and idle in full_control mode are ALWAYS enforced.  The
+            # smart-diff (defer to the AI when modes already agree) is
+            # applied only to idle slots under the AI-cooperative idle
+            # strategies, where ceding quiet slots to the AI is intended.
+            if sp.action == "idle" and idle_strategy != IDLE_FULL_CONTROL:
                 if emaldo_modes is not None and e2e_pos < len(emaldo_modes):
                     if _action_to_mode(sp.action) == emaldo_modes[e2e_pos]:
                         continue
@@ -968,9 +1057,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         slot_values[e2e_pos] = SLOT_IDLE
                         overrides_needed += 1
                     continue
-                # Smart diff against internal schedule (tomorrow = offset 96)
-                # Same full_control guard as today's loop.
-                if sp.action != "idle" or idle_strategy != IDLE_FULL_CONTROL:
+                # Same enforcement rule as today's loop: only idle slots
+                # under AI-cooperative idle strategies are deferred to the
+                # internal schedule; charge/discharge are always enforced.
+                if sp.action == "idle" and idle_strategy != IDLE_FULL_CONTROL:
                     if (
                         emaldo_modes is not None
                         and (SLOTS_PER_DAY + e2e_pos) < len(emaldo_modes)
@@ -1250,6 +1340,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         else:
             _LOGGER.debug("Balancing sensor not found — balancing replan disabled")
+
+        # 4b) Low-SoC watcher — forced replan when actual SoC approaches the
+        #     floor and the current plan has no imminent charge slot.  The
+        #     replan lets the SoC safeguard insert a keep-alive charge.
+        soc_sensor = self._resolve_emaldo_entity("battery_soc")
+        if soc_sensor:
+            unsub = async_track_state_change_event(
+                self.hass,
+                [soc_sensor],
+                self._on_soc_state_change,
+            )
+            self._unsub_listeners.append(unsub)
+            _LOGGER.info("Low-SoC watcher registered on %s", soc_sensor)
+        else:
+            _LOGGER.debug("Battery SoC sensor not found — low-SoC replan disabled")
 
         _LOGGER.info(
             "Listeners set up: midnight checkpoint + %d-min interval + price watcher on %s",

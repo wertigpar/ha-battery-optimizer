@@ -34,6 +34,10 @@ from .const import (
     CONF_BASE_LOAD_KW,
     CONF_BATTERY_WEAR_COST,
     CONF_IDLE_POWER_KW,
+    CONF_ENABLE_SOC_SAFEGUARD,
+    CONF_SOC_RECOVERY_BUFFER,
+    DEFAULT_ENABLE_SOC_SAFEGUARD,
+    DEFAULT_SOC_RECOVERY_BUFFER_PCT,
     CONF_IDLE_STRATEGY,
     CONF_PRICE_SOURCE,
     PRICE_SOURCE_EMALDO,
@@ -46,8 +50,9 @@ from .const import (
     CONF_LOAD_ENERGY_SENSOR,
     CONF_ENABLE_PV_STRATEGY,
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
-    CONF_PV_SELL_SOLAR_MARGIN,
-    CONF_PV_SELL_MIN_PRICE_SPREAD,
+    CONF_SOLAR_FORECAST_MODE,
+    SOLAR_FORECAST_P50,
+    SOLAR_FORECAST_P10,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_TRANSFER_FEE_BUY,
     DEFAULT_SALES_COMMISSION,
@@ -73,8 +78,7 @@ from .const import (
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
-    DEFAULT_PV_SELL_SOLAR_MARGIN,
-    DEFAULT_PV_SELL_MIN_PRICE_SPREAD,
+    DEFAULT_SOLAR_FORECAST_MODE,
     DEFAULT_PRICE_SOURCE,
 )
 
@@ -193,6 +197,14 @@ def _build_schema(
                 CONF_IDLE_POWER_KW,
                 default=d.get(CONF_IDLE_POWER_KW, DEFAULT_IDLE_POWER_KW),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_ENABLE_SOC_SAFEGUARD,
+                default=d.get(CONF_ENABLE_SOC_SAFEGUARD, DEFAULT_ENABLE_SOC_SAFEGUARD),
+            ): bool,
+            vol.Optional(
+                CONF_SOC_RECOVERY_BUFFER,
+                default=d.get(CONF_SOC_RECOVERY_BUFFER, DEFAULT_SOC_RECOVERY_BUFFER_PCT),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=30.0)),
             vol.Required(
                 CONF_IDLE_STRATEGY,
                 default=d.get(CONF_IDLE_STRATEGY, DEFAULT_IDLE_STRATEGY),
@@ -227,15 +239,9 @@ def _build_schema(
                 ),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
             vol.Optional(
-                CONF_PV_SELL_SOLAR_MARGIN,
-                default=d.get(CONF_PV_SELL_SOLAR_MARGIN, DEFAULT_PV_SELL_SOLAR_MARGIN),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=5.0)),
-            vol.Optional(
-                CONF_PV_SELL_MIN_PRICE_SPREAD,
-                default=d.get(
-                    CONF_PV_SELL_MIN_PRICE_SPREAD, DEFAULT_PV_SELL_MIN_PRICE_SPREAD
-                ),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
+                CONF_SOLAR_FORECAST_MODE,
+                default=d.get(CONF_SOLAR_FORECAST_MODE, DEFAULT_SOLAR_FORECAST_MODE),
+            ): vol.In([SOLAR_FORECAST_P50, SOLAR_FORECAST_P10]),
         }
     )
 

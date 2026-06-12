@@ -47,6 +47,16 @@ class BatteryConfig:
     pv_sell_solar_margin: float = 0.95  # required solar fraction to allow PV selling
     pv_sell_min_price_spread: float = 0.0  # min sell price (€/kWh) to activate PV selling
 
+    # SoC floor safeguard — keep-alive charging that prevents the battery
+    # idle drain from pulling SoC below soc_min on cloudy/no-arbitrage days.
+    enable_soc_safeguard: bool = True
+    soc_recovery_buffer_pct: float = 5.0  # charge target = soc_min + buffer
+
+    @property
+    def soc_floor_target_pct(self) -> float:
+        """Keep-alive charge target: soc_min plus a small recovery buffer."""
+        return min(self.soc_min + self.soc_recovery_buffer_pct, self.soc_max)
+
     @property
     def usable_kwh(self) -> float:
         """Usable energy range in kWh."""
@@ -96,6 +106,8 @@ class OptimizationResult:
     discharge_slots: int = 0
     idle_slots: int = 0
     reason: str = ""
+    # Slots where the SoC floor safeguard inserted a keep-alive charge.
+    safeguard_slots: list[int] = field(default_factory=list)
     # Parallel per-slot PV switch plan (F2 — PV sell strategy).
     # True = third-party PV enabled (battery charges from solar).
     # False = third-party PV disabled (solar sells to grid at spot price).
@@ -177,6 +189,165 @@ def _soc_to_discharge_target(soc_min: float) -> int:
     return (256 - target) & 0xFF
 
 
+def _simulate_soc_trajectory(
+    plan_actions: dict[int, str],
+    net_loads: list[float],
+    solar_15min: list[float],
+    cfg: BatteryConfig,
+    *,
+    start_slot: int,
+    initial_soc_kwh: float,
+) -> list[float]:
+    """Forward-simulate the true (unclamped) SoC trajectory in kWh.
+
+    Unlike the result-building pass, the lower bound is the physical 0 kWh,
+    NOT soc_min — so the trajectory reveals slots where idle drain pulls
+    the battery below the configured floor.  Used by the SoC safeguard.
+
+    Returns a list of 96 SoC values (kWh) — SoC *after* each slot.
+    """
+    n = SLOTS_PER_DAY
+    soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
+    soc_min_kwh = cfg.capacity_kwh * cfg.soc_min / 100.0
+    floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
+    idle_drain = cfg.idle_drain_per_slot_kwh
+    soc = initial_soc_kwh
+    out: list[float] = []
+
+    for s in range(n):
+        if s < start_slot:
+            out.append(soc)
+            continue
+        action = plan_actions.get(s)
+        if action == "charge":
+            charge_kwh = cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
+            soc = min(soc + charge_kwh - idle_drain, soc_max_kwh)
+        elif action == "charge_floor":
+            # Keep-alive charge: battery charges only up to the floor target
+            # ("charge to N%" byte stops at N%).
+            add = min(
+                cfg.max_charge_per_slot_kwh * cfg.charge_efficiency,
+                max(0.0, floor_target_kwh - soc),
+            )
+            soc = min(soc + add - idle_drain, soc_max_kwh)
+        elif action == "discharge":
+            if net_loads[s] > 0:
+                load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+                # The firmware stops discharging at the slot's SoC marker
+                # (≥ soc_min) — model that: battery draw is capped by the
+                # energy above the floor.  Idle drain continues regardless.
+                battery_draw = min(
+                    load_kwh / cfg.discharge_efficiency,
+                    max(0.0, soc - soc_min_kwh),
+                )
+                soc = soc - battery_draw - idle_drain
+            else:
+                surplus_kw = min(-net_loads[s], cfg.max_charge_kw)
+                solar_kwh = surplus_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
+                soc = min(soc + solar_kwh - idle_drain, soc_max_kwh)
+        else:
+            # idle / none — absorbs solar surplus, otherwise just drains
+            if net_loads[s] < 0:
+                charge_kwh = min(-net_loads[s], cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
+                soc = min(soc + charge_kwh - idle_drain, soc_max_kwh)
+            else:
+                soc = soc - idle_drain
+        soc = max(soc, 0.0)
+        out.append(soc)
+
+    return out
+
+
+def _apply_soc_safeguard(
+    plan_actions: dict[int, str],
+    buy_prices: list[float],
+    net_loads: list[float],
+    solar_15min: list[float],
+    cfg: BatteryConfig,
+    *,
+    start_slot: int,
+    initial_soc_kwh: float,
+) -> list[int]:
+    """Insert keep-alive charge slots so SoC never falls below soc_min.
+
+    The battery unit's idle consumption (~0.1 kW) drains SoC continuously.
+    On cloudy days with no profitable arbitrage, the greedy pass plans zero
+    charge slots and the battery self-discharges below soc_min for days.
+
+    This pass is a CONSTRAINT, not a trade: no profitability test is applied,
+    but cost is minimised — charging happens at the cheapest available
+    buy-price slot before each projected violation, and only up to
+    ``soc_floor_target_pct`` (soc_min + small buffer), so the energy bought
+    is just a few hundred Wh.
+
+    Mutates plan_actions in place (adds "charge_floor" entries).
+    Returns the list of inserted slot indices.
+    """
+    if not cfg.enable_soc_safeguard:
+        return []
+
+    soc_min_kwh = cfg.capacity_kwh * cfg.soc_min / 100.0
+    # Small tolerance so a trajectory grazing the floor doesn't trigger.
+    tolerance_kwh = cfg.capacity_kwh * 0.005
+
+    inserted: list[int] = []
+    max_iterations = 24  # hard cap: enough to bridge >2 days of idle drain
+    search_from = start_slot  # advanced past violations that cannot be fixed
+
+    for _ in range(max_iterations):
+        traj = _simulate_soc_trajectory(
+            plan_actions, net_loads, solar_15min, cfg,
+            start_slot=start_slot, initial_soc_kwh=initial_soc_kwh,
+        )
+        violation_slot = next(
+            (
+                s for s in range(search_from, SLOTS_PER_DAY)
+                if traj[s] < soc_min_kwh - tolerance_kwh
+            ),
+            None,
+        )
+        if violation_slot is None:
+            break
+
+        # Charge must happen at or before the violation.  Candidates are
+        # slots not already committed to charge/discharge.
+        candidates = [
+            s for s in range(start_slot, violation_slot + 1)
+            if plan_actions.get(s) not in ("charge", "charge_floor", "discharge")
+        ]
+        if not candidates:
+            # Every slot up to the violation is committed (e.g. a planned
+            # discharge run ending exactly at the floor, dipping slightly
+            # below through idle drain).  Skip past it and look for later,
+            # fixable violations instead of giving up entirely.
+            depth_pct = (soc_min_kwh - traj[violation_slot]) / cfg.capacity_kwh * 100.0
+            log = _LOGGER.warning if depth_pct > 1.0 else _LOGGER.debug
+            log(
+                "SoC safeguard: floor violation at slot %d (%.1f%% below floor) "
+                "has no free slot for a keep-alive charge — skipping",
+                violation_slot, depth_pct,
+            )
+            search_from = violation_slot + 1
+            continue
+
+        # Cheapest buy price wins; on (near-)equal prices prefer the slot
+        # closest to the violation — charging right before the dip yields
+        # maximum idle-drain headroom per top-up, whereas charging early
+        # is partially wasted (battery may already be near the floor target).
+        cheapest = min(candidates, key=lambda s: (round(buy_prices[s], 4), -s))
+        plan_actions[cheapest] = "charge_floor"
+        inserted.append(cheapest)
+
+    if inserted:
+        _LOGGER.info(
+            "SoC safeguard: inserted %d keep-alive charge slot(s) at %s "
+            "(target %.0f%%) to hold SoC above %.0f%%",
+            len(inserted), sorted(inserted),
+            cfg.soc_floor_target_pct, cfg.soc_min,
+        )
+    return inserted
+
+
 def _plan_pv_sell_slots(
     cfg: BatteryConfig,
     slots: list[SlotPlan],
@@ -185,6 +356,7 @@ def _plan_pv_sell_slots(
     sell_prices: list[float],
     *,
     start_slot: int = 0,
+    initial_soc_kwh: float | None = None,
 ) -> list[bool]:
     """Plan which solar slots should sell to grid vs charge the battery.
 
@@ -220,9 +392,14 @@ def _plan_pv_sell_slots(
 
     slot_map: dict[int, SlotPlan] = {sp.index: sp for sp in slots}
 
-    # Current SoC at the start of the plan window.
-    first_sp = slot_map.get(start_slot)
-    current_soc_kwh = (first_sp.soc_after * cfg.capacity_kwh / 100.0) if first_sp else cfg.capacity_kwh * cfg.soc_min / 100.0
+    # Current SoC at the start of the plan window.  Prefer the explicit
+    # initial value — the per-slot soc_after is a *post-slot* value and was
+    # historically clamped at soc_min, overstating real SoC on low days.
+    if initial_soc_kwh is not None:
+        current_soc_kwh = initial_soc_kwh
+    else:
+        first_sp = slot_map.get(start_slot)
+        current_soc_kwh = (first_sp.soc_after * cfg.capacity_kwh / 100.0) if first_sp else cfg.capacity_kwh * cfg.soc_min / 100.0
 
     # How much net solar the battery still needs to reach soc_max.
     needed_kwh = max(0.0, soc_max_kwh - current_soc_kwh)
@@ -238,7 +415,7 @@ def _plan_pv_sell_slots(
     for s in range(n - 1, -1, -1):
         sp = slot_map.get(s)
         charge_kwh = 0.0
-        if solar_15min[s] >= _MIN_SOLAR_KW and (sp is None or sp.action != "charge"):
+        if solar_15min[s] >= _MIN_SOLAR_KW and (sp is None or sp.action not in ("charge", "charge_floor")):
             net_kw = solar_15min[s] - cfg.base_load_kw
             if net_kw > 0.0:
                 charge_kw = min(net_kw, cfg.max_charge_kw)
@@ -267,15 +444,53 @@ def _plan_pv_sell_slots(
     if T_cutover <= start_slot:
         return pv_slots
 
-    # Mark all solar slots before the cutover as sell (if profitable).
+    # Charge-to-floor-first: when the battery enters the window below the
+    # SoC floor (e.g. after a cloudy night), the first solar must recharge
+    # it to soc_min + buffer BEFORE any selling starts.  Selling expensive
+    # morning solar while the battery sits at 5% maximises deep-low dwell
+    # time — the worst case for LFP longevity.
+    sell_from = start_slot
+    floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
+    if current_soc_kwh < floor_target_kwh:
+        soc_sim = current_soc_kwh
+        recovery_slot: int | None = None
+        for s in range(start_slot, T_cutover):
+            sp = slot_map.get(s)
+            charge_kwh = 0.0
+            if solar_15min[s] >= _MIN_SOLAR_KW and (sp is None or sp.action not in ("charge", "charge_floor")):
+                net_kw = solar_15min[s] - cfg.base_load_kw
+                if net_kw > 0.0:
+                    charge_kwh = min(net_kw, cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
+            soc_sim = max(soc_sim + charge_kwh - cfg.idle_drain_per_slot_kwh, 0.0)
+            if soc_sim >= floor_target_kwh:
+                recovery_slot = s + 1
+                break
+        if recovery_slot is None:
+            # Floor cannot be reached before the cutover — keep all solar.
+            _LOGGER.info(
+                "PV sell strategy: SoC %.1f%% below floor %.1f%% and solar "
+                "before cutover cannot recover it — selling skipped",
+                current_soc_kwh / cfg.capacity_kwh * 100.0,
+                cfg.soc_floor_target_pct,
+            )
+            return pv_slots
+        sell_from = recovery_slot
+        _LOGGER.info(
+            "PV sell strategy: SoC below floor — solar charges battery to "
+            "%.0f%% first, selling starts at slot %d (%02d:%02d)",
+            cfg.soc_floor_target_pct, sell_from,
+            (sell_from * 15) // 60, (sell_from * 15) % 60,
+        )
+
+    # Mark all solar slots in [sell_from, T_cutover) as sell (if profitable).
     # Note: selling PV directly to grid incurs zero battery wear, so the
     # threshold is 0.0 (sell at any positive price).  wear_cost_per_kwh is
     # only relevant for round-trip battery charge/discharge.
-    for s in range(start_slot, T_cutover):
+    for s in range(sell_from, T_cutover):
         sp = slot_map.get(s)
         if solar_15min[s] < _MIN_SOLAR_KW:
             continue
-        if sp is not None and sp.action == "charge":
+        if sp is not None and sp.action in ("charge", "charge_floor"):
             continue
         if sell_prices[s] > cfg.pv_sell_min_price_spread:  # PV sell has no battery wear cost
             pv_slots[s] = False
@@ -316,6 +531,7 @@ def _correct_soc_for_pv_sells(
     """
     soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
     soc_min_kwh = cfg.capacity_kwh * cfg.soc_min / 100.0
+    floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
     cap = cfg.capacity_kwh
 
     # Find the first sell slot — no work needed before it.
@@ -359,6 +575,13 @@ def _correct_soc_for_pv_sells(
             # Re-apply the grid charge + any solar.
             grid_charge_kwh = cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
             soc = min(soc + grid_charge_kwh - cfg.idle_drain_per_slot_kwh, soc_max_kwh)
+        elif sp.action == "charge_floor":
+            # Keep-alive charge: only fills up to the floor target.
+            add_kwh = min(
+                cfg.max_charge_per_slot_kwh * cfg.charge_efficiency,
+                max(0.0, floor_target_kwh - soc),
+            )
+            soc = min(soc + add_kwh - cfg.idle_drain_per_slot_kwh, soc_max_kwh)
         elif sp.action == "discharge":
             net_load = cfg.base_load_kw - solar_kw
             if net_load > 0:
@@ -368,16 +591,21 @@ def _correct_soc_for_pv_sells(
                 load_kwh = 0.0
                 if not selling:
                     surplus_kwh = min(-net_load, cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
-                    soc = max(min(soc + surplus_kwh - cfg.idle_drain_per_slot_kwh, soc_max_kwh), soc_min_kwh)
-            # Battery internal draw = delivered kWh / η_d (inverter efficiency loss)
-            soc = max(soc - load_kwh / cfg.discharge_efficiency - cfg.idle_drain_per_slot_kwh, soc_min_kwh)
+                    soc = max(min(soc + surplus_kwh - cfg.idle_drain_per_slot_kwh, soc_max_kwh), 0.0)
+            # Battery internal draw = delivered kWh / η_d, capped at the floor
+            # marker (the discharge byte stops at soc_min).
+            battery_draw = min(
+                load_kwh / cfg.discharge_efficiency,
+                max(0.0, soc - soc_min_kwh),
+            )
+            soc = max(soc - battery_draw - cfg.idle_drain_per_slot_kwh, 0.0)
         else:
             # idle / none
             if not selling and solar_kw > cfg.base_load_kw:
                 net_kwh = solar_kwh - cfg.idle_drain_per_slot_kwh
-                soc = max(min(soc + net_kwh, soc_max_kwh), soc_min_kwh)
+                soc = max(min(soc + net_kwh, soc_max_kwh), 0.0)
             else:
-                soc = max(soc - cfg.idle_drain_per_slot_kwh, soc_min_kwh)
+                soc = max(soc - cfg.idle_drain_per_slot_kwh, 0.0)
 
         # Patch the SlotPlan in-place.
         sp.soc_after = round(soc / cap * 100.0, 1)
@@ -713,7 +941,23 @@ def optimize(
         else:
             break  # Battery full
 
+    # Step 3b: SoC floor safeguard — keep-alive charging.
+    # The greedy pass only charges when arbitrage is profitable.  On cloudy,
+    # flat-price days no charge is planned and the unit's idle drain pulls
+    # SoC below soc_min.  Insert minimal-cost "charge to floor" slots at the
+    # cheapest prices so the projected SoC never violates the floor.
+    safeguard_slots = _apply_soc_safeguard(
+        plan_actions, buy_prices, net_loads, solar_15min, cfg,
+        start_slot=start_slot, initial_soc_kwh=current_soc_kwh,
+    )
+
     # Step 4: Build the result
+    # NOTE: the SoC trajectory below is intentionally NOT clamped at soc_min.
+    # Idle drain genuinely pulls the battery below the configured floor when
+    # nothing recharges it — the dashboard forecast must show that reality
+    # (the safeguard above prevents it when enabled).  Physical floor is 0.
+    floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
+    floor_charge_byte = _soc_to_charge_target(cfg.soc_floor_target_pct)
     result_slots: list[SlotPlan] = []
     soc = current_soc_kwh
     total_profit = 0.0
@@ -734,13 +978,25 @@ def optimize(
                 slot_value = SLOT_IDLE
                 charge_kwh = min(-net_loads[s], cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
                 net_kwh = charge_kwh - idle_drain
-                soc = max(min(soc + net_kwh, soc_max_kwh), soc_min_kwh)
+                soc = max(min(soc + net_kwh, soc_max_kwh), 0.0)
                 n_idle += 1
             elif action == "charge":
                 slot_value = charge_target
                 charge_kwh = cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
                 soc = min(soc + charge_kwh - idle_drain, soc_max_kwh)
                 profit = -buy_prices[s] * cfg.max_charge_per_slot_kwh  # cost
+                n_charge += 1
+            elif action == "charge_floor":
+                # Keep-alive charge: "charge to N%" byte stops at the floor
+                # target, so only the deficit energy is bought from the grid.
+                slot_value = floor_charge_byte
+                add_kwh = min(
+                    cfg.max_charge_per_slot_kwh * cfg.charge_efficiency,
+                    max(0.0, floor_target_kwh - soc),
+                )
+                soc = min(soc + add_kwh - idle_drain, soc_max_kwh)
+                # Cost of grid energy bought (before charge losses)
+                profit = -buy_prices[s] * (add_kwh / cfg.charge_efficiency)
                 n_charge += 1
             elif action == "discharge":
                 if net_loads[s] > 0:
@@ -752,10 +1008,17 @@ def optimize(
                     # (solar charge minus idle drain).
                     surplus_kw = min(-net_loads[s], cfg.max_charge_kw)
                     solar_kwh = surplus_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
-                    soc = max(min(soc + solar_kwh - idle_drain, soc_max_kwh), soc_min_kwh)
+                    soc = max(min(soc + solar_kwh - idle_drain, soc_max_kwh), 0.0)
                     load_kwh = 0.0
-                # Battery internal draw = delivered kWh / η_d (inverter efficiency loss)
-                soc = max(soc - load_kwh / cfg.discharge_efficiency - idle_drain, soc_min_kwh)
+                # Battery internal draw = delivered kWh / η_d (inverter
+                # efficiency loss).  The discharge byte stops at the floor
+                # marker — commanded discharge cannot pull SoC below soc_min;
+                # only the idle drain continues past it.
+                battery_draw = min(
+                    load_kwh / cfg.discharge_efficiency,
+                    max(0.0, soc - soc_min_kwh),
+                )
+                soc = max(soc - battery_draw - idle_drain, 0.0)
                 # Per-slot SoC threshold: battery discharges only while
                 # SoC is above the planned post-slot level.  This protects
                 # the schedule against unexpected load spikes — if a large
@@ -769,7 +1032,7 @@ def optimize(
             else:
                 # explicit idle assigned in solar surplus allocation
                 slot_value = SLOT_IDLE
-                soc = max(soc - idle_drain, soc_min_kwh)
+                soc = max(soc - idle_drain, 0.0)
                 n_idle += 1
         else:
             if s >= start_slot:
@@ -779,13 +1042,13 @@ def optimize(
                     slot_value = SLOT_IDLE
                     charge_kwh = min(-net_loads[s], cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
                     net_kwh = charge_kwh - idle_drain
-                    soc = max(min(soc + net_kwh, soc_max_kwh), soc_min_kwh)
+                    soc = max(min(soc + net_kwh, soc_max_kwh), 0.0)
                     n_idle += 1
                 else:
                     # Idle — explicitly override to idle
                     action = "idle"
                     slot_value = SLOT_IDLE
-                    soc = max(soc - idle_drain, soc_min_kwh)
+                    soc = max(soc - idle_drain, 0.0)
                     n_idle += 1
 
         total_profit += profit
@@ -807,21 +1070,23 @@ def optimize(
         charge_slots=n_charge,
         discharge_slots=n_discharge,
         idle_slots=n_idle,
+        safeguard_slots=sorted(safeguard_slots),
     )
 
     if enable_pv_strategy:
         result.thirdparty_pv_slots = _plan_pv_sell_slots(
             cfg, result_slots, solar_15min, buy_prices, sell_prices,
             start_slot=start_slot,
+            initial_soc_kwh=current_soc_kwh,
         )
         _correct_soc_for_pv_sells(
             result_slots, result.thirdparty_pv_slots, solar_15min, cfg
         )
 
     _LOGGER.info(
-        "Optimization complete: profit=%.4f€, charge=%d, discharge=%d, "
-        "idle=%d slots",
-        total_profit, n_charge, n_discharge, n_idle,
+        "Optimization complete: profit=%.4f€, charge=%d (%d safeguard), "
+        "discharge=%d, idle=%d slots",
+        total_profit, n_charge, len(safeguard_slots), n_discharge, n_idle,
     )
 
     return result

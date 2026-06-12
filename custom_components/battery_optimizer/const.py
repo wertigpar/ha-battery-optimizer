@@ -24,6 +24,9 @@ CONF_BASE_LOAD_KW = "base_load_kw"
 CONF_BATTERY_WEAR_COST = "battery_wear_cost"
 CONF_IDLE_POWER_KW = "idle_power_kw"
 
+CONF_ENABLE_SOC_SAFEGUARD = "enable_soc_safeguard"
+CONF_SOC_RECOVERY_BUFFER = "soc_recovery_buffer_pct"
+
 CONF_IDLE_STRATEGY = "idle_strategy"
 
 CONF_PRICE_SOURCE = "price_source"
@@ -38,9 +41,12 @@ CONF_AUTO_BASE_LOAD = "auto_base_load"
 CONF_LOAD_ENERGY_SENSOR = "load_energy_sensor"
 CONF_ENABLE_PV_STRATEGY = "enable_pv_strategy"
 CONF_SOLAR_SELL_MIN_FORECAST_KWH = "solar_sell_min_forecast_kwh"
-CONF_PV_SELL_SOLAR_MARGIN = "pv_sell_solar_margin"
-CONF_PV_SELL_MIN_PRICE_SPREAD = "pv_sell_min_price_spread"
 CONF_ENABLE_EMALDO_CONTROL = "enable_emaldo_control"
+CONF_SOLAR_FORECAST_MODE = "solar_forecast_mode"
+
+# ── Solar forecast mode options ──────────────────────────────────────
+SOLAR_FORECAST_P50 = "p50"  # Solcast median (optimistic, current legacy)
+SOLAR_FORECAST_P10 = "p10"  # Solcast 10th-percentile (pessimistic, weather-aware)
 
 # ── Defaults ─────────────────────────────────────────────────────────
 DEFAULT_VAT_MULTIPLIER = 1.255       # 25.5% Finnish electricity VAT
@@ -58,6 +64,14 @@ DEFAULT_BASE_LOAD_KW = 1.0
 DEFAULT_BATTERY_WEAR_COST = 0.03           # €/kWh cycled (3 snt/kWh)
 DEFAULT_IDLE_POWER_KW = 0.1               # 100W battery unit idle consumption
 
+# ── SoC floor safeguard ──────────────────────────────────────
+DEFAULT_ENABLE_SOC_SAFEGUARD = True
+DEFAULT_SOC_RECOVERY_BUFFER_PCT = 5.0  # keep-alive charge target = soc_min + buffer
+# Forced re-run when actual SoC drops this close to (or below) soc_min
+LOW_SOC_RERUN_MARGIN_PCT = 2.0
+# Minimum minutes between low-SoC forced re-runs
+LOW_SOC_RERUN_THROTTLE_MIN = 30
+
 DEFAULT_SOLAR_POWER_SENSOR = ""
 DEFAULT_GRID_POWER_SENSOR = ""
 DEFAULT_BATTERY_POWER_SENSOR = ""
@@ -67,8 +81,7 @@ DEFAULT_LOAD_ENERGY_SENSOR = ""
 DEFAULT_ENABLE_PV_STRATEGY = False
 DEFAULT_ENABLE_EMALDO_CONTROL = True
 DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH = 10.0  # kWh; below this, cloudy day → skip
-DEFAULT_PV_SELL_SOLAR_MARGIN = 1.5          # solar must cover needed_kwh * this factor
-DEFAULT_PV_SELL_MIN_PRICE_SPREAD = 0.03     # min avg sell - avg cheap-night buy (EUR/kWh)
+DEFAULT_SOLAR_FORECAST_MODE = SOLAR_FORECAST_P10  # conservative planning by default
 
 # ── Optimizer run interval ────────────────────────────────────────────
 DEFAULT_OPTIMIZER_INTERVAL = 120   # minutes
