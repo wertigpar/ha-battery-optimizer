@@ -9,27 +9,28 @@
           "price_source": "Price data source (emaldo = Emaldo internal, sensor = external sensor)",
           "spot_price_sensor": "Nordpool spot price sensor (only when source is 'sensor')",
           "solcast_today_sensor": "Solcast today forecast sensor",
-          "transfer_fee_buy": "Grid transfer fee (â‚¬/kWh)",
-          "sales_commission": "Feed-in sales commission (â‚¬/kWh)",
+          "transfer_fee_buy": "Grid transfer fee (€/kWh)",
+          "sales_commission": "Feed-in sales commission (€/kWh)",
           "battery_capacity_kwh": "Battery capacity (kWh)",
           "max_charge_kw": "Max charge power (kW)",
           "max_discharge_kw": "Max discharge power (kW)",
-          "charge_efficiency": "Charge efficiency (0â€“1)",
-          "discharge_efficiency": "Discharge efficiency (0â€“1)",
+          "charge_efficiency": "Charge efficiency (0–1)",
+          "discharge_efficiency": "Discharge efficiency (0–1)",
           "soc_min": "Min SoC (%)",
           "soc_max": "Max SoC (%)",
           "base_load_kw": "Base household load estimate (kW)",
-          "battery_wear_cost": "Battery wear cost (â‚¬/kWh cycled, e.g. 0.03 = 3 snt/kWh)",
+          "battery_wear_cost": "Battery wear cost (€/kWh cycled, e.g. 0.03 = 3 snt/kWh)",
           "idle_power_kw": "Battery unit idle power consumption (kW)",
+          "enable_soc_safeguard": "SoC floor safeguard — keep-alive charging at the cheapest slots so idle drain never pulls SoC below Min SoC",
+          "soc_recovery_buffer_pct": "SoC recovery buffer (%) — keep-alive charge target = Min SoC + buffer (default 5)",
           "idle_strategy": "Idle slot strategy (full_control = override all idle slots; solar_guard = override idle only before solar; smart_override = override only when internal AI plans charge before solar)",
           "soc_guard_interval": "SoC guard update interval in minutes (0 = disabled, 15/30/60/120). Actively adjusts the discharge floor to prevent faster-than-planned discharge.",
           "optimizer_interval": "Optimizer re-run interval in minutes (15/30/60/120). How often the optimizer recalculates the schedule.",
           "auto_base_load": "Auto-tune base load from history (uses household load power sensor)",
           "load_energy_sensor": "Household load power sensor (W) for auto base load (e.g. sensor.emhass_combined_power)",
           "enable_pv_strategy": "Enable PV sell strategy (sell solar to grid during high-price slots instead of charging battery)",
-          "solar_sell_min_forecast_kwh": "Min Solcast forecast to activate PV sell strategy (kWh, default 10 â€” skip on cloudy days)",
-          "pv_sell_solar_margin": "Solar surplus margin - solar must cover battery need x this factor (default 1.5; increase on cloudy-day regions)",
-          "pv_sell_min_price_spread": "Min morning-sell vs cheap-night-buy price spread to enable PV sell strategy (EUR/kWh, default 0.03)"
+          "solar_sell_min_forecast_kwh": "Min Solcast forecast to activate PV sell strategy (kWh, default 10 — skip on cloudy days)",
+          "solar_forecast_mode": "Solar forecast mode for charge planning (p10 = pessimistic/weather-aware, p50 = median/optimistic)"
         }
       }
     },
@@ -52,18 +53,20 @@
           "solcast_today_sensor": "Solcast today forecast sensor",
           "solcast_tomorrow_sensor": "Solcast tomorrow forecast sensor",
           "vat_multiplier": "VAT multiplier",
-          "transfer_fee_buy": "Grid transfer fee (â‚¬/kWh)",
-          "sales_commission": "Feed-in sales commission (â‚¬/kWh)",
+          "transfer_fee_buy": "Grid transfer fee (€/kWh)",
+          "sales_commission": "Feed-in sales commission (€/kWh)",
           "battery_capacity_kwh": "Battery capacity (kWh)",
           "max_charge_kw": "Max charge power (kW)",
           "max_discharge_kw": "Max discharge power (kW)",
-          "charge_efficiency": "Charge efficiency (0â€“1)",
-          "discharge_efficiency": "Discharge efficiency (0â€“1)",
+          "charge_efficiency": "Charge efficiency (0–1)",
+          "discharge_efficiency": "Discharge efficiency (0–1)",
           "soc_min": "Min SoC (%)",
           "soc_max": "Max SoC (%)",
           "base_load_kw": "Base household load (kW)",
-          "battery_wear_cost": "Battery wear cost (â‚¬/kWh, e.g. 0.03 = 3 snt/kWh)",
+          "battery_wear_cost": "Battery wear cost (€/kWh, e.g. 0.03 = 3 snt/kWh)",
           "idle_power_kw": "Battery unit idle power (kW)",
+          "enable_soc_safeguard": "SoC floor safeguard (keep-alive charging)",
+          "soc_recovery_buffer_pct": "SoC recovery buffer (%, keep-alive target = Min SoC + buffer)",
           "idle_strategy": "Idle slot strategy (full_control / solar_guard / smart_override)",
           "soc_guard_interval": "SoC guard interval (0=off, 15/30/60/120 min)",
           "optimizer_interval": "Optimizer re-run interval (15/30/60/120 min)",
@@ -71,48 +74,27 @@
           "load_energy_sensor": "Household load power sensor (W, for auto base load)",
           "enable_pv_strategy": "Enable PV sell strategy",
           "solar_sell_min_forecast_kwh": "Min solar forecast for PV sell strategy (kWh)",
-          "pv_sell_solar_margin": "Solar surplus margin - solar must cover battery need x this factor (default 1.5; increase on cloudy-day regions)",
-          "pv_sell_min_price_spread": "Min morning-sell vs cheap-night-buy price spread to enable PV sell strategy (EUR/kWh, default 0.03)"
+          "solar_forecast_mode": "Solar forecast mode (p10 = conservative, p50 = optimistic)"
         }
       }
     }
   },
   "entity": {
     "button": {
-      "run_optimizer": {
-        "name": "Run Optimizer"
-      },
-      "clear_schedule": {
-        "name": "Clear Schedule"
-      }
+      "run_optimizer": { "name": "Run Optimizer" },
+      "clear_schedule": { "name": "Clear Schedule" }
     },
     "sensor": {
-      "status": {
-        "name": "Optimizer Status"
-      },
-      "last_run": {
-        "name": "Last Optimization"
-      },
-      "current_action": {
-        "name": "Current Slot Action"
-      },
-      "estimated_savings": {
-        "name": "Estimated Daily Savings"
-      },
-      "schedule_chart": {
-        "name": "Schedule Chart"
-      },
-      "auto_base_load": {
-        "name": "Auto Base Load"
-      },
-      "plan_accuracy": {
-        "name": "Plan Accuracy"
-      }
+      "status": { "name": "Optimizer Status" },
+      "last_run": { "name": "Last Optimization" },
+      "current_action": { "name": "Current Slot Action" },
+      "estimated_savings": { "name": "Estimated Daily Savings" },
+      "schedule_chart": { "name": "Schedule Chart" },
+      "auto_base_load": { "name": "Auto Base Load" },
+      "plan_accuracy": { "name": "Plan Accuracy" }
     },
     "switch": {
-      "pv_strategy": {
-        "name": "PV Sell Strategy"
-      }
+      "pv_strategy": { "name": "PV Sell Strategy" }
     }
   }
 }

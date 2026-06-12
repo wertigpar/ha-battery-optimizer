@@ -87,6 +87,7 @@ class OptimizerStatusSensor(_BaseOptimizerSensor):
             attrs["charge_slots"] = self._result.charge_slots
             attrs["discharge_slots"] = self._result.discharge_slots
             attrs["idle_slots"] = self._result.idle_slots
+            attrs["safeguard_slots"] = self._result.safeguard_slots
         guard = self.coordinator.soc_guard_marker
         if guard is not None:
             attrs["soc_guard_marker"] = guard
@@ -174,7 +175,7 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
     @staticmethod
     def _slot_state_and_target(sp) -> tuple[str, int | None]:
         """Derive chart state label and target SoC % from a SlotPlan."""
-        if sp.action == "charge" and 1 <= sp.slot_value <= 100:
+        if sp.action in ("charge", "charge_floor") and 1 <= sp.slot_value <= 100:
             return "Charge", sp.slot_value
         if sp.action == "discharge" and sp.slot_value > 128:
             return "Discharge", 256 - sp.slot_value
