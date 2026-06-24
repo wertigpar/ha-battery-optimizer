@@ -104,6 +104,17 @@ def _build_schema(
 ) -> vol.Schema:
     """Build the config / options schema with optional defaults."""
     d = defaults or {}
+
+    def _int_default(key: str, fallback: int) -> int:
+        value = d.get(key, fallback)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _interval_schema(values: list[int]) -> dict[str, str]:
+        return {str(value): f"{value} minutes" for value in values}
+
     emaldo_field: dict = {}
     if emaldo_options:
         emaldo_field = {
@@ -213,12 +224,20 @@ def _build_schema(
             ),
             vol.Required(
                 CONF_SOC_GUARD_INTERVAL,
-                default=d.get(CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL),
-            ): vol.In(SOC_GUARD_INTERVALS),
+                default=str(
+                    _int_default(
+                        CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
+                    )
+                ),
+            ): vol.In(_interval_schema(SOC_GUARD_INTERVALS)),
             vol.Required(
                 CONF_OPTIMIZER_INTERVAL,
-                default=d.get(CONF_OPTIMIZER_INTERVAL, DEFAULT_OPTIMIZER_INTERVAL),
-            ): vol.In(OPTIMIZER_INTERVALS),
+                default=str(
+                    _int_default(
+                        CONF_OPTIMIZER_INTERVAL, DEFAULT_OPTIMIZER_INTERVAL
+                    )
+                ),
+            ): vol.In(_interval_schema(OPTIMIZER_INTERVALS)),
             vol.Optional(
                 CONF_AUTO_BASE_LOAD,
                 default=d.get(CONF_AUTO_BASE_LOAD, DEFAULT_AUTO_BASE_LOAD),
