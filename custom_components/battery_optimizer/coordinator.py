@@ -126,6 +126,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._entry = entry
         self._unsub_listeners: list[CALLBACK_TYPE] = []
+        self._unsub_ha_started: CALLBACK_TYPE | None = None
         self._last_result: OptimizationResult | None = None
         self._last_result_tomorrow: OptimizationResult | None = None
         self._last_run: datetime | None = None
@@ -1280,10 +1281,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @callback
     def async_setup_listeners(self) -> None:
         """Set up time-based and event-based triggers."""
-        # Cancel any existing listeners
+        # Cancel any existing listeners (except one-time HA startup listener)
         for unsub in self._unsub_listeners:
             unsub()
         self._unsub_listeners.clear()
+
+        # 0) Track HA startup completion — only register once, ever
+        if not self._ha_started and self._unsub_ha_started is None:
+            self._unsub_ha_started = self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED, self._on_ha_started
+            )
 
         # 1) Fixed midnight checkpoint (always runs at 00:01)
         hour, minute = MIDNIGHT_CHECKPOINT
@@ -1395,13 +1402,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._unsub_listeners.append(unsub)
 
-        # 6) Track HA startup completion — suppresses race-condition warnings
-        if not self._ha_started:
-            unsub = self.hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STARTED, self._on_ha_started
-            )
-            self._unsub_listeners.append(unsub)
-
         # 6) PV switch reconciliation — checks every 5 min that the switch
         #    matches the plan, catching restarts that lost transition timers
         unsub = async_track_time_interval(
@@ -1415,6 +1415,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _on_ha_started(self, _event) -> None:
         """Mark that HA has fully started — enables startup-suppressed warnings."""
         self._ha_started = True
+        self._unsub_ha_started = None
 
     @callback
     def _startup_callback(self, _now) -> None:
@@ -1756,6 +1757,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._unsub_guard is not None:
             self._unsub_guard()
             self._unsub_guard = None
+        if self._unsub_ha_started is not None:
+            self._unsub_ha_started()
+            self._unsub_ha_started = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """DataUpdateCoordinator callback — returns current state."""
