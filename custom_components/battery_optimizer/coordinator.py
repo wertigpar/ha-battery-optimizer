@@ -169,6 +169,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Merged config data + options."""
         return {**self._entry.data, **self._entry.options}
 
+    def _config_int(self, key: str, fallback: int) -> int:
+        """Return a config value as an int, falling back when unavailable."""
+        value = self.config.get(key, fallback)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
     @property
     def last_result(self) -> OptimizationResult | None:
         return self._last_result
@@ -207,7 +215,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def soc_guard_marker(self) -> int | None:
         """Current SoC guard high_marker, or None if guard is disabled."""
-        guard_interval = self.config.get(
+        guard_interval = self._config_int(
             CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
         )
         if guard_interval <= 0:
@@ -1082,7 +1090,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # high_marker and send it as a global parameter.  The Emaldo
         # firmware uses the Battery Range (high/low markers) globally —
         # per-slot discharge thresholds are not independently honoured.
-        guard_interval = self.config.get(
+        guard_interval = self._config_int(
             CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
         )
         soc_guard_enabled = guard_interval > 0
@@ -1289,7 +1297,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_listeners.append(unsub)
 
         # 2) Configurable periodic optimizer re-run
-        opt_interval = self.config.get(
+        opt_interval = self._config_int(
             CONF_OPTIMIZER_INTERVAL, DEFAULT_OPTIMIZER_INTERVAL
         )
         unsub = async_track_time_interval(
@@ -1362,7 +1370,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         # 4) SoC Guard periodic timer
-        guard_interval = self.config.get(
+        guard_interval = self._config_int(
             CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
         )
         if guard_interval > 0:
@@ -1450,7 +1458,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._last_result is None:
             return int(cfg.soc_min)
 
-        guard_interval = self.config.get(
+        guard_interval = self._config_int(
             CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
         )
         if guard_interval <= 0:
