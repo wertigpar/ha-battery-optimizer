@@ -1494,6 +1494,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _push_guard_update(self) -> None:
         """Recompute the SoC guard marker and resend if changed."""
+        if not self._emaldo_control_enabled:
+            return
         if self._last_sent_slots is None or self._last_result is None:
             return
 
@@ -1653,6 +1655,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             unsub()
         self._unsub_pv_transitions.clear()
 
+        if not self._emaldo_control_enabled:
+            return
+
         if not self._pv_strategy_enabled:
             # Strategy is off — restore PV to on.
             await self._ensure_pv_switch_matches_plan(True)
@@ -1740,7 +1745,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         accepted by HA but the Emaldo device did not apply it (e.g. dropped
         connection), which would leave _pv_switch_state out of sync with reality.
         """
-        if self._last_result is None:
+        if not self._emaldo_control_enabled or self._last_result is None:
             return
         desired = self._desired_pv_state_now(self._last_result)
         await self._ensure_pv_switch_matches_plan(desired)
