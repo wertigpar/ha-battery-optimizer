@@ -91,7 +91,12 @@ def _get_emaldo_options(hass) -> dict[str, str]:
     emaldo_data = hass.data.get("emaldo") or {}
     options: dict[str, str] = {}
     for entry_id, entry_data in emaldo_data.items():
-        coord = entry_data.get("coordinator")
+        # Skip internal shared-data keys (e.g. _home_primaries,
+        # _home_secrets, _device_sessions) stored alongside real
+        # config-entry data in hass.data[DOMAIN].
+        if entry_id.startswith("_"):
+            continue
+        coord = entry_data.get("coordinator") if isinstance(entry_data, dict) else None
         home_id = getattr(coord, "home_id", None) if coord else None
         label = home_id or entry_id
         options[entry_id] = label

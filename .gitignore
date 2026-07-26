@@ -3,5 +3,5 @@ __pycache__/
 *.egg-info/
 .env
 *.log
-*Zone.Identifiergraphify-out/
+*Zone.Identifier
 graphify-out/
