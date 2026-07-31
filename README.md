@@ -1,5 +1,9 @@
 # Emaldo Battery Optimizer — Home Assistant Custom Integration
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
+[![GitHub](https://img.shields.io/github/license/wertigpar/ha-battery-optimizer)](LICENSE)
+[![GitHub issues](https://img.shields.io/github/issues/wertigpar/ha-battery-optimizer)](https://github.com/wertigpar/ha-battery-optimizer/issues)
+
 ![Example Home Assistant dashboard for Battery Optimizer](dashboard.png)
 
 A Home Assistant custom integration that optimizes Emaldo battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to a battery system via a rolling 24-hour E2E override window. Integration is mainly built to work together with Emaldo Home Assistant custom component.
@@ -39,7 +43,7 @@ buy price avoided (self-consumption), not the sell/export price.
 3. Discharge existing energy when `buy_price > wear_cost` (self-consumption saves money).
 4. Round-trip trades when the price spread covers efficiency losses + wear.
 5. Grid charge only the deficit that solar + existing SoC cannot cover.
-6. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. A single cutover time T (≤ noon by default) is chosen as the latest moment where solar energy remaining after T can still fill the battery to 100%. Solar before T is sold to the grid (PV switch OFF) for revenue; solar from T onward charges the battery uninterrupted.
+6. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. A single cutover time T (≤ noon by default) is chosen through an iterated simulation of the true battery need at the cutover (the plan-start SoC understates the gap caused by the sell window). Solar before T is sold to the grid (PV switch OFF) only where the sell price exceeds the slot's buy price (economic gate); solar from T onward charges the battery uninterrupted.
 
 **Smart override logic:**
 
@@ -57,6 +61,15 @@ The optimizer compares its plan against the battery's internal AI schedule (read
 > **Note — Emaldo internal solar forecast:** The Emaldo `schedule_chart` entity (`sensor.power_store_schedule_chart`) contains a `solar` field per slot, but this data is only populated when the Emaldo device is configured as a model that supports solar (e.g. **Store+Solar** or **3rd Party PV enabled**). When the device model is **Store** with **3rd Party PV = off**, the Emaldo backend does not provide solar forecast data and the `solar` field is always zero. This means Emaldo's internal solar forecast **cannot be used as a Solcast replacement** in that configuration. Any future feature that reads solar data from Emaldo must first check whether the device model/configuration actually supplies it, and fall back to zero (or Solcast) if not.
 
 ## Installation
+
+### HACS (recommended)
+
+1. Open Home Assistant **HACS → Integrations → Explore & Download Repositories**.
+2. Search for **"Battery Optimizer for Emaldo Home Battery"** and click **Download**.
+3. Restart Home Assistant.
+4. Go to **Settings → Devices & Services → Add Integration → Battery Optimizer**.
+
+### Manual
 
 1. Copy the `battery_optimizer` folder into your Home Assistant `custom_components/` directory:
 
@@ -115,7 +128,7 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Min solar forecast for PV sell** | Minimum Solcast forecast (kWh) required to activate PV sell strategy. Below this threshold the strategy is skipped (cloudy day guard). | `10.0` |
 | **Solar forecast mode** | Which Solcast percentile to use for charge planning. `p10` (default) uses the pessimistic 10th-percentile forecast — weather-aware, causes the optimizer to add more grid charge slots on cloudy/uncertain days. `p50` uses the median, which can leave the battery undercharged when actual solar is lower than expected. | `p10` |
 | **Min solar fraction for PV sell** | Minimum fraction of needed solar energy (from current slot onward) required to allow selling. If available solar is below `needed_kwh × this_value`, selling is skipped entirely. Configurable as `pv_sell_solar_margin`. | `0.95` |
-| **Min sell price for PV sell** | Minimum sell price (€/kWh) required to activate selling for a slot. Set to `0.0` to sell at any positive price; raise it to only sell when prices are attractive. Configurable as `pv_sell_min_price_spread`. | `0.0` |
+| **Min sell price for PV sell** | Additional sell-price floor (€/kWh) for PV sell slots. Selling also always requires the sell price to exceed the slot's buy price (economic gate). Configurable as `pv_sell_min_price_spread`. | `0.0` |
 
 All parameters can be changed later via **Settings → Devices & Services → Battery Optimizer → Configure**.
 
@@ -249,17 +262,25 @@ The sensor may include both today's and tomorrow's data in the same list — ent
 
 ## Sensors
 
-The integration creates 7 sensor entities:
+The integration creates 15 sensor entities:
 
 | Entity | Type | Description | Attributes |
 |---|---|---|---|
-| **Optimizer Status** | sensor | Current state: `idle`, `active`, or `scheduled` | `reason`, `charge_slots`, `discharge_slots`, `idle_slots`, `soc_guard_marker`, `balancing_active` |
+| **Optimizer Status** | sensor | Current state: `idle`, `active`, or `scheduled` | `reason`, `charge_slots`, `discharge_slots`, `idle_slots`, `safeguard_slots`, `soc_guard_marker`, `balancing_active` |
 | **Last Optimization** | sensor | Timestamp of the last optimizer run | — |
 | **Current Slot Action** | sensor | What the battery is doing right now: `charge`, `discharge`, `idle`, `none`, `unknown` | `slot_index`, `slot_value`, `buy_price`, `sell_price`, `solar_kw`, `soc_after` |
-| **Estimated Daily Savings** | sensor | Estimated profit/savings for the current schedule (€) | — |
-| **Schedule Chart** | sensor | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `activated_time`, `soc_guard_marker`, `soc_history` |
-| **Auto Base Load** | sensor | The base load value (kW) currently used by the optimizer. | — |
-| **Plan Accuracy** | sensor | Signed discharge error in kWh since last optimizer run (positive = more discharge than planned, negative = less). | — |
+| **Rest of Day Estimated Savings** | monetary | Estimated profit/savings for the rest of today (€) | — |
+| **Rest of Day Baseline Cost** | monetary | Estimated cost for rest of today without any battery — pure grid purchase (€) | — |
+| **Rest of Day Emaldo Cost** | monetary | Estimated cost for rest of today following the Emaldo device's own AI schedule (€) | — |
+| **Rest of Day Optimizer Cost** | monetary | Estimated cost for rest of today following the optimizer's plan (€). Equals `baseline_cost − total_profit` | — |
+| **Tomorrow Estimated Savings** | monetary | Estimated profit/savings for tomorrow's schedule (€) | — |
+| **Tomorrow Baseline Cost** | monetary | Estimated cost for tomorrow without any battery — pure grid purchase (€) | — |
+| **Tomorrow Emaldo Cost** | monetary | Estimated cost for tomorrow following the Emaldo device's own AI schedule (€) | — |
+| **Tomorrow Optimizer Cost** | monetary | Estimated cost for tomorrow following the optimizer's plan (€) | — |
+| **Schedule Chart** | diagnostic | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `baseline_cost`, `activated_time`, `soc_guard_marker`, `soc_history` |
+| **Emaldo Schedule** | diagnostic | Summary string (e.g. `79C 84D 29I`) with Emaldo's internal schedule in attributes. Shows what the battery's own AI planned *before* the optimizer overrides it. | `schedule` (list of 96–192 slots with `mode`, `state`, `buy`, `sell`, `solar`) |
+| **Auto Base Load** | diagnostic | The base load value (kW) currently used by the optimizer | — |
+| **Plan Accuracy** | diagnostic | Signed discharge error in kWh since last optimizer run (positive = more discharge than planned, negative = less) | `elapsed_slots`, `planned_discharge_kwh`, `planned_charge_kwh`, `planned_solar_kwh`, `actual_discharge_kwh`, `discharge_error_kwh`, `actual_charge_kwh`, `charge_error_kwh`, `actual_solar_kwh`, `solar_error_kwh`, `last_run` |
 
 ## Switches
 
@@ -268,7 +289,16 @@ The integration creates 2 switch entities:
 | Entity | Description |
 |---|---|
 | **PV Sell Strategy** | Enable/disable the PV sell strategy at runtime. When ON, the optimizer plans solar slots where third-party PV is disabled so solar is exported to grid at spot price. When OFF, solar is always used to charge the battery. Toggling triggers an immediate optimizer re-run and re-schedules PV switch transitions for the rest of the day. State persists across HA restarts. |
-| **Enable Emaldo control** | Enable/disable battery control via the Emaldo integration. When ON (default), the optimizer can push schedules to the battery via `apply_bulk_schedule`. When OFF, the optimizer runs and computes the schedule but does not send any commands to Emaldo — useful for testing, debugging, or running in "dry-run" mode. State persists across HA restarts. |
+| **Emaldo Control** | Enable/disable battery control via the Emaldo integration. When ON (default), the optimizer can push schedules to the battery via `apply_bulk_schedule`. When OFF, the optimizer runs and computes the schedule but does not send any commands to Emaldo — useful for testing, debugging, or running in "dry-run" mode. State persists across HA restarts. |
+
+## Buttons
+
+The integration creates 2 button entities:
+
+| Entity | Description |
+|---|---|
+| **Run Optimizer** | Manually trigger an optimization run. Equivalent to calling `battery_optimizer.run_optimizer` with `reason: manual_button, force: true`. |
+| **Clear Schedule** | Remove all battery override slots, reverting the battery to its internal (built-in) schedule. Equivalent to `battery_optimizer.clear_schedule`. |
 
 ### Schedule Chart Attribute Format
 
@@ -327,7 +357,7 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
 
 When tomorrow's prices are available, the list extends to 192 entries. Each entry has `day: 0` (today) or `day: 1` (tomorrow). The `slot` field is 0–95 within each day.
 
-**`pv_sell`** — `true` means the third-party PV switch is planned to be OFF for this slot — solar energy is exported to the grid at spot price rather than charging the battery. Always `false` when the PV sell strategy switch is disabled or solar is below 0.1 kW.
+**`pv_sell`** — `true` means the third-party PV switch is planned to be OFF for this slot — solar energy is exported to the grid at spot price rather than charging the battery. Always `false` when the PV sell strategy switch is disabled, solar is below 0.1 kW, or the slot's sell price does not exceed its buy price (economic gate).
 
 The `activated_time` attribute shows the time window that was sent to the battery as override commands, e.g. `"Today 14:15–23:45 + Tomorrow 00:00–06:30"`. This indicates how far forward the schedule has been activated on the battery hardware. The Emaldo E2E override uses a rolling 24-hour window: a single 96-slot push covers today's remaining slots plus (when tomorrow's prices are available) tomorrow's early slots.
 
@@ -421,7 +451,7 @@ automation:
 
 Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.
 
-#### Action Plan
+#### Optimized Schedule
 
 Shows the optimizer's planned battery schedule for every 15-minute slot as
 uniform-height colored bars. Three states: **Charge** (from grid), **Discharge**,
@@ -430,7 +460,7 @@ and **Idle** (holds battery; excess solar charges naturally during idle).
 ```yaml
 type: custom:apexcharts-card
 header:
-  title: Battery Action Plan
+  title: Optimized Schedule
   show: true
   show_states: false
 graph_span: 48h
@@ -464,10 +494,8 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         s.state === 'Charge' ? 1 : null
       ]);
   - entity: sensor.battery_optimizer_schedule_chart
@@ -480,10 +508,8 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         s.state === 'Discharge' ? 1 : null
       ]);
   - entity: sensor.battery_optimizer_schedule_chart
@@ -496,10 +522,8 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         s.state === 'Idle' ? 1 : null
       ]);
 ```
@@ -516,7 +540,7 @@ the optimizer chose each action.
 ```yaml
 type: custom:apexcharts-card
 header:
-  title: Total Price, SoC estimate & Solar forecast
+  title: Total Price, SoC Estimate & Solar Forecast
   show: true
   show_states: false
 graph_span: 48h
@@ -566,12 +590,10 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       const now = Date.now();
       return schedule
-        .filter(s => today.getTime() + s.day * 86400000 + s.slot * 15 * 60000 >= now)
-        .map(s => [today.getTime() + s.day * 86400000 + s.slot * 15 * 60000, s.soc]);
+        .filter(s => new Date(s.t).getTime() >= now)
+        .map(s => [new Date(s.t).getTime(), s.soc]);
   - entity: sensor.battery_optimizer_schedule_chart
     name: Buy Total Cost
     type: line
@@ -583,10 +605,8 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         Math.round(s.buy * 10000) / 100
       ]);
   - entity: sensor.battery_optimizer_schedule_chart
@@ -600,10 +620,8 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         Math.round(s.sell * 10000) / 100
       ]);
   - entity: sensor.battery_optimizer_schedule_chart
@@ -618,10 +636,8 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         s.solar
       ]);
   - entity: sensor.power_store_battery_soc
@@ -660,13 +676,19 @@ A backward pass builds `remaining_solar[s]` = total net solar energy (after base
 **Step 2 — Guard: insufficient total solar:**
 If `remaining_solar[start_slot] < needed_kwh × pv_sell_solar_margin` (default 0.95, configurable), selling would risk not filling the battery — strategy is skipped and all slots default to PV-on.
 
-**Step 3 — Find cutover T:**
-T is the **latest** slot ≤ noon (slot 48, 12:00) where `remaining_solar[T] ≥ needed_kwh`. If post-noon solar alone is enough, T = noon and the full morning window is available for selling. If post-noon solar is insufficient (e.g. partial cloud), T is moved earlier until the remaining solar constraint is satisfied.
+**Step 3 — Floor recovery first:**
+If the battery starts the window below the SoC floor (`soc_min + buffer`), the first solar charges it back to the floor before any selling begins; selling starts at the recovery slot. If the floor cannot be reached before the cutover, selling is skipped entirely for the day.
 
-**Step 4 — Mark sell slots:**
-All solar slots in `[start_slot, T)` with `sell_price > pv_sell_min_price_spread` (default 0.0 — sell at any positive price, configurable) are marked as sell (PV switch OFF). Solar slots from T onward are always kept as charge (PV switch ON).
+**Step 4 — Iterate to the true cutover T:**
+The plan-start SoC understates the real battery gap: during the sell window the battery misses surplus-solar absorption yet still covers base load where solar < base. `_forward_soc_sim()` simulates the SoC at the candidate cutover with the sell window active; the true need (`soc_max − simulated SoC`) is re-derived and T re-scanned until the pair stabilises (max 6 iterations). T stays ≤ noon (slot 48, 12:00).
 
-**Step 5 — SoC trajectory correction (`_correct_soc_for_pv_sells`):**
+**Step 5 — Final starvation guard:**
+After the loop, the chosen T is re-validated against the re-simulated need. If the solar remaining after T cannot cover it, selling is skipped — the day charges normally instead of risking an underfilled battery.
+
+**Step 6 — Mark sell slots (economic gate):**
+All solar slots in `[sell_from, T)` are marked as sell (PV switch OFF) only when `sell_price > buy_price` at that slot **and** `sell_price > pv_sell_min_price_spread` (config floor, default 0.0). Exporting only beats storing when the export price clears the local buy price — a stored kWh displaces a future grid buy through the round-trip. Direct PV export incurs zero battery wear, so no wear-cost term is applied. Solar slots from T onward are always kept as charge (PV switch ON).
+
+**Step 7 — SoC trajectory correction (`_correct_soc_for_pv_sells`):**
 After sell slots are finalised, `SlotPlan.soc_after` values (computed during the main greedy pass assuming all solar charged the battery) are corrected. A forward pass from the first sell slot recomputes `soc_after` in-place so the dashboard SoC forecast correctly shows a flat/draining morning and a rising ramp from the cutover time onward. Both today and tomorrow plans are corrected.
 
 ### Guard conditions
@@ -677,6 +699,8 @@ After sell slots are finalised, `SlotPlan.soc_after` values (computed during the
 | Solcast forecast < `solar_sell_min_forecast_kwh` (default 10 kWh) | Strategy skipped for the day — cloudy-day guard |
 | Solcast data unavailable | Strategy skipped |
 | Grid-charge slot | Never overridden regardless of sell price |
+| Sell price ≤ buy price at slot (economic gate) | Slot kept as charge — storing displaces a future grid buy more cheaply |
+| SoC below floor, unrecoverable before cutover | Selling skipped for the day |
 
 ### Live control — `switch.battery_optimizer_pv_strategy`
 
@@ -686,7 +710,7 @@ The coordinator cancels and rebuilds the `async_call_later` transition callbacks
 
 ---
 
-#### Dashboard chart — Third-Party PV Plan
+#### Dashboard chart — Third-Party PV Schedule
 
 Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.
 
@@ -698,7 +722,7 @@ Shows three states per 15-minute slot over 48 hours:
 ```yaml
 type: custom:apexcharts-card
 header:
-  title: Third-Party PV Plan
+  title: Third-Party PV Schedule
   show: true
   show_states: false
 graph_span: 48h
@@ -732,10 +756,8 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         s.solar > 0.05 && !s.pv_sell ? 1 : null
       ]);
   - entity: sensor.battery_optimizer_schedule_chart
@@ -748,10 +770,8 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         s.solar > 0.05 && s.pv_sell ? 1 : null
       ]);
   - entity: sensor.battery_optimizer_schedule_chart
@@ -764,13 +784,96 @@ series:
       legend_value: false
     data_generator: |
       const schedule = entity.attributes.schedule || [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       return schedule.map(s => [
-        today.getTime() + s.day * 86400000 + s.slot * 15 * 60000,
+        new Date(s.t).getTime(),
         s.solar <= 0.05 ? 1 : null
       ]);
 ```
+
+---
+
+#### Dashboard chart — Internal Schedule
+
+Shows the battery's **internal AI schedule** — what the Emaldo device originally planned *before* the optimizer overrides it. Useful for comparing the optimizer's decisions against the device's own strategy.
+
+Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.
+
+```yaml
+type: custom:apexcharts-card
+header:
+  title: Internal Schedule
+  show: true
+  show_states: false
+graph_span: 48h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+  color: red
+apex_config:
+  chart:
+    height: 150px
+    stacked: true
+  plotOptions:
+    bar:
+      columnWidth: "100%"
+  legend:
+    show: true
+  yaxis:
+    - show: false
+      min: 0
+      max: 1.1
+series:
+  - entity: sensor.battery_optimizer_emaldo_schedule_chart
+    name: Charge
+    type: column
+    color: "#2ecc71"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.state === 'Charge' ? 1 : null
+      ]);
+  - entity: sensor.battery_optimizer_emaldo_schedule_chart
+    name: Discharge
+    type: column
+    color: "#e74c3c"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.state === 'Discharge' ? 1 : null
+      ]);
+  - entity: sensor.battery_optimizer_emaldo_schedule_chart
+    name: Idle
+    type: column
+    color: "#bdc3c7"
+    opacity: 0.5
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.state === 'Idle' ? 1 : null
+      ]);
+```
+
+- **Green** = device AI plans to charge
+- **Red** = device AI plans to discharge
+- **Gray** = device AI plans idle
+
+Compare this chart side-by-side with the "Optimized Schedule" chart to see where the optimizer overrides the internal schedule.
 
 ---
 
@@ -805,9 +908,31 @@ battery_optimizer/
 ├── coordinator.py       # Data gathering, trigger management, Emaldo push, PV strategy
 ├── manifest.json        # Integration metadata
 ├── optimizer.py         # Greedy solver — core optimization algorithm + PV sell planner
-├── sensor.py            # 7 sensor entities including plan_accuracy, schedule_chart
+├── sensor.py            # 15 sensor entities
 ├── services.py          # run_optimizer + clear_schedule services
 ├── services.yaml        # Service descriptions for UI
-├── switch.py            # PvStrategySwitch — PV sell strategy toggle entity
+├── switch.py            # PvStrategySwitch + EmaldoControlEnableSwitch — PV sell strategy + Emaldo control toggles
 └── strings.json         # Translation strings
 ```
+
+## Support
+
+- **Issues & feature requests:** [GitHub Issues](https://github.com/wertigpar/ha-battery-optimizer/issues)
+- **Repository:** [github.com/wertigpar/ha-battery-optimizer](https://github.com/wertigpar/ha-battery-optimizer)
+
+## Development & Deployment
+
+HA runs in Docker (HAOS). Code lives in the repo but HA loads from inside the container's `/config/custom_components/battery_optimizer/`. After editing any file in the repo, deploy:
+
+```
+# 1. Copy changed files to container via Samba
+Copy-Item ".\custom_components\battery_optimizer\<file>.py" "\\homeassistant.local\config\custom_components\battery_optimizer\<file>.py" -Force
+
+# 2. Clear Python cache in container
+Remove-Item "\\homeassistant.local\config\custom_components\battery_optimizer\__pycache__" -Recurse -Force
+
+# 3. Full restart required (reload_core does NOT pick up Python code changes)
+#    Settings → System → Restart, or call ha_restart(confirm=True)
+```
+
+**Important:** `ha_reload_core(entry_id=...)` only reloads config, not Python modules. Custom component code changes always require a full HA restart.

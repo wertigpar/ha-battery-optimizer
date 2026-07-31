@@ -40,6 +40,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Listen for options updates
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
+    # After HA fully starts, resolve Emaldo device and reload to link entities.
+    # Battery Optimizer may set up before Emaldo stores its data in hass.data,
+    # so device_info returns None on first setup.  This listener fires once
+    # HA is fully started (all integrations loaded), resolves the link, and
+    # triggers a clean entry reload so entities get their device association.
+    async def _on_home_assistant_started(_event) -> None:
+        if coordinator._emaldo_device_id is not None:
+            return  # already resolved
+        if coordinator.resolve_emaldo_device():
+            _LOGGER.info(
+                "Battery Optimizer: Emaldo device resolved after startup — reloading"
+            )
+            await hass.config_entries.async_reload(entry.entry_id)
+
+    if not coordinator.resolve_emaldo_device():
+        entry.async_on_unload(
+            hass.bus.async_listen_once(
+                "homeassistant_started", _on_home_assistant_started
+            )
+        )
+
     _LOGGER.info("Battery Optimizer set up successfully")
     return True
 

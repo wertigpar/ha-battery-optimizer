@@ -164,6 +164,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_low_soc_rerun: datetime | None = None
         # Startup flag — suppresses false-positive warnings before HA has fully started
         self._ha_started: bool = False
+        # Emaldo device identity — resolved from hass.data at setup for device_info
+        self._emaldo_device_id: str | None = None
+        self._emaldo_device_name: str | None = None
 
     @property
     def config(self) -> dict[str, Any]:
@@ -212,6 +215,60 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def plan_accuracy(self) -> dict | None:
         """Plan vs actual accuracy dict from the last completed window."""
         return self._plan_accuracy
+
+    # ── Device info ───────────────────────────────────────────────────
+
+    def resolve_emaldo_device(self) -> bool:
+        """Resolve the linked Emaldo device's ID and name from hass.data.
+
+        Called lazily on first ``device_info`` access, or explicitly from
+        the startup listener in ``__init__.py``.  Returns ``True`` if
+        Emaldo data was found, ``False`` if still unavailable.
+        Does NOT trigger a reload — the caller is responsible for that.
+        """
+        if self._emaldo_device_id is not None:
+            return True
+
+        emaldo_data = self.hass.data.get(EMALDO_DOMAIN)
+        if not emaldo_data or not self._emaldo_entry_id:
+            return False
+        entry_data = emaldo_data.get(self._emaldo_entry_id)
+        if entry_data is None:
+            return False
+        coord = entry_data.get("power")
+        if coord is None:
+            return False
+        self._emaldo_device_id = getattr(coord, "device_id", None)
+        self._emaldo_device_name = getattr(coord, "device_name", None)
+        if self._emaldo_device_id is not None:
+            _LOGGER.info(
+                "Resolved Emaldo device: id=%s name=%s",
+                self._emaldo_device_id,
+                self._emaldo_device_name,
+            )
+        return self._emaldo_device_id is not None
+
+    @property
+    def device_info(self) -> "DeviceInfo | None":
+        """Return device info for the virtual Battery Optimizer device.
+
+        Lazily resolves the Emaldo device identity on first access,
+        since Battery Optimizer's ``async_setup_entry`` may run before
+        the Emaldo integration has stored its data in ``hass.data``.
+        """
+        from homeassistant.helpers.device_registry import DeviceInfo  # noqa: PLC0415
+
+        if self._emaldo_device_id is None:
+            self.resolve_emaldo_device()
+        if self._emaldo_device_id is None:
+            return None
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._emaldo_device_id)},
+            name="Battery Optimizer",
+            manufacturer="Emaldo",
+            model="Optimized Battery",
+            via_device=(EMALDO_DOMAIN, self._emaldo_device_id),
+        )
 
     @property
     def soc_guard_marker(self) -> int | None:
@@ -875,6 +932,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Run optimizer — prices_today is already 96 x 15-min in €/kWh
         buy_prices, sell_prices = compute_prices(prices_today, cfg)
+        emaldo_modes = self._read_emaldo_internal_modes()
         result = optimize(
             buy_prices,
             sell_prices,
@@ -883,6 +941,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             start_slot=now_slot,
             initial_soc_pct=soc,
             enable_pv_strategy=self._pv_strategy_enabled,
+            emaldo_modes=emaldo_modes,
         )
         result.reason = reason
 
@@ -912,10 +971,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 start_slot=0,
                 initial_soc_pct=end_soc,
                 enable_pv_strategy=self._pv_strategy_enabled,
+                emaldo_modes=emaldo_modes,
             )
             self._last_result_tomorrow = result_tomorrow
             _LOGGER.info(
-                "Tomorrow optimization: profit=%.4f€, C=%d D=%d I=%d",
+                "Tomorrow optimization: savings=%.4f€, C=%d D=%d I=%d",
                 result_tomorrow.total_profit,
                 result_tomorrow.charge_slots,
                 result_tomorrow.discharge_slots,
@@ -1096,6 +1156,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         soc_guard_enabled = guard_interval > 0
         service_data: dict[str, Any] = {"slots": slot_values}
+        if self._emaldo_device_id is None:
+            self.resolve_emaldo_device()
+        if self._emaldo_device_id:
+            service_data["device_id"] = self._emaldo_device_id
 
         if soc_guard_enabled:
             cfg = self._build_battery_config()
@@ -1376,7 +1440,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             opt_interval, price_watcher_label,
         )
 
-        # 4) SoC Guard periodic timer
+        # 4c) SoC Guard periodic timer
         guard_interval = self._config_int(
             CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
         )
@@ -1525,14 +1589,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         try:
+            guard_data: dict[str, Any] = {
+                "slots": slot_values,
+                "high_marker": new_marker,
+                "low_marker": int(cfg.soc_min),
+            }
+            if self._emaldo_device_id is None:
+                self.resolve_emaldo_device()
+            if self._emaldo_device_id:
+                guard_data["device_id"] = self._emaldo_device_id
             await self.hass.services.async_call(
                 EMALDO_DOMAIN,
                 "apply_bulk_schedule",
-                {
-                    "slots": slot_values,
-                    "high_marker": new_marker,
-                    "low_marker": int(cfg.soc_min),
-                },
+                guard_data,
                 blocking=True,
             )
         except Exception as err:

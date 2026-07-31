@@ -88,13 +88,22 @@
       "status": { "name": "Optimizer Status" },
       "last_run": { "name": "Last Optimization" },
       "current_action": { "name": "Current Slot Action" },
-      "estimated_savings": { "name": "Estimated Daily Savings" },
+      "estimated_savings": { "name": "Rest of Day Estimated Savings" },
+      "baseline_cost": { "name": "Rest of Day Baseline Cost" },
+      "emaldo_plan_cost": { "name": "Rest of Day Emaldo Cost" },
+      "optimizer_plan_cost": { "name": "Rest of Day Optimizer Cost" },
+      "tomorrow_estimated_savings": { "name": "Tomorrow Estimated Savings" },
+      "tomorrow_baseline_cost": { "name": "Tomorrow Baseline Cost" },
+      "tomorrow_emaldo_plan_cost": { "name": "Tomorrow Emaldo Cost" },
+      "tomorrow_optimizer_plan_cost": { "name": "Tomorrow Optimizer Cost" },
+      "emaldo_schedule_chart": { "name": "Emaldo Schedule" },
       "schedule_chart": { "name": "Schedule Chart" },
       "auto_base_load": { "name": "Auto Base Load" },
       "plan_accuracy": { "name": "Plan Accuracy" }
     },
     "switch": {
-      "pv_strategy": { "name": "PV Sell Strategy" }
+      "pv_strategy": { "name": "PV Sell Strategy" },
+      "emaldo_control_enable": { "name": "Emaldo Control" }
     }
   }
 }

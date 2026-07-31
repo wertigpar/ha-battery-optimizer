@@ -11,7 +11,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY, DOMAIN
+from .const import (
+    CONF_ENABLE_EMALDO_CONTROL,
+    CONF_ENABLE_PV_STRATEGY,
+    DEFAULT_ENABLE_EMALDO_CONTROL,
+    DEFAULT_ENABLE_PV_STRATEGY,
+    DOMAIN,
+)
 from .coordinator import BatteryOptimizerCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,6 +52,7 @@ class PvStrategySwitch(
     """
 
     _attr_has_entity_name = True
+    _attr_name = "PV Sell Strategy"
     _attr_icon = "mdi:solar-power-variant"
     _attr_translation_key = "pv_strategy"
 
@@ -79,6 +86,11 @@ class PvStrategySwitch(
     def is_on(self) -> bool:
         return self._attr_is_on
 
+    @property
+    def device_info(self):
+        """Return device info for the virtual Battery Optimizer device."""
+        return self.coordinator.device_info
+
     async def async_turn_on(self, **kwargs) -> None:
         """Enable PV sell strategy and trigger immediate re-optimisation."""
         self._attr_is_on = True
@@ -110,6 +122,7 @@ class EmaldoControlEnableSwitch(
     """
 
     _attr_has_entity_name = True
+    _attr_name = "Emaldo Control"
     _attr_icon = "mdi:battery-lock"
     _attr_translation_key = "emaldo_control_enable"
 
@@ -121,7 +134,6 @@ class EmaldoControlEnableSwitch(
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_emaldo_control_enable"
         # Initial default from config; overridden by restored state on startup.
-        from .const import CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
         self._attr_is_on: bool = entry.options.get(
             CONF_ENABLE_EMALDO_CONTROL,
             entry.data.get(CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL),
@@ -143,6 +155,11 @@ class EmaldoControlEnableSwitch(
     @property
     def is_on(self) -> bool:
         return self._attr_is_on
+
+    @property
+    def device_info(self):
+        """Return device info for the virtual Battery Optimizer device."""
+        return self.coordinator.device_info
 
     async def async_turn_on(self, **kwargs) -> None:
         """Enable Emaldo control and trigger immediate re-optimisation."""

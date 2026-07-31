@@ -1,11 +1,12 @@
 {
   "domain": "battery_optimizer",
   "name": "Battery Optimizer",
-  "codeowners": [],
+  "codeowners": ["@wertigpar"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "",
+  "documentation": "https://github.com/wertigpar/ha-battery-optimizer",
   "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/wertigpar/ha-battery-optimizer/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

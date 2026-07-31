@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 
@@ -12,9 +12,11 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SLOTS_PER_DAY, SLOT_DURATION_HOURS
 from .coordinator import BatteryOptimizerCoordinator, _current_slot_index
@@ -36,6 +38,14 @@ async def async_setup_entry(
         LastRunSensor(coordinator, entry),
         CurrentActionSensor(coordinator, entry),
         EstimatedSavingsSensor(coordinator, entry),
+        BaselineCostSensor(coordinator, entry),
+        EmaldoPlanCostSensor(coordinator, entry),
+        OptimizerPlanCostSensor(coordinator, entry),
+        TomorrowEstimatedSavingsSensor(coordinator, entry),
+        TomorrowBaselineCostSensor(coordinator, entry),
+        TomorrowEmaldoPlanCostSensor(coordinator, entry),
+        TomorrowOptimizerPlanCostSensor(coordinator, entry),
+        EmaldoScheduleChartSensor(coordinator, entry),
         ScheduleChartSensor(coordinator, entry),
         AutoBaseLoadSensor(coordinator, entry),
         PlanAccuracySensor(coordinator, entry),
@@ -59,12 +69,19 @@ class _BaseOptimizerSensor(CoordinatorEntity[BatteryOptimizerCoordinator], Senso
         self._key = key
 
     @property
+    def device_info(self):
+        """Return device info for the virtual Battery Optimizer device."""
+        return self.coordinator.device_info
+
+    @property
     def _result(self) -> OptimizationResult | None:
         return self.coordinator.last_result
 
 
 class OptimizerStatusSensor(_BaseOptimizerSensor):
     """Shows the current optimizer status: idle, active, error."""
+
+    _attr_name = "Optimizer Status"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "status")
@@ -99,6 +116,7 @@ class LastRunSensor(_BaseOptimizerSensor):
     """Timestamp of the last optimization run."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_name = "Last Optimization"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "last_run")
@@ -111,6 +129,8 @@ class LastRunSensor(_BaseOptimizerSensor):
 
 class CurrentActionSensor(_BaseOptimizerSensor):
     """Current slot action: charge, discharge, idle, etc."""
+
+    _attr_name = "Current Slot Action"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "current_action")
@@ -143,11 +163,20 @@ class CurrentActionSensor(_BaseOptimizerSensor):
         }
 
 
+class _TomorrowBaseOptimizerSensor(_BaseOptimizerSensor):
+    """Base for tomorrow-preview sensors using last_result_tomorrow."""
+
+    @property
+    def _result(self) -> OptimizationResult | None:
+        return self.coordinator.last_result_tomorrow
+
+
 class EstimatedSavingsSensor(_BaseOptimizerSensor):
-    """Estimated daily savings/profit from optimized schedule."""
+    """Rest-of-day estimated savings/profit from optimized schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_native_unit_of_measurement = "€"
+    _attr_name = "Rest of Day Estimated Savings"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "estimated_savings")
@@ -160,6 +189,205 @@ class EstimatedSavingsSensor(_BaseOptimizerSensor):
         return round(self._result.total_profit, 4)
 
 
+class BaselineCostSensor(_BaseOptimizerSensor):
+    """Rest-of-day estimated cost without any battery (pure grid purchase)."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "€"
+    _attr_name = "Rest of Day Baseline Cost"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "baseline_cost")
+        self._attr_icon = "mdi:cash-remove"
+
+    @property
+    def native_value(self) -> float | None:
+        if self._result is None:
+            return None
+        return round(self._result.baseline_cost, 4)
+
+
+class EmaldoPlanCostSensor(_BaseOptimizerSensor):
+    """Rest-of-day estimated cost following Emaldo's internal AI schedule."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "€"
+    _attr_name = "Rest of Day Emaldo Cost"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "emaldo_plan_cost")
+        self._attr_icon = "mdi:robot"
+
+    @property
+    def native_value(self) -> float | None:
+        if self._result is None:
+            return None
+        return round(self._result.emaldo_cost, 4)
+
+
+class OptimizerPlanCostSensor(_BaseOptimizerSensor):
+    """Rest-of-day estimated cost following the optimizer's schedule."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "€"
+    _attr_name = "Rest of Day Optimizer Cost"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "optimizer_plan_cost")
+        self._attr_icon = "mdi:battery-arrow-up"
+
+    @property
+    def native_value(self) -> float | None:
+        if self._result is None:
+            return None
+        return round(self._result.baseline_cost - self._result.total_profit, 4)
+
+
+class TomorrowEstimatedSavingsSensor(_TomorrowBaseOptimizerSensor):
+    """Tomorrow estimated savings/profit from optimized schedule."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "€"
+    _attr_name = "Tomorrow Estimated Savings"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "tomorrow_estimated_savings")
+        self._attr_icon = "mdi:currency-eur"
+
+    @property
+    def native_value(self) -> float | None:
+        if self._result is None:
+            return None
+        return round(self._result.total_profit, 4)
+
+
+class TomorrowBaselineCostSensor(_TomorrowBaseOptimizerSensor):
+    """Tomorrow estimated cost without any battery (pure grid purchase)."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "€"
+    _attr_name = "Tomorrow Baseline Cost"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "tomorrow_baseline_cost")
+        self._attr_icon = "mdi:cash-remove"
+
+    @property
+    def native_value(self) -> float | None:
+        if self._result is None:
+            return None
+        return round(self._result.baseline_cost, 4)
+
+
+class TomorrowEmaldoPlanCostSensor(_TomorrowBaseOptimizerSensor):
+    """Tomorrow estimated cost following Emaldo's internal AI schedule."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "€"
+    _attr_name = "Tomorrow Emaldo Cost"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "tomorrow_emaldo_plan_cost")
+        self._attr_icon = "mdi:robot"
+
+    @property
+    def native_value(self) -> float | None:
+        if self._result is None:
+            return None
+        return round(self._result.emaldo_cost, 4)
+
+
+class TomorrowOptimizerPlanCostSensor(_TomorrowBaseOptimizerSensor):
+    """Tomorrow estimated cost following the optimizer's schedule."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "€"
+    _attr_name = "Tomorrow Optimizer Cost"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "tomorrow_optimizer_plan_cost")
+        self._attr_icon = "mdi:battery-arrow-up"
+
+    @property
+    def native_value(self) -> float | None:
+        if self._result is None:
+            return None
+        return round(self._result.baseline_cost - self._result.total_profit, 4)
+
+
+class EmaldoScheduleChartSensor(_BaseOptimizerSensor):
+    """Exposes the Emaldo AI's original schedule for dashboard visualization.
+
+    Shows what Emaldo's internal AI planned before the optimizer overrides it.
+    The state is a summary string; the full plan lives in attributes.
+    """
+
+    _unrecorded_attributes = frozenset({"schedule"})
+    _attr_name = "Emaldo Schedule"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "emaldo_schedule_chart")
+        self._attr_icon = "mdi:chart-timeline-variant"
+
+    @staticmethod
+    def _mode_to_state(mode: int) -> str:
+        """Convert Emaldo mode integer to chart state label."""
+        if mode == 1:
+            return "Charge"
+        if mode == -1:
+            return "Discharge"
+        return "Idle"
+
+    @property
+    def native_value(self) -> str:
+        if self._result is None or not self._result.emaldo_modes:
+            return "no_schedule"
+        modes = self._result.emaldo_modes
+        n_charge = sum(1 for m in modes if m == 1)
+        n_discharge = sum(1 for m in modes if m == -1)
+        n_idle = len(modes) - n_charge - n_discharge
+        return f"{n_charge}C {n_discharge}D {n_idle}I"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None or not self._result.emaldo_modes:
+            return {}
+        modes = self._result.emaldo_modes
+        slots_data = []
+        # Allow up to 192 slots (48h rolling window)
+        max_slots = min(len(modes), SLOTS_PER_DAY * 2)
+        now_ha = dt_util.now()
+        today_midnight = now_ha.replace(hour=0, minute=0, second=0, microsecond=0)
+        for s, mode in enumerate(modes[:max_slots]):
+            slot_of_day = s % SLOTS_PER_DAY
+            h = (slot_of_day * 15) // 60
+            m = (slot_of_day * 15) % 60
+            day = 0 if s < SLOTS_PER_DAY else 1
+            state = self._mode_to_state(mode)
+            slot_dt = today_midnight + timedelta(days=day, minutes=slot_of_day * 15)
+            # Pull price/solar from optimizer slots
+            if day == 0:
+                op = self._result.slots[s] if s < len(self._result.slots) else None
+            else:
+                tomorrow = self.coordinator.last_result_tomorrow
+                idx = s - SLOTS_PER_DAY
+                op = tomorrow.slots[idx] if tomorrow and idx < len(tomorrow.slots) else None
+            slots_data.append({
+                "slot": slot_of_day,
+                "time": f"{h:02d}:{m:02d}",
+                "t": slot_dt.isoformat(),
+                "day": day,
+                "state": state,
+                "mode": mode,
+                "buy": round(op.buy_price, 4) if op else 0.0,
+                "sell": round(op.sell_price, 4) if op else 0.0,
+                "solar": round(op.solar_kw, 3) if op else 0.0,
+            })
+
+        return {"schedule": slots_data}
+
+
 class ScheduleChartSensor(_BaseOptimizerSensor):
     """Exposes the full schedule for dashboard visualization.
 
@@ -167,6 +395,8 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
     """
 
     _unrecorded_attributes = frozenset({"schedule", "soc_history"})
+    _attr_name = "Schedule Chart"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "schedule_chart")
@@ -197,14 +427,18 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
             return {}
         slots_data = []
         pv_slots = self._result.thirdparty_pv_slots
+        now_ha = dt_util.now()
+        today_midnight = now_ha.replace(hour=0, minute=0, second=0, microsecond=0)
         for sp in self._result.slots:
             h = (sp.index * 15) // 60
             m = (sp.index * 15) % 60
             state, target_soc = self._slot_state_and_target(sp)
             pv_on = pv_slots[sp.index] if sp.index < len(pv_slots) else True
+            slot_dt = today_midnight + timedelta(minutes=sp.index * 15)
             slots_data.append({
                 "slot": sp.index,
                 "time": f"{h:02d}:{m:02d}",
+                "t": slot_dt.isoformat(),
                 "day": 0,
                 "action": sp.action,
                 "state": state,
@@ -215,6 +449,7 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
                 "solar": round(sp.solar_kw, 3),
                 "soc": round(sp.soc_after, 1),
                 "profit": round(sp.profit, 4),
+                "export_kwh": round(sp.export_kwh, 4),
                 "pv_sell": not pv_on,
             })
 
@@ -226,9 +461,11 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
                 m = (sp.index * 15) % 60
                 state, target_soc = self._slot_state_and_target(sp)
                 pv_on = tom_pv_slots[sp.index] if sp.index < len(tom_pv_slots) else True
+                slot_dt = today_midnight + timedelta(days=1, minutes=sp.index * 15)
                 slots_data.append({
                     "slot": sp.index,
                     "time": f"{h:02d}:{m:02d}",
+                    "t": slot_dt.isoformat(),
                     "day": 1,
                     "action": sp.action,
                     "state": state,
@@ -239,15 +476,19 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
                     "solar": round(sp.solar_kw, 3),
                     "soc": round(sp.soc_after, 1),
                     "profit": round(sp.profit, 4),
+                    "export_kwh": round(sp.export_kwh, 4),
                     "pv_sell": not pv_on,
                 })
 
         total = self._result.total_profit
+        baseline = self._result.baseline_cost
         if tomorrow is not None:
             total += tomorrow.total_profit
+            baseline += tomorrow.baseline_cost
         attrs: dict[str, Any] = {
             "schedule": slots_data,
             "total_profit": round(total, 4),
+            "baseline_cost": round(baseline, 4),
             "activated_time": self.coordinator.activated_time,
         }
         guard = self.coordinator.soc_guard_marker
@@ -266,9 +507,11 @@ class AutoBaseLoadSensor(_BaseOptimizerSensor):
     """
 
     _attr_native_unit_of_measurement = "kW"
+    _attr_name = "Auto Base Load"
     _attr_icon = "mdi:home-lightning-bolt-outline"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 3
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "auto_base_load")
@@ -287,9 +530,11 @@ class PlanAccuracySensor(_BaseOptimizerSensor):
     """
 
     _attr_native_unit_of_measurement = "kWh"
+    _attr_name = "Plan Accuracy"
     _attr_icon = "mdi:chart-bell-curve-cumulative"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 3
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "plan_accuracy")
