@@ -1,6 +1,19 @@
 # Changes
 
-## Unreleased
+## v0.2.0
+
+### Added
+
+- **HACS compatibility** — `hacs.json`, HACS badges + "Open HACS repository"
+  button in README, GitHub links (`documentation`, `issue_tracker`,
+  `codeowners`) in manifest.json, MIT `LICENSE`, `brand/icon.png`, repo topics,
+  and `after_dependencies: recorder` (auto base-load history query). HACS
+  action (topics/license/brands) and hassfest validation both green.
+
+- **Tomorrow cost sensors** — New sensors (`Tomorrow Estimated Savings`,
+  `Tomorrow Baseline Cost`, `Tomorrow Emaldo Cost`, `Tomorrow Optimizer Cost`)
+  showing tomorrow's estimates after Nordpool publishes (~14:00). Read
+  `coordinator.last_result_tomorrow`; show `unknown` before data is available.
 
 ### Fixed
 
@@ -16,30 +29,6 @@
   cover it. Floor recovery now precedes selling: below the SoC floor, solar
   recharges to `soc_min + buffer` before any export; if unrecoverable, selling
   is skipped.
-
-### Changed
-
-- **PV sell economic gate** — slots are only marked sell when the sell price
-  exceeds the slot's buy price (`sell_price > buy_price`), in addition to the
-  existing `pv_sell_min_price_spread` floor. Selling below the buy price loses
-  money because a stored kWh displaces a future grid buy through the
-  round-trip. Direct PV export incurs zero battery wear, so no wear-cost term
-  is applied.
-
-## v0.2.0
-
-### Added
-
-- **HACS compatibility** — Added `hacs.json`, HACS badge in README, GitHub links
-  (`documentation`, `issue_tracker`, `codeowners`) in manifest.json. Published as
-  HACS-default integration.
-
-- **Tomorrow cost sensors** — New sensors (`Tomorrow Estimated Savings`,
-  `Tomorrow Baseline Cost`, `Tomorrow Emaldo Cost`, `Tomorrow Optimizer Cost`)
-  showing tomorrow's estimates after Nordpool publishes (~14:00). Read
-  `coordinator.last_result_tomorrow`; show `unknown` before data is available.
-
-### Fixed
 
 - **Cost sensor baseline accumulated past slots** — Baseline cost calculation
   (optimizer.py `for s in range(n)`) counted all 96 slots without guarding by
@@ -61,6 +50,13 @@
   SoC guard interval timing corrections.
 
 ### Changed
+
+- **PV sell economic gate** — slots are only marked sell when the sell price
+  exceeds the slot's buy price (`sell_price > buy_price`), in addition to the
+  existing `pv_sell_min_price_spread` floor. Selling below the buy price loses
+  money because a stored kWh displaces a future grid buy through the
+  round-trip. Direct PV export incurs zero battery wear, so no wear-cost term
+  is applied.
 
 - **Cost sensor naming** — 4 cost/savings sensors prefixed with `Rest of Day`
   to clarify estimate scope (rest of today, not full day).
