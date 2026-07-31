@@ -1,10 +1,10 @@
 {
   "domain": "battery_optimizer",
   "name": "Battery Optimizer",
+  "after_dependencies": ["recorder"],
   "codeowners": ["@wertigpar"],
   "config_flow": true,
   "dependencies": [],
-  "after_dependencies": ["recorder"],
   "documentation": "https://github.com/wertigpar/ha-battery-optimizer",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/wertigpar/ha-battery-optimizer/issues",
