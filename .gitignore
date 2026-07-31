@@ -1,7 +1,37 @@
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Environment
 .env
-*.log
+.envrc
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
 *Zone.Identifier
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# HA
+*.storage
+
+# Project
 graphify-out/
+
+# HACS
+*.hacs_downloaded

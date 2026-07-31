@@ -79,7 +79,6 @@ from .const import (
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_SOLAR_FORECAST_MODE,
-    DEFAULT_PRICE_SOURCE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,7 +86,6 @@ _LOGGER = logging.getLogger(__name__)
 
 def _get_emaldo_options(hass) -> dict[str, str]:
     """Return {entry_id: display_label} for all loaded Emaldo entries."""
-    from homeassistant.const import CONF_NAME  # noqa: PLC0415
     emaldo_data = hass.data.get("emaldo") or {}
     options: dict[str, str] = {}
     for entry_id, entry_data in emaldo_data.items():
