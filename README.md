@@ -1,6 +1,6 @@
 # Emaldo Battery Optimizer — Home Assistant Custom Integration
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 [![GitHub](https://img.shields.io/github/license/wertigpar/ha-battery-optimizer)](LICENSE)
 [![GitHub issues](https://img.shields.io/github/issues/wertigpar/ha-battery-optimizer)](https://github.com/wertigpar/ha-battery-optimizer/issues)
 
