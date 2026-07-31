@@ -1,8 +1,11 @@
 # Emaldo Battery Optimizer — Home Assistant Custom Integration
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
-[![GitHub](https://img.shields.io/github/license/wertigpar/ha-battery-optimizer)](LICENSE)
-[![GitHub issues](https://img.shields.io/github/issues/wertigpar/ha-battery-optimizer)](https://github.com/wertigpar/ha-battery-optimizer/issues)
+[![GitHub Release](https://img.shields.io/github/release/wertigpar/ha-battery-optimizer.svg?style=flat-square)](https://github.com/wertigpar/ha-battery-optimizer/releases)
+[![License](https://img.shields.io/github/license/wertigpar/ha-battery-optimizer.svg?style=flat-square)](https://github.com/wertigpar/ha-battery-optimizer/blob/main/LICENSE)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square)](https://github.com/hacs/integration)
+[![Validate](https://github.com/wertigpar/ha-battery-optimizer/actions/workflows/validate.yml/badge.svg)](https://github.com/wertigpar/ha-battery-optimizer/actions/workflows/validate.yml)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=wertigpar&repository=ha-battery-optimizer&category=integration)
 
 ![Example Home Assistant dashboard for Battery Optimizer](dashboard.png)
 
