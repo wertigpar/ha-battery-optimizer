@@ -7,6 +7,7 @@ and pushes the resulting schedule to the Emaldo integration.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import json
 import logging
 from typing import Any
 
@@ -149,6 +150,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_run_initial_soc: float | None = None
         self._last_run_actual_snapshot: dict | None = None
         self._plan_accuracy: dict | None = None
+        # Persisted accuracy history — JSON sidecar in the HA config dir
+        # (survives restarts; the HA recorder strips sensor attributes, so
+        # per-run planned-vs-actual values would otherwise be lost).
+        self._accuracy_history_path = self.hass.config.path(
+            "battery_optimizer_accuracy.json"
+        )
+        self._accuracy_history: list[dict] | None = None
         # PV sell strategy
         self._pv_strategy_enabled: bool = self.config.get(
             CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY
@@ -853,6 +861,116 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return accuracy
 
+    # ── Accuracy history (persisted JSON sidecar) ──────────────────────
+
+    _ACCURACY_HISTORY_MAX_RECORDS = 1000
+    _ACCURACY_HISTORY_MAX_AGE_DAYS = 60
+
+    def _load_accuracy_history(self) -> list[dict]:
+        """Load persisted accuracy history from the JSON sidecar file."""
+        try:
+            with open(self._accuracy_history_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, list):
+                return []
+            return [r for r in data if isinstance(r, dict)]
+        except (OSError, ValueError):
+            return []
+
+    def _save_accuracy_history(self) -> None:
+        """Write the accuracy history to the JSON sidecar file."""
+        try:
+            with open(self._accuracy_history_path, "w", encoding="utf-8") as fh:
+                json.dump(self._accuracy_history or [], fh)
+        except OSError:
+            _LOGGER.warning(
+                "Could not write accuracy history to %s", self._accuracy_history_path
+            )
+
+    def _prune_accuracy_history(self) -> None:
+        """Drop records older than the retention window and cap the list."""
+        cutoff = (
+            dt_util.now() - timedelta(days=self._ACCURACY_HISTORY_MAX_AGE_DAYS)
+        ).isoformat()
+        self._accuracy_history = [
+            r
+            for r in self._accuracy_history
+            if r.get("ts", "") >= cutoff
+        ][-self._ACCURACY_HISTORY_MAX_RECORDS:]
+
+    def _accuracy_summary(self) -> dict:
+        """Rolling summary of planned-vs-actual accuracy over the window.
+
+        ``solar_error_kwh`` sign convention: ``actual - planned``. Negative
+        error = actual below forecast (forecast over-optimistic); positive =
+        actual above forecast (forecast conservative, e.g. P10).
+        """
+        hist = self._accuracy_history or []
+        if not hist:
+            return {"runs": 0, "window_days": 0.0, "mean_solar_error_kwh": None}
+
+        solar_errs = [
+            r["solar_error_kwh"]
+            for r in hist
+            if isinstance(r.get("solar_error_kwh"), (int, float))
+        ]
+        disch_errs = [
+            r["discharge_error_kwh"]
+            for r in hist
+            if isinstance(r.get("discharge_error_kwh"), (int, float))
+        ]
+        span_days = 0.0
+        timestamps = [r.get("ts", "") for r in hist if r.get("ts")]
+        if len(timestamps) >= 2:
+            try:
+                t0 = dt_util.parse_datetime(timestamps[0])
+                t1 = dt_util.parse_datetime(timestamps[-1])
+                if t0 and t1:
+                    span_days = round((t1 - t0).total_seconds() / 86400, 1)
+            except (TypeError, ValueError):
+                pass
+
+        summary: dict[str, Any] = {
+            "runs": len(hist),
+            "window_days": span_days,
+            "mean_solar_error_kwh": (
+                round(sum(solar_errs) / len(solar_errs), 3) if solar_errs else None
+            ),
+            "solar_under_forecast_runs": sum(1 for e in solar_errs if e < 0),
+            "solar_over_forecast_runs": sum(1 for e in solar_errs if e > 0),
+        }
+        if disch_errs:
+            summary["mean_discharge_error_kwh"] = round(
+                sum(disch_errs) / len(disch_errs), 3
+            )
+        return summary
+
+    async def _record_accuracy(self, accuracy: dict) -> None:
+        """Persist one planned-vs-actual record and refresh the summary.
+
+        The summary is injected into ``accuracy["accuracy_history"]`` so the
+        Plan Accuracy sensor exposes the rolling trend without extra entities.
+        """
+        if self._accuracy_history is None:
+            self._accuracy_history = await self.hass.async_add_executor_job(
+                self._load_accuracy_history
+            )
+        self._accuracy_history.append(
+            {
+                "ts": dt_util.now().isoformat(timespec="seconds"),
+                "elapsed_slots": accuracy.get("elapsed_slots"),
+                "planned_solar_kwh": accuracy.get("planned_solar_kwh"),
+                "actual_solar_kwh": accuracy.get("actual_solar_kwh"),
+                "solar_error_kwh": accuracy.get("solar_error_kwh"),
+                "planned_discharge_kwh": accuracy.get("planned_discharge_kwh"),
+                "actual_discharge_kwh": accuracy.get("actual_discharge_kwh"),
+                "discharge_error_kwh": accuracy.get("discharge_error_kwh"),
+            }
+        )
+        self._prune_accuracy_history()
+        accuracy["accuracy_history"] = self._accuracy_summary()
+        await self.hass.async_add_executor_job(self._save_accuracy_history)
+
     # ── Optimizer entry point ─────────────────────────────────────────
 
     async def run_optimizer(
@@ -916,6 +1034,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         new_accuracy = self._compute_plan_accuracy(now_slot)
         if new_accuracy is not None:
             self._plan_accuracy = new_accuracy
+            await self._record_accuracy(new_accuracy)
             _LOGGER.info(
                 "Plan accuracy (%d slots): "
                 "discharge planned=%.3f actual=%s kWh, "

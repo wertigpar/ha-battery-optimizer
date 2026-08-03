@@ -8,6 +8,7 @@ charge/discharge schedule to maximize savings.
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -45,7 +46,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # so device_info returns None on first setup.  This listener fires once
     # HA is fully started (all integrations loaded), resolves the link, and
     # triggers a clean entry reload so entities get their device association.
+    # Tracks the one-time listener; cleared once homeassistant_started fires.
+    unsub_ha_started: Callable[[], None] | None = None
+
     async def _on_home_assistant_started(_event) -> None:
+        nonlocal unsub_ha_started
+        unsub_ha_started = None  # one-time listener already consumed by the bus
         if coordinator._emaldo_device_id is not None:
             return  # already resolved
         if coordinator.resolve_emaldo_device():
@@ -54,12 +60,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             await hass.config_entries.async_reload(entry.entry_id)
 
+    def _unload_ha_started() -> None:
+        nonlocal unsub_ha_started
+        if unsub_ha_started is not None:
+            unsub_ha_started()
+            unsub_ha_started = None
+
     if not coordinator.resolve_emaldo_device():
-        entry.async_on_unload(
-            hass.bus.async_listen_once(
-                "homeassistant_started", _on_home_assistant_started
-            )
+        unsub_ha_started = hass.bus.async_listen_once(
+            "homeassistant_started", _on_home_assistant_started
         )
+        entry.async_on_unload(_unload_ha_started)
 
     _LOGGER.info("Battery Optimizer set up successfully")
     return True

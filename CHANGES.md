@@ -1,5 +1,24 @@
 # Changes
 
+## v0.2.1
+
+### Added
+
+- **Local brand images** (`brand/` folder): original battery-glyph icon + logo (navy `#112A41` icon, energy-green `#00B25C` logo, white dark-mode variants, all `@2x`). Distinct from Emaldo branding — no Emaldo logo used. Served via HA 2026.3+ local brands proxy (`/api/brands/integration/battery_optimizer/...`).
+- **Persistable plan accuracy history** — per-run planned-vs-actual records
+  (discharge/charge/solar kWh + signed errors) are now written to
+  `battery_optimizer_accuracy.json` in the HA config dir and survive HA
+  restarts. The HA recorder strips sensor attributes, so the rolling trend
+  was previously uncollectable. A rolling summary (`runs`, `window_days`,
+  `mean_solar_error_kwh`, `solar_under/over_forecast_runs`,
+  `mean_discharge_error_kwh`) is injected into the **Plan Accuracy** sensor's
+  `accuracy_history` attribute. Sign convention: `error = actual − planned`;
+  negative solar error = forecast over-optimistic (actual below forecast),
+  positive = forecast conservative (actual above forecast, e.g. P10). Cap:
+  1000 records / 60 days, oldest dropped first. Purely observational — no
+  planning behaviour changes. Enables long-term solar-forecast bias tracking
+  (e.g. verifying P10 vs P50 drift) before any forecast-mode change.
+
 ## v0.2.0
 
 ### Added
