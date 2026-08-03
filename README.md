@@ -197,6 +197,32 @@ When **Auto-tune base load** is enabled, the optimizer queries the HA recorder f
 grid_power - battery_power + solar_power  (in Watts)
 ```
 
+### Plan Accuracy
+
+The **Plan Accuracy** sensor compares planned vs actual energy (discharge,
+charge, solar) for the slots elapsed since the last optimizer run. Its state
+is the signed discharge error in kWh; its attributes carry the full per-run
+breakdown (`planned_*_kwh`, `actual_*_kwh`, `*_error_kwh`).
+
+Since HA's recorder strips sensor attributes, the per-run values would
+normally be lost after the next run. The integration therefore writes every
+run's planned-vs-actual record to `battery_optimizer_accuracy.json` in the
+HA config dir (survives restarts; capped at 1000 records / 60 days) and
+injects a rolling summary into the sensor's `accuracy_history` attribute:
+
+| Key | Meaning |
+|---|---|
+| `runs` | Records in the window |
+| `window_days` | Span of the window (days) |
+| `mean_solar_error_kwh` | Mean signed solar error (`actual − planned`) |
+| `solar_under_forecast_runs` | Runs where actual < planned (forecast over-optimistic) |
+| `solar_over_forecast_runs` | Runs where actual > planned (forecast conservative, e.g. P10) |
+| `mean_discharge_error_kwh` | Mean signed discharge error (present once data exists) |
+
+Use this to track long-term solar-forecast bias (e.g. verifying P10 vs P50
+drift) before changing `solar_forecast_mode`. Purely observational — no
+planning behaviour changes.
+
 ### Price Model
 
 The optimizer applies fees to the raw spot price for each 15-minute slot:
@@ -283,7 +309,7 @@ The integration creates 15 sensor entities:
 | **Schedule Chart** | diagnostic | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `baseline_cost`, `activated_time`, `soc_guard_marker`, `soc_history` |
 | **Emaldo Schedule** | diagnostic | Summary string (e.g. `79C 84D 29I`) with Emaldo's internal schedule in attributes. Shows what the battery's own AI planned *before* the optimizer overrides it. | `schedule` (list of 96–192 slots with `mode`, `state`, `buy`, `sell`, `solar`) |
 | **Auto Base Load** | diagnostic | The base load value (kW) currently used by the optimizer | — |
-| **Plan Accuracy** | diagnostic | Signed discharge error in kWh since last optimizer run (positive = more discharge than planned, negative = less) | `elapsed_slots`, `planned_discharge_kwh`, `planned_charge_kwh`, `planned_solar_kwh`, `actual_discharge_kwh`, `discharge_error_kwh`, `actual_charge_kwh`, `charge_error_kwh`, `actual_solar_kwh`, `solar_error_kwh`, `last_run` |
+| **Plan Accuracy** | diagnostic | Signed discharge error in kWh since last optimizer run (positive = more discharge than planned, negative = less) | `elapsed_slots`, `planned_discharge_kwh`, `planned_charge_kwh`, `planned_solar_kwh`, `actual_discharge_kwh`, `discharge_error_kwh`, `actual_charge_kwh`, `charge_error_kwh`, `actual_solar_kwh`, `solar_error_kwh`, `last_run`, `accuracy_history` (rolling summary, persisted to `battery_optimizer_accuracy.json`) |
 
 ## Switches
 
