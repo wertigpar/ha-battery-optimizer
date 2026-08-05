@@ -293,6 +293,11 @@ def _apply_soc_safeguard(
     Mutates plan_actions in place (adds "charge_floor" entries).
     Returns the list of inserted slot indices.
     """
+    # Module-level dedup state: read AND written here, so it must be
+    # declared global — otherwise the assignments below shadow it and the
+    # first read raises UnboundLocalError.
+    global _soc_floor_warn_depth
+
     if not cfg.enable_soc_safeguard:
         return []
 
