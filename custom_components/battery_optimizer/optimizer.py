@@ -23,6 +23,12 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Deepest un-fixable floor violation seen in the current episode.  Module
+# state survives across optimizer runs so repeated runs don't re-log the
+# same condition; only a deeper dip re-logs.  Reset when a run finds the
+# day clean, so the next episode logs fresh.
+_soc_floor_warn_depth: float = 0.0
+
 
 @dataclass
 class BatteryConfig:
@@ -311,6 +317,10 @@ def _apply_soc_safeguard(
             None,
         )
         if violation_slot is None:
+            # Day is clean — forget the previous episode's max depth so a
+            # future un-fixable violation logs again instead of being
+            # silenced by the stale max.
+            _soc_floor_warn_depth = 0.0
             break
 
         # Charge must happen at or before the violation.  Candidates are
@@ -325,12 +335,17 @@ def _apply_soc_safeguard(
             # below through idle drain).  Skip past it and look for later,
             # fixable violations instead of giving up entirely.
             depth_pct = (soc_min_kwh - traj[violation_slot]) / cfg.capacity_kwh * 100.0
-            log = _LOGGER.warning if depth_pct > 1.0 else _LOGGER.debug
-            log(
-                "SoC safeguard: floor violation at slot %d (%.1f%% below floor) "
-                "has no free slot for a keep-alive charge — skipping",
-                violation_slot, depth_pct,
-            )
+            if depth_pct > _soc_floor_warn_depth:
+                _soc_floor_warn_depth = depth_pct
+                # INFO for routine shallow dips (<3%): expected on cloudy /
+                # no-arbitrage days, self-resolves.  WARNING only for deep
+                # dips that may warrant attention.
+                log = _LOGGER.warning if depth_pct >= 3.0 else _LOGGER.info
+                log(
+                    "SoC safeguard: floor violation at slot %d (%.1f%% below floor) "
+                    "has no free slot for a keep-alive charge — skipping",
+                    violation_slot, depth_pct,
+                )
             search_from = violation_slot + 1
             continue
 

@@ -13,15 +13,18 @@
   window now records the post-reset accumulation as best-effort actual and
   flags it (`<action>_reset_crossed: True` in the sensor attrs) instead of
   dropping it, so midnight windows keep a measurable — if partial — actual.
-- **Analysis script no longer fabricates −100% errors** —
-  `scripts/battery_optimizer_analysis.py` treated an absent `actual_*_kwh`
-  attribute as zero, printing a misleading `error=-100%` for windows whose
-  actuals were dropped (midnight reset). The script now distinguishes absent
-  actuals (`actual=N/A`, `missing_windows`, `actual_available: false`) and
-  skips the error thresholds for those windows.
 
 ### Changed
 
+- **SoC safeguard log noise** — the "no free slot for a keep-alive
+  charge" message was logged at `WARNING` for any dip > 1 % below the
+  floor, spamming the log on cloudy/no-arbitrage days (170 occurrences
+  in 4 h observed in one session). Dips < 3 % below the floor are now
+  logged at `INFO` (routine, self-resolving: weather/price-driven, no
+  action needed); deeper dips still at `WARNING`. Per-episode dedup
+  (optimizer.py `_soc_floor_warn_depth`) logs the message only when the
+  dip depth grows, and resets when a run finds the day clean, so a new
+  episode logs fresh.
 - Bump `manifest.json` → `0.2.2`.
 
 ## v0.2.1
