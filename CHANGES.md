@@ -13,6 +13,11 @@
   window now records the post-reset accumulation as best-effort actual and
   flags it (`<action>_reset_crossed: True` in the sensor attrs) instead of
   dropping it, so midnight windows keep a measurable — if partial — actual.
+- **SoC safeguard UnboundLocalError** — `_soc_floor_warn_depth` is module
+  state read and written inside `_apply_soc_safeguard`; without a `global`
+  declaration the assignments shadowed it and the first run hitting the
+  skip branch raised `UnboundLocalError` (task exception on every optimizer
+  run). Fixed with a `global` declaration.
 
 ### Changed
 
