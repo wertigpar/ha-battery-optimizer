@@ -904,6 +904,194 @@ series:
 
 Compare this chart side-by-side with the "Optimized Schedule" chart to see where the optimizer overrides the internal schedule.
 
+#### Dashboard chart — Schedule Source
+
+Shows which slots are governed by the device's internal AI plan versus the optimizer's overrides, read from the live device schedule (`sensor.power_store_schedule_chart`). Each slot's `source` field is either `internal` (device AI plan, pre-override) or `override` (pushed by the optimizer).
+
+- **Gray** = device AI plan slot (source: `internal`)
+- **Blue** = optimizer override slot (source: `override`)
+
+```yaml
+type: custom:apexcharts-card
+header:
+  title: Schedule Source
+  show: true
+  show_states: false
+graph_span: 48h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+  color: red
+apex_config:
+  chart:
+    height: 150px
+    stacked: true
+  plotOptions:
+    bar:
+      columnWidth: "100%"
+  legend:
+    show: true
+  yaxis:
+    - show: false
+      min: 0
+      max: 1.1
+series:
+  - entity: sensor.power_store_schedule_chart
+    name: Internal
+    type: column
+    color: "#95a5a6"
+    opacity: 0.5
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'internal' ? 1 : null
+      ]);
+  - entity: sensor.power_store_schedule_chart
+    name: Optimizer
+    type: column
+    color: "#3498db"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'override' ? 1 : null
+      ]);
+```
+
+#### Dashboard chart — Active Schedule (AI vs Optimizer)
+
+Shows what the device will actually execute — the live device schedule combining the internal AI plan with the optimizer's overrides. Each slot is colored by **mode** (charge/discharge/idle) and shaded by **source**: muted bars are device AI plan slots, vivid bars are optimizer override slots. `yaxis.max` is `2.2` because a slot where both sources are active stacks to full height.
+
+- **Green** = charge
+- **Red** = discharge
+- **Gray** = idle
+- Muted (≈50% opacity) = device AI plan (source: `internal`)
+- Vivid (full opacity) = optimizer override (source: `override`)
+- Full-height bar = both sources active in the slot; half-height = one source only
+
+```yaml
+type: custom:apexcharts-card
+header:
+  title: Active Schedule (AI vs Optimizer)
+  show: true
+  show_states: false
+graph_span: 48h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+  color: red
+apex_config:
+  chart:
+    height: 220px
+    stacked: true
+  plotOptions:
+    bar:
+      columnWidth: "100%"
+  legend:
+    show: true
+  yaxis:
+    - show: false
+      min: 0
+      max: 2.2
+series:
+  - entity: sensor.power_store_schedule_chart
+    name: AI Charge
+    type: column
+    color: "#27ae60"
+    opacity: 0.5
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'internal' && s.state === 'Charge' ? 1 : null
+      ]);
+  - entity: sensor.power_store_schedule_chart
+    name: AI Discharge
+    type: column
+    color: "#c0392b"
+    opacity: 0.5
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'internal' && s.state === 'Discharge' ? 1 : null
+      ]);
+  - entity: sensor.power_store_schedule_chart
+    name: AI Idle
+    type: column
+    color: "#bdc3c7"
+    opacity: 0.4
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'internal' && s.state === 'Idle' ? 1 : null
+      ]);
+  - entity: sensor.power_store_schedule_chart
+    name: Optimizer Charge
+    type: column
+    color: "#2ecc71"
+    opacity: 1.0
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'override' && s.state === 'Charge' ? 1 : null
+      ]);
+  - entity: sensor.power_store_schedule_chart
+    name: Optimizer Discharge
+    type: column
+    color: "#e74c3c"
+    opacity: 1.0
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'override' && s.state === 'Discharge' ? 1 : null
+      ]);
+  - entity: sensor.power_store_schedule_chart
+    name: Optimizer Idle
+    type: column
+    color: "#95a5a6"
+    opacity: 1.0
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'override' && s.state === 'Idle' ? 1 : null
+      ]);
+```
+
 ---
 
 ## Troubleshooting

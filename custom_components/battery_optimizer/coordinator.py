@@ -858,6 +858,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     accuracy[f"{snap_key}_error_kwh"] = round(
                         actual_kwh - accuracy[f"planned_{snap_key}_kwh"], 3
                     )
+                else:
+                    # Daily counter reset within the window: the snapshot was
+                    # taken pre-reset (midnight run) so the counter is now lower.
+                    # The pre-reset fraction is unmeasurable via daily counters —
+                    # use the post-reset accumulation as best-effort actual and
+                    # flag the window so consumers can distinguish it.
+                    actual_kwh = round(max(actual, 0.0), 3)
+                    accuracy[f"actual_{snap_key}_kwh"] = actual_kwh
+                    accuracy[f"{snap_key}_error_kwh"] = round(
+                        actual_kwh - accuracy[f"planned_{snap_key}_kwh"], 3
+                    )
+                    accuracy[f"{snap_key}_reset_crossed"] = True
 
         return accuracy
 

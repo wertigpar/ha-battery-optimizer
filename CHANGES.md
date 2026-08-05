@@ -1,5 +1,29 @@
 # Changes
 
+## v0.2.2
+
+### Fixed
+
+- **Plan accuracy across midnight windows** — the midnight optimizer run
+  (00:00) snapshots the Emaldo daily-reset counters (`battery_discharged_today`,
+  `battery_charged_today`, `solar_energy_today`) before the device-side reset
+  lands, so the next accuracy comparison saw a negative delta and the guard in
+  `_compute_plan_accuracy` silently dropped the entire window's actuals (live
+  Plan Accuracy sensor showed planned values with no `actual_*_kwh`). Such a
+  window now records the post-reset accumulation as best-effort actual and
+  flags it (`<action>_reset_crossed: True` in the sensor attrs) instead of
+  dropping it, so midnight windows keep a measurable — if partial — actual.
+- **Analysis script no longer fabricates −100% errors** —
+  `scripts/battery_optimizer_analysis.py` treated an absent `actual_*_kwh`
+  attribute as zero, printing a misleading `error=-100%` for windows whose
+  actuals were dropped (midnight reset). The script now distinguishes absent
+  actuals (`actual=N/A`, `missing_windows`, `actual_available: false`) and
+  skips the error thresholds for those windows.
+
+### Changed
+
+- Bump `manifest.json` → `0.2.2`.
+
 ## v0.2.1
 
 ### Added
