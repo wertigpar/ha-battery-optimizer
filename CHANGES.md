@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## v0.2.3
 
 ### Fixed
 
@@ -49,11 +49,6 @@
   +0.264 €/day (0.4457 → 0.7097); drain-to-floor regression stays negative
   so the edge stop is mandatory. Disabled when the plan starts past solar
   onset or the battery starts below floor + recovery + margin.
-
-## v0.2.3
-
-### Fixed
-
 - **Sustained sub-`soc_min` battery dips from committed plans** — when a
   planned discharge run ended exactly at the floor, overnight idle drain
   pulled the projected SoC 3.3–4.0 % below `soc_min` for the rest of the
