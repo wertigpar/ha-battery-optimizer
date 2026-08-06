@@ -36,5 +36,8 @@ graphify-out/
 # Tests
 tests/
 
+# Docs
+docs/
+
 # HACS
 *.hacs_downloaded
