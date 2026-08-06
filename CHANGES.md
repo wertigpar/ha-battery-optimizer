@@ -1,5 +1,64 @@
 # Changes
 
+## Unreleased
+
+### Fixed
+
+- **Double idle drain on solar-surplus discharge slots** — a discharge action
+  on a solar-surplus slot subtracted idle drain twice in the result pass (once
+  in the surplus branch, once on the shared post-slot line), so the forecast
+  SoC drifted one idle drain per slot below `_simulate_soc_trajectory`. The
+  surplus branch now absorbs the surplus and drains once, matching the
+  simulation.
+- **Uneconomical keep-alive top-ups above the floor** — the SoC safeguard
+  inserted `charge_floor` slots at the cheapest prices even when the battery
+  already sat at/above the floor target at that slot (no-op: no energy added,
+  grid cost incurred). Keep-alive inserts and rescue flips are now filtered by
+  a projected deficit — `_simulate_soc_trajectory` derives the SoC entering
+  each candidate slot and only slots below the floor target qualify; a rescue
+  never cancels a discharge that starts above the floor.
+- **Discharge over-commit from the two-cycle budget** — `initial_usable +
+  post_solar_usable` can exceed physical capacity above the floor, so an
+  at-budget plan drained below `soc_min + reserve`. After grid charging, the
+  optimizer forward-simulates the planned trajectory and drops the cheapest
+  committed discharge slot (re-simulating after each drop, bounded at 96
+  iterations) until the projected min SoC holds the floor target. Runs before
+  the safeguard so no keep-alive top-up is layered on a floor-violating plan.
+
+## v0.2.3
+
+### Fixed
+
+- **Sustained sub-`soc_min` battery dips from committed plans** — when a
+  planned discharge run ended exactly at the floor, overnight idle drain
+  pulled the projected SoC 3.3–4.0 % below `soc_min` for the rest of the
+  night (live 2026-08-05: sauna drain + no-arbitrage day, 42 warnings in
+  2 h). The safeguard could not fix it because every slot up to the
+  violation was already committed. Two-part fix in optimizer.py:
+  - **Discharge reserve** — the greedy pass's dischargeable bottom edge is
+    now `soc_min + soc_recovery_buffer_pct`, not `soc_min` itself (budget
+    sites `initial_usable_kwh`, `post_solar_usable_kwh`, and the grid-charge
+    balance's `existing_usable`). The last discharge slot stops at the
+    reserve line; the buffer absorbs idle drain before the floor is touched.
+    Keep-alive charging already targets `soc_min + buffer`, so both sides
+    are consistent.
+  - **Rescue override** — when the safeguard finds no free slot before a
+    violation, it now flips the cheapest committed discharge slot inside the
+    violated window into a `charge_floor` slot instead of skipping (new
+    `_find_rescue_slot` helper; cheapest by buy price, closest to the
+    violation on ties; only the cheapest slot is sacrificed, deeper dips
+    flip more over successive iterations). The "no free slot" skip-log path
+    remains for windows with no discharge slot to sacrifice.
+
+### Changed
+
+- **Repro harness budget shift** — the reserve holds ~5 % of capacity out of
+  the discharge budget, so the documented repro.py profit moved 0.7797 →
+  0.7407 on the same captured day (evening-peak discharge cut; morning slots
+  unaffected). repro2/repro3 (PV-sell gate) results unchanged: sell slots,
+  max SoC 99.8 %, profits 0.0292/0.1151/0.2011/0.6308 identical.
+- Bump `manifest.json` → `0.2.3`.
+
 ## v0.2.2
 
 ### Fixed

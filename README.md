@@ -262,7 +262,7 @@ The optimizer accounts for this in all calculations:
 
 - **SoC simulation**: idle drain is subtracted from every planned slot (charge, discharge, and idle).
   During idle slots with solar surplus the solar energy offsets the drain, so a full battery stays at 100 % when surplus exceeds idle draw.
-- **Discharge budget**: a forward idle-only SoC simulation runs before planning to find the peak SoC the battery will reach from solar charging. The discharge budget equals `peak_soc − soc_min`, ensuring evening discharge is planned even when the current SoC is below `soc_min` at optimization time (e.g. SoC 12% at 8:30 AM with full solar fill expected by 13:00).
+- **Discharge budget**: a forward idle-only SoC simulation runs before planning to find the peak SoC the battery will reach from solar charging. The discharge budget equals `peak_soc − soc_min − reserve` (the **reserve** is `soc_recovery_buffer_pct`, default 5 % — the dischargeable bottom edge is `soc_min + buffer`, not `soc_min`, so a planned run never ends exactly at the floor with no idle-drain headroom), ensuring evening discharge is planned even when the current SoC is below `soc_min` at optimization time (e.g. SoC 12% at 8:30 AM with full solar fill expected by 13:00).
 
 ## Price Sensor Format
 

@@ -268,6 +268,36 @@ def _simulate_soc_trajectory(
     return out
 
 
+def _find_rescue_slot(
+    plan_actions: dict[int, str],
+    buy_prices: list[float],
+    start_slot: int,
+    violation_slot: int,
+) -> int | None:
+    """Pick a committed discharge slot to flip into a floor-charge slot.
+
+    When the safeguard finds no free slot before a violation, the dip usually
+    comes from a planned discharge run ending at the floor: idle drain pushes
+    the trajectory slightly below soc_min right after the run.  Instead of
+    giving up (and logging the episode), flip the cheapest committed discharge
+    slot inside the violated window into ``charge_floor`` — that slot re-buys
+    what the run discharged, lifting the whole trajectory after it back above
+    the floor.  The reserve (A) prevents most of these; the rescue is the
+    fallback for committed plans that predate the reserve or exceed it.
+
+    Cost minimisation: the cheapest discharge slot (by buy price, then closest
+    to the violation on ties) is sacrificed; the expensive slots still run.
+    Returns None when the window contains no discharge slot to sacrifice.
+    """
+    rescues = [
+        s for s in range(start_slot, violation_slot + 1)
+        if plan_actions.get(s) == "discharge"
+    ]
+    if not rescues:
+        return None
+    return min(rescues, key=lambda s: (round(buy_prices[s], 4), -s))
+
+
 def _apply_soc_safeguard(
     plan_actions: dict[int, str],
     buy_prices: list[float],
@@ -288,7 +318,10 @@ def _apply_soc_safeguard(
     but cost is minimised — charging happens at the cheapest available
     buy-price slot before each projected violation, and only up to
     ``soc_floor_target_pct`` (soc_min + small buffer), so the energy bought
-    is just a few hundred Wh.
+    is just a few hundred Wh.  When no free slot exists, the cheapest
+    committed discharge slot in the violated window is flipped into a
+    floor-charge slot instead (the rescue) — the one trade this pass makes,
+    and only the cheapest slot is sacrificed.
 
     Mutates plan_actions in place (adds "charge_floor" entries).
     Returns the list of inserted slot indices.
@@ -330,37 +363,76 @@ def _apply_soc_safeguard(
 
         # Charge must happen at or before the violation.  Candidates are
         # slots not already committed to charge/discharge.
+        floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
         candidates = [
             s for s in range(start_slot, violation_slot + 1)
             if plan_actions.get(s) not in ("charge", "charge_floor", "discharge")
         ]
-        if not candidates:
-            # Every slot up to the violation is committed (e.g. a planned
-            # discharge run ending exactly at the floor, dipping slightly
-            # below through idle drain).  Skip past it and look for later,
-            # fixable violations instead of giving up entirely.
-            depth_pct = (soc_min_kwh - traj[violation_slot]) / cfg.capacity_kwh * 100.0
-            if depth_pct > _soc_floor_warn_depth:
-                _soc_floor_warn_depth = depth_pct
-                # INFO for routine shallow dips (<3%): expected on cloudy /
-                # no-arbitrage days, self-resolves.  WARNING only for deep
-                # dips that may warrant attention.
-                log = _LOGGER.warning if depth_pct >= 3.0 else _LOGGER.info
-                log(
-                    "SoC safeguard: floor violation at slot %d (%.1f%% below floor) "
-                    "has no free slot for a keep-alive charge — skipping",
-                    violation_slot, depth_pct,
-                )
-            search_from = violation_slot + 1
+
+        # Deficit filter: only insert a keep-alive charge when the battery
+        # is genuinely below the floor target at that slot.  A charge when
+        # soc_before already sits at/above the floor target is a no-op: it
+        # adds energy but the trajectory above the floor is fine either way,
+        # and on a flat day it manufactures uneconomical grid top-ups.
+        # Simulate the SoC entering each candidate slot from the trajectory.
+        def _soc_before(slot: int) -> float:
+            if slot == start_slot:
+                return initial_soc_kwh
+            return traj[slot - 1]
+
+        deficit_candidates = [
+            s for s in candidates if _soc_before(s) < floor_target_kwh
+        ]
+        if deficit_candidates:
+            # Cheapest buy price wins; on (near-)equal prices prefer the slot
+            # closest to the violation — charging right before the dip yields
+            # maximum idle-drain headroom per top-up, whereas charging early
+            # is partially wasted (battery may already be near the floor target).
+            cheapest = min(deficit_candidates, key=lambda s: (round(buy_prices[s], 4), -s))
+            plan_actions[cheapest] = "charge_floor"
+            inserted.append(cheapest)
             continue
 
-        # Cheapest buy price wins; on (near-)equal prices prefer the slot
-        # closest to the violation — charging right before the dip yields
-        # maximum idle-drain headroom per top-up, whereas charging early
-        # is partially wasted (battery may already be near the floor target).
-        cheapest = min(candidates, key=lambda s: (round(buy_prices[s], 4), -s))
-        plan_actions[cheapest] = "charge_floor"
-        inserted.append(cheapest)
+        # Rescue re-buy path: flip the cheapest committed discharge slot in
+        # the window into a floor-charge slot, but only when that slot starts
+        # below the floor target.  A discharge that begins above the floor
+        # must not be cancelled to top up a floor that is not violated.
+        rescue_slot = next(
+            (
+                s for s in sorted(
+                    range(start_slot, violation_slot + 1),
+                    key=lambda s: (round(buy_prices[s], 4), -s),
+                )
+                if plan_actions.get(s) == "discharge"
+                and _soc_before(s) < floor_target_kwh
+            ),
+            None,
+        )
+        if rescue_slot is not None:
+            plan_actions[rescue_slot] = "charge_floor"
+            inserted.append(rescue_slot)
+            # No search_from advance: re-simulate so any downstream
+            # violations (post-rescue) still get checked.  A deep dip
+            # flips multiple discharge slots over successive iterations.
+            continue
+
+        # Neither a free deficit slot nor a deficit discharge slot: skip
+        # past it and look for later, fixable violations instead of giving
+        # up entirely.
+        depth_pct = (soc_min_kwh - traj[violation_slot]) / cfg.capacity_kwh * 100.0
+        if depth_pct > _soc_floor_warn_depth:
+            _soc_floor_warn_depth = depth_pct
+            # INFO for routine shallow dips (<3%): expected on cloudy /
+            # no-arbitrage days, self-resolves.  WARNING only for deep
+            # dips that may warrant attention.
+            log = _LOGGER.warning if depth_pct >= 3.0 else _LOGGER.info
+            log(
+                "SoC safeguard: floor violation at slot %d (%.1f%% below floor) "
+                "has no free or rescueable slot for a keep-alive charge — skipping",
+                violation_slot, depth_pct,
+            )
+        search_from = violation_slot + 1
+        continue
 
     if inserted:
         _LOGGER.info(
@@ -877,8 +949,17 @@ def optimize(
     #   maximum solar absorption headroom).
     # Without solar (winter), post_solar_usable = 0 and budget = initial_usable,
     # identical to the old single-cycle formula.
-    initial_usable_kwh = max(current_soc_kwh - soc_min_kwh, 0.0)
-    post_solar_usable_kwh = max(peak_soc_from_min_kwh - soc_min_kwh, 0.0)
+    #
+    # Discharge reserve (A): the dischargeable bottom edge is soc_min PLUS the
+    # recovery buffer, not soc_min itself.  A planned run ending exactly at
+    # soc_min left the battery no headroom for idle drain — the sauna-night
+    # episode drained to the floor and idle drain pulled tomorrow's plan
+    # 3.3-4.0 % below it.  The reserve makes the last discharge slot stop at
+    # soc_min + buffer; the buffer then absorbs overnight idle drain before the
+    # floor is touched.
+    discharge_reserve_kwh = cfg.capacity_kwh * cfg.soc_recovery_buffer_pct / 100.0
+    initial_usable_kwh = max(current_soc_kwh - soc_min_kwh - discharge_reserve_kwh, 0.0)
+    post_solar_usable_kwh = max(peak_soc_from_min_kwh - soc_min_kwh - discharge_reserve_kwh, 0.0)
     total_discharge_budget = initial_usable_kwh + post_solar_usable_kwh
 
     # Find the first slot with meaningful solar production.  Used to split the
@@ -1054,7 +1135,13 @@ def optimize(
         for s, a in plan_actions.items() if a == "discharge"
     )
     solar_actual = available_soc - current_soc_kwh
-    existing_usable = current_soc_kwh - soc_min_kwh
+    # Same discharge reserve as the greedy budget (A): grid charging covers
+    # the deficit that solar + existing SoC cannot, where "existing SoC"
+    # stops at soc_min + recovery buffer so the charged plan also ends its
+    # discharge runs at the reserve line, not at the floor.
+    existing_usable = max(
+        current_soc_kwh - soc_min_kwh - discharge_reserve_kwh, 0.0
+    )
     grid_charge_needed = max(0.0, total_discharge_battery_kwh - solar_actual - existing_usable)
 
     soc_sim = available_soc
@@ -1071,6 +1158,33 @@ def optimize(
             grid_charged += charge_kwh
         else:
             break  # Battery full
+
+    # Discharge over-commit correction: the two-cycle budget double-counts
+    # the battery — initial_usable + post_solar_usable can exceed physical
+    # capacity above the floor, so an at-budget plan drains below
+    # soc_min + reserve.  Forward-sim the true trajectory and drop the
+    # cheapest committed discharge slot until the min SoC holds the floor
+    # target.  Re-simulate after each drop.  Runs BEFORE the safeguard so
+    # the safeguard never sees a plan that violates the floor (no keep-alive
+    # top-up on top of a fix).
+    floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
+    _guard = 0
+    while _guard < SLOTS_PER_DAY:
+        traj_a = _simulate_soc_trajectory(
+            plan_actions, net_loads, solar_15min, cfg,
+            start_slot=start_slot, initial_soc_kwh=current_soc_kwh,
+        )
+        if min(traj_a) >= floor_target_kwh:
+            break
+        dis_slots_a = sorted(
+            (s for s, a in plan_actions.items() if a == "discharge"),
+            key=lambda s: (round(buy_prices[s], 4), -s),
+        )
+        if not dis_slots_a:
+            break
+        _drop = dis_slots_a[0]
+        del plan_actions[_drop]
+        _guard += 1
 
     # Step 3b: SoC floor safeguard — keep-alive charging.
     # The greedy pass only charges when arbitrage is profitable.  On cloudy,
@@ -1151,7 +1265,7 @@ def optimize(
                     # (solar charge minus idle drain).
                     surplus_kw = min(-net_loads[s], cfg.max_charge_kw)
                     solar_kwh = surplus_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
-                    soc = max(min(soc + solar_kwh - idle_drain, soc_max_kwh), 0.0)
+                    soc = max(min(soc + solar_kwh, soc_max_kwh), 0.0)
                     load_kwh = 0.0
                     # Fix 2: excess solar exported when battery full
                     export_kwh = max(0.0, -net_loads[s] - cfg.max_charge_kw) * SLOT_DURATION_HOURS
