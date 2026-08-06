@@ -24,6 +24,31 @@
   committed discharge slot (re-simulating after each drop, bounded at 96
   iterations) until the projected min SoC holds the floor target. Runs before
   the safeguard so no keep-alive top-up is layered on a floor-violating plan.
+- **Dead `solar_full_recharge` gate killed the overnight-discharge pool** —
+  the split-mode gate compared `post_solar_usable_kwh` (peak from floor minus
+  `soc_min` minus the discharge reserve) against 95 % of the full usable band,
+  so the threshold sat ~0.1 kWh above physical capacity: it could never fire
+  and two-cycle mode was permanently dead — the cheapest overnight slots were
+  starved on days when solar fully recharges the battery. The gate now compares
+  the simulated peak SoC from the floor against the band top
+  (`soc_min + 0.95 * band`), which is reachable when solar truly refills the
+  battery. Verified by A/B against live arrays: on a full-recharge day the
+  fixed gate fires and unlocks +0.1135 €/day (night pool 11→16 slots, morning
+  32→22, evening unchanged); on the p10 forecast day the gate correctly stays
+  closed (battery only refills to ~76 % from the floor) and the plan is
+  unchanged.
+- **Starved night slots on COMBINED days (no/partial solar)** — the single
+  discharge pool covers evening → morning → night LAST, so the cheapest night
+  grid buys are never displaced. Day profit is flat over a range of starting
+  SoCs (the plateau): stored energy above the plateau edge is dead. The
+  optimizer now probes the day profit as a function of start SoC (binary
+  search, ~6 runs, edge guarded at floor + recovery + margin), and when the
+  day starts above the edge it discharges the dead excess overnight (buy >
+  wear cost, pre-solar window, slots sorted buy-desc) before solar onset,
+  displacing grid buys without touching the day plan. Live p10 forecast day:
+  +0.264 €/day (0.4457 → 0.7097); drain-to-floor regression stays negative
+  so the edge stop is mandatory. Disabled when the plan starts past solar
+  onset or the battery starts below floor + recovery + margin.
 
 ## v0.2.3
 

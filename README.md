@@ -45,8 +45,15 @@ buy price avoided (self-consumption), not the sell/export price.
 2. Rank non-solar slots by buy price (most expensive first for discharge).
 3. Discharge existing energy when `buy_price > wear_cost` (self-consumption saves money).
 4. Round-trip trades when the price spread covers efficiency losses + wear.
-5. Grid charge only the deficit that solar + existing SoC cannot cover.
-6. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. A single cutover time T (≤ noon by default) is chosen through an iterated simulation of the true battery need at the cutover (the plan-start SoC understates the gap caused by the sell window). Solar before T is sold to the grid (PV switch OFF) only where the sell price exceeds the slot's buy price (economic gate); solar from T onward charges the battery uninterrupted.
+5. **Plateau night drain**: on no/partial-solar days the discharge budget runs
+   evening → morning → night, so the cheapest night slots are starved even
+   though the day starts with dead stored energy (day profit is flat over a
+   range of starting SoCs). The optimizer probes the day profit vs starting
+   SoC to find the plateau edge, then discharges the excess above the edge
+   overnight to cover the night load instead of buying grid power — never
+   draining below the edge. Skipped when the plan starts after solar onset.
+6. Grid charge only the deficit that solar + existing SoC cannot cover.
+7. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. A single cutover time T (≤ noon by default) is chosen through an iterated simulation of the true battery need at the cutover (the plan-start SoC understates the gap caused by the sell window). Solar before T is sold to the grid (PV switch OFF) only where the sell price exceeds the slot's buy price (economic gate); solar from T onward charges the battery uninterrupted.
 
 **Smart override logic:**
 
