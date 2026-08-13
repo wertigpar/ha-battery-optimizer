@@ -30,7 +30,8 @@
           "load_energy_sensor": "Household load power sensor (W) for auto base load (e.g. sensor.emhass_combined_power)",
           "enable_pv_strategy": "Enable PV sell strategy (sell solar to grid during high-price slots instead of charging battery)",
           "solar_sell_min_forecast_kwh": "Min Solcast forecast to activate PV sell strategy (kWh, default 10 — skip on cloudy days)",
-          "solar_forecast_mode": "Solar forecast mode for charge planning (p10 = pessimistic/weather-aware, p50 = median/optimistic)"
+          "solar_forecast_mode": "Solar forecast mode for charge planning (p10 = pessimistic/weather-aware, p50 = median/optimistic)",
+          "solar_forecast_scale": "Solar forecast scale (0 = auto-tune from accuracy history; 0.8 scales the forecast down 20%)"
         }
       }
     },
@@ -74,7 +75,9 @@
           "load_energy_sensor": "Household load power sensor (W, for auto base load)",
           "enable_pv_strategy": "Enable PV sell strategy",
           "solar_sell_min_forecast_kwh": "Min solar forecast for PV sell strategy (kWh)",
-          "solar_forecast_mode": "Solar forecast mode (p10 = conservative, p50 = optimistic)"
+          "solar_forecast_mode": "Solar forecast mode (p10 = conservative, p50 = optimistic)",
+          "solar_forecast_scale": "Solar forecast scale (0 = auto-tune, or manual 0.3–1.2)",
+          "solar_actual_sensor": "Actual solar energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate"
         }
       }
     }

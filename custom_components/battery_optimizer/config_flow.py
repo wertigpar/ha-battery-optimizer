@@ -51,6 +51,8 @@ from .const import (
     CONF_ENABLE_PV_STRATEGY,
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
     CONF_SOLAR_FORECAST_MODE,
+    CONF_SOLAR_FORECAST_SCALE,
+    CONF_SOLAR_ACTUAL_SENSOR,
     SOLAR_FORECAST_P50,
     SOLAR_FORECAST_P10,
     DEFAULT_VAT_MULTIPLIER,
@@ -79,6 +81,9 @@ from .const import (
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_SOLAR_FORECAST_MODE,
+    DEFAULT_SOLAR_FORECAST_SCALE,
+    DEFAULT_SOLAR_ACTUAL_SENSOR,
+    SOLAR_SCALE_MAX,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -264,6 +269,18 @@ def _build_schema(
                 CONF_SOLAR_FORECAST_MODE,
                 default=d.get(CONF_SOLAR_FORECAST_MODE, DEFAULT_SOLAR_FORECAST_MODE),
             ): vol.In([SOLAR_FORECAST_P50, SOLAR_FORECAST_P10]),
+            vol.Optional(
+                CONF_SOLAR_FORECAST_SCALE,
+                default=d.get(
+                    CONF_SOLAR_FORECAST_SCALE, DEFAULT_SOLAR_FORECAST_SCALE
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=SOLAR_SCALE_MAX)),
+            vol.Optional(
+                CONF_SOLAR_ACTUAL_SENSOR,
+                default=d.get(
+                    CONF_SOLAR_ACTUAL_SENSOR, DEFAULT_SOLAR_ACTUAL_SENSOR
+                ),
+            ): str,
         }
     )
 
@@ -315,6 +332,19 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
         emaldo_options = _get_emaldo_options(self.hass)
 
         if user_input is not None:
+            errors: dict[str, str] = {}
+            sensor_id = user_input.get(CONF_SOLAR_ACTUAL_SENSOR, "")
+            if sensor_id and not self.hass.states.get(sensor_id):
+                errors["base"] = "sensor_not_found"
+            if errors:
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=_build_schema(
+                        {**self.config_entry.data, **self.config_entry.options},
+                        emaldo_options=emaldo_options,
+                    ),
+                    errors=errors,
+                )
             return self.async_create_entry(title="", data=user_input)
 
         # Merge config entry data with any existing options

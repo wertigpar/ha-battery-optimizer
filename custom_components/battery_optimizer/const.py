@@ -43,6 +43,8 @@ CONF_ENABLE_PV_STRATEGY = "enable_pv_strategy"
 CONF_SOLAR_SELL_MIN_FORECAST_KWH = "solar_sell_min_forecast_kwh"
 CONF_ENABLE_EMALDO_CONTROL = "enable_emaldo_control"
 CONF_SOLAR_FORECAST_MODE = "solar_forecast_mode"
+CONF_SOLAR_FORECAST_SCALE = "solar_forecast_scale"
+CONF_SOLAR_ACTUAL_SENSOR = "solar_actual_sensor"
 
 # ── Solar forecast mode options ──────────────────────────────────────
 SOLAR_FORECAST_P50 = "p50"  # Solcast median (optimistic, current legacy)
@@ -72,12 +74,30 @@ LOW_SOC_RERUN_MARGIN_PCT = 2.0
 # Minimum minutes between low-SoC forced re-runs
 LOW_SOC_RERUN_THROTTLE_MIN = 30
 
+# L2 idle-gap replan: minimum minutes between re-runs when the plan leaves
+# the current slot idle while the grid buys at a price above wear cost.
+IDLE_GAP_RERUN_THROTTLE_MIN = 30
+# L3 divergence replan: actual SoC deviating this much from the plan's
+# projected slot SoC triggers an event-driven re-run (throttled).
+SOC_DIVERGENCE_RERUN_THRESHOLD_PCT = 5.0
+SOC_DIVERGENCE_RERUN_THROTTLE_MIN = 15
+
 DEFAULT_AUTO_BASE_LOAD = False
 DEFAULT_LOAD_ENERGY_SENSOR = ""
 DEFAULT_ENABLE_PV_STRATEGY = False
 DEFAULT_ENABLE_EMALDO_CONTROL = True
 DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH = 10.0  # kWh; below this, cloudy day → skip
 DEFAULT_SOLAR_FORECAST_MODE = SOLAR_FORECAST_P10  # conservative planning by default
+
+# ── Solar forecast scale (over-forecast compensation) ────────────────
+DEFAULT_SOLAR_FORECAST_SCALE = 0.0   # 0.0 = auto-tune sentinel (0 = auto)
+DEFAULT_SOLAR_ACTUAL_SENSOR = ""      # empty = Emaldo-internal estimate
+SOLAR_SCALE_MIN = 0.3                # effective scale floor (also manual clamp floor)
+SOLAR_SCALE_MAX = 1.2                # effective scale ceiling
+SOLAR_SCALE_EWMA_ALPHA = 0.1         # EWMA smoothing factor
+SOLAR_SCALE_WARMUP_RECORDS = 5       # min valid records before auto-tune engages
+SOLAR_SCALE_MIN_ELAPSED_SLOTS = 8    # min accuracy window (slots) for a valid record
+SOLAR_SCALE_MIN_PLANNED_KWH = 0.1    # min planned solar (kWh) for a valid record
 
 # ── Optimizer run interval ────────────────────────────────────────────
 DEFAULT_OPTIMIZER_INTERVAL = 120   # minutes

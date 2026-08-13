@@ -53,7 +53,7 @@ buy price avoided (self-consumption), not the sell/export price.
    overnight to cover the night load instead of buying grid power — never
    draining below the edge. Skipped when the plan starts after solar onset.
 6. Grid charge only the deficit that solar + existing SoC cannot cover.
-7. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. A single cutover time T (≤ noon by default) is chosen through an iterated simulation of the true battery need at the cutover (the plan-start SoC understates the gap caused by the sell window). Solar before T is sold to the grid (PV switch OFF) only where the sell price exceeds the slot's buy price (economic gate); solar from T onward charges the battery uninterrupted.
+7. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. A single cutover time T (≤ noon by default) is chosen through an iterated simulation of the true battery need at the cutover (the plan-start SoC understates the gap caused by the sell window). Solar before T is sold to the grid (PV switch OFF) only where the sell price beats the **stored value** of that kWh — the cheapest future discharge buy price discounted by round-trip efficiency and `pv_sell_margin` (exporting only beats storing because a stored kWh displaces a future grid buy); solar from T onward charges the battery uninterrupted.
 
 **Smart override logic:**
 
@@ -137,8 +137,12 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Enable PV sell strategy** | Initial default for the live `switch.battery_optimizer_pv_strategy` entity. When `true`, the optimizer will plan PV-to-grid slots on sunny days instead of always charging the battery. See [PV Sell Strategy](#pv-sell-strategy). | `false` |
 | **Min solar forecast for PV sell** | Minimum Solcast forecast (kWh) required to activate PV sell strategy. Below this threshold the strategy is skipped (cloudy day guard). | `10.0` |
 | **Solar forecast mode** | Which Solcast percentile to use for charge planning. `p10` (default) uses the pessimistic 10th-percentile forecast — weather-aware, causes the optimizer to add more grid charge slots on cloudy/uncertain days. `p50` uses the median, which can leave the battery undercharged when actual solar is lower than expected. | `p10` |
+| **Solar forecast scale** | Whole-day multiplier applied to the solar forecast before planning. `0` (default) = auto-tune from the accuracy history (see [Plan Accuracy](#plan-accuracy)); e.g. `0.8` scales the forecast down by 20% when it over-predicts. Manual values are clamped to 0.3–1.2. | `0` (auto) |
+| **Actual solar sensor** | Entity ID of a cumulative energy counter for actual PV production (e.g. daily inverter yield, Wh or kWh). Used for plan-vs-actual accuracy and the solar-scale auto-tune instead of the Emaldo-internal estimate (balance-derived, distorted by household loads). Empty (default) = Emaldo-internal estimate. | *(empty)* |
 | **Min solar fraction for PV sell** | Minimum fraction of needed solar energy (from current slot onward) required to allow selling. If available solar is below `needed_kwh × this_value`, selling is skipped entirely. Configurable as `pv_sell_solar_margin`. | `0.95` |
-| **Min sell price for PV sell** | Additional sell-price floor (€/kWh) for PV sell slots. Selling also always requires the sell price to exceed the slot's buy price (economic gate). Configurable as `pv_sell_min_price_spread`. | `0.0` |
+| **Min sell price for PV sell** | Additional sell-price floor (€/kWh) for PV sell slots. Selling also always requires the sell price to exceed the **stored value** of the slot's kWh — the cheapest future discharge buy price discounted by round-trip efficiency and `pv_sell_margin` (a stored kWh displaces a future grid buy). Configurable as `pv_sell_min_price_spread`. | `0.0` |
+| **PV sell margin** | Multiplier on the stored-value sell threshold. `1.0` sells whenever the export price clears the round-trip-discounted cheapest future buy; `1.05` requires a 5% premium over storage before exporting. Configurable as `pv_sell_margin`. | `1.0` |
+| **Solar forecast margin** | Fraction of discharge-slot surplus solar credited to the grid-charge balance (discharge-mode slots still absorb excess PV, but over-forecasts must never leave the plan grid-charge-starved). Configurable as `solar_forecast_margin`. | `0.85` |
 
 All parameters can be changed later via **Settings → Devices & Services → Battery Optimizer → Configure**.
 
@@ -227,8 +231,21 @@ injects a rolling summary into the sensor's `accuracy_history` attribute:
 | `mean_discharge_error_kwh` | Mean signed discharge error (present once data exists) |
 
 Use this to track long-term solar-forecast bias (e.g. verifying P10 vs P50
-drift) before changing `solar_forecast_mode`. Purely observational — no
-planning behaviour changes.
+drift) before changing `solar_forecast_mode`.
+
+Since v0.2.4 this history feeds back into planning: with
+`solar_forecast_scale` set to `0` (default), the whole-day solar forecast is
+auto-scaled by an EWMA over each run's *raw-basis* ratio
+(`(actual / planned) × scale_used`, which recovers the true unscaled bias
+regardless of the scale the run used). Records with a daily-counter reset
+crossing or a too-short/too-small window are excluded; at least 5 valid
+records are needed before tuning engages. A manual `solar_forecast_scale`
+disables the auto-tune.
+
+When `solar_actual_sensor` is set, `actual_solar_kwh` comes from that counter
+(diffed between plan runs) instead of the Emaldo-internal estimate. If the
+configured counter is unavailable when accuracy is computed, that record is
+skipped with a warning — tuning data never mixes sources.
 
 ### Price Model
 
@@ -305,14 +322,14 @@ The integration creates 15 sensor entities:
 | **Optimizer Status** | sensor | Current state: `idle`, `active`, or `scheduled` | `reason`, `charge_slots`, `discharge_slots`, `idle_slots`, `safeguard_slots`, `soc_guard_marker`, `balancing_active` |
 | **Last Optimization** | sensor | Timestamp of the last optimizer run | — |
 | **Current Slot Action** | sensor | What the battery is doing right now: `charge`, `discharge`, `idle`, `none`, `unknown` | `slot_index`, `slot_value`, `buy_price`, `sell_price`, `solar_kw`, `soc_after` |
-| **Rest of Day Estimated Savings** | monetary | Estimated profit/savings for the rest of today (€) | — |
+| **Rest of Day Estimated Savings** | monetary | Estimated profit/savings for the rest of today (€), **net of battery wear** (`total_profit − wear_cost_total`) | `gross_savings`, `wear_cost`, `cycled_kwh` |
 | **Rest of Day Baseline Cost** | monetary | Estimated cost for rest of today without any battery — pure grid purchase (€) | — |
-| **Rest of Day Emaldo Cost** | monetary | Estimated cost for rest of today following the Emaldo device's own AI schedule (€) | — |
-| **Rest of Day Optimizer Cost** | monetary | Estimated cost for rest of today following the optimizer's plan (€). Equals `baseline_cost − total_profit` | — |
-| **Tomorrow Estimated Savings** | monetary | Estimated profit/savings for tomorrow's schedule (€) | — |
+| **Rest of Day Emaldo Cost** | monetary | Estimated cost for rest of today following the Emaldo device's own AI schedule (€), netted for its own cycles | `emaldo_grid_cost`, `emaldo_wear_cost`, `emaldo_cycled_kwh` |
+| **Rest of Day Optimizer Cost** | monetary | Estimated cost for rest of today following the optimizer's plan (€). Equals `baseline_cost − net_profit` (`grid_cost + wear_cost`) | `grid_cost`, `wear_cost`, `cycled_kwh` |
+| **Tomorrow Estimated Savings** | monetary | Estimated profit/savings for tomorrow's schedule (€), net of battery wear | — |
 | **Tomorrow Baseline Cost** | monetary | Estimated cost for tomorrow without any battery — pure grid purchase (€) | — |
-| **Tomorrow Emaldo Cost** | monetary | Estimated cost for tomorrow following the Emaldo device's own AI schedule (€) | — |
-| **Tomorrow Optimizer Cost** | monetary | Estimated cost for tomorrow following the optimizer's plan (€) | — |
+| **Tomorrow Emaldo Cost** | monetary | Estimated cost for tomorrow following the Emaldo device's own AI schedule (€), netted for its own cycles | `emaldo_grid_cost`, `emaldo_wear_cost`, `emaldo_cycled_kwh` |
+| **Tomorrow Optimizer Cost** | monetary | Estimated cost for tomorrow following the optimizer's plan (€). Equals `baseline_cost − net_profit` (`grid_cost + wear_cost`) | `grid_cost`, `wear_cost`, `cycled_kwh` |
 | **Schedule Chart** | diagnostic | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `baseline_cost`, `activated_time`, `soc_guard_marker`, `soc_history` |
 | **Emaldo Schedule** | diagnostic | Summary string (e.g. `79C 84D 29I`) with Emaldo's internal schedule in attributes. Shows what the battery's own AI planned *before* the optimizer overrides it. | `schedule` (list of 96–192 slots with `mode`, `state`, `buy`, `sell`, `solar`) |
 | **Auto Base Load** | diagnostic | The base load value (kW) currently used by the optimizer | — |
@@ -393,7 +410,7 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
 
 When tomorrow's prices are available, the list extends to 192 entries. Each entry has `day: 0` (today) or `day: 1` (tomorrow). The `slot` field is 0–95 within each day.
 
-**`pv_sell`** — `true` means the third-party PV switch is planned to be OFF for this slot — solar energy is exported to the grid at spot price rather than charging the battery. Always `false` when the PV sell strategy switch is disabled, solar is below 0.1 kW, or the slot's sell price does not exceed its buy price (economic gate).
+**`pv_sell`** — `true` means the third-party PV switch is planned to be OFF for this slot — solar energy is exported to the grid at spot price rather than charging the battery. Always `false` when the PV sell strategy switch is disabled, solar is below 0.1 kW, or the slot's sell price does not beat the stored value of that kWh (cheapest future discharge buy discounted by round-trip efficiency and `pv_sell_margin`, plus the `pv_sell_min_price_spread` floor).
 
 The `activated_time` attribute shows the time window that was sent to the battery as override commands, e.g. `"Today 14:15–23:45 + Tomorrow 00:00–06:30"`. This indicates how far forward the schedule has been activated on the battery hardware. The Emaldo E2E override uses a rolling 24-hour window: a single 96-slot push covers today's remaining slots plus (when tomorrow's prices are available) tomorrow's early slots.
 
@@ -437,6 +454,12 @@ The optimizer re-runs periodically based on the **Optimizer re-run interval** se
 In addition, a **fixed midnight checkpoint** always runs at **00:01** to re-optimize for the new day.
 
 All periodic runs are **conditional** (`force=False`) — they will skip if the actual battery SoC is within 10% of the planned SoC.
+
+Beyond the polled checkpoints, three event-driven replan triggers run on the battery SoC sensor:
+
+- **Low-SoC watcher** — forces a replan (max once/30 min) when actual SoC drops below `soc_min + 2%` and no charge slot is imminent, letting the SoC safeguard insert a keep-alive charge.
+- **Idle-gap gate** — forces a replan (max once/30 min) when the plan leaves the current slot idle while the grid buys at a price above battery wear cost and the battery has headroom. Re-running with the real (often higher) SoC lets the plan open earlier discharge slots on low-load days.
+- **Divergence watcher** — forces a replan (max once/15 min, independent of the SoC safeguard) when actual SoC deviates more than 5% from the plan's projected slot SoC, catching forecast error and unexpected loads between checkpoints.
 
 ### Price Sensor State Change
 
@@ -722,7 +745,7 @@ The plan-start SoC understates the real battery gap: during the sell window the 
 After the loop, the chosen T is re-validated against the re-simulated need. If the solar remaining after T cannot cover it, selling is skipped — the day charges normally instead of risking an underfilled battery.
 
 **Step 6 — Mark sell slots (economic gate):**
-All solar slots in `[sell_from, T)` are marked as sell (PV switch OFF) only when `sell_price > buy_price` at that slot **and** `sell_price > pv_sell_min_price_spread` (config floor, default 0.0). Exporting only beats storing when the export price clears the local buy price — a stored kWh displaces a future grid buy through the round-trip. Direct PV export incurs zero battery wear, so no wear-cost term is applied. Solar slots from T onward are always kept as charge (PV switch ON).
+All solar slots in `[sell_from, T)` are marked as sell (PV switch OFF) only when `sell_price > sell_threshold` **and** `sell_price > pv_sell_min_price_spread` (config floor, default 0.0), where `sell_threshold = min(cheapest future discharge buy) × η_c × η_d × pv_sell_margin`. If the plan has no discharge slots, the fallback is the slot's own buy price. Exporting only beats storing when the export price clears the **stored value** of that kWh — a stored kWh displaces a future grid buy through the round-trip, so the threshold is the cheapest avoided buy discounted by efficiency (and a configurable margin). Direct PV export incurs zero battery wear, so no wear-cost term is applied. Solar slots from T onward are always kept as charge (PV switch ON).
 
 **Step 7 — SoC trajectory correction (`_correct_soc_for_pv_sells`):**
 After sell slots are finalised, `SlotPlan.soc_after` values (computed during the main greedy pass assuming all solar charged the battery) are corrected. A forward pass from the first sell slot recomputes `soc_after` in-place so the dashboard SoC forecast correctly shows a flat/draining morning and a rising ramp from the cutover time onward. Both today and tomorrow plans are corrected.
@@ -735,7 +758,8 @@ After sell slots are finalised, `SlotPlan.soc_after` values (computed during the
 | Solcast forecast < `solar_sell_min_forecast_kwh` (default 10 kWh) | Strategy skipped for the day — cloudy-day guard |
 | Solcast data unavailable | Strategy skipped |
 | Grid-charge slot | Never overridden regardless of sell price |
-| Sell price ≤ buy price at slot (economic gate) | Slot kept as charge — storing displaces a future grid buy more cheaply |
+| Sell price ≤ stored value (cheapest future discharge buy × round-trip × `pv_sell_margin`) | Slot kept as charge — storing displaces a future grid buy more cheaply |
+| Sell price ≤ `pv_sell_min_price_spread` (default 0.0 — covers negative spot) | Slot kept as charge — never export at a loss; sell = spot − commission, so negative spot means negative sell |
 | SoC below floor, unrecoverable before cutover | Selling skipped for the day |
 
 ### Live control — `switch.battery_optimizer_pv_strategy`

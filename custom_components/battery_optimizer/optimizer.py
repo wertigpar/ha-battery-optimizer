@@ -52,6 +52,11 @@ class BatteryConfig:
     idle_power_kw: float = 0.1       # battery unit idle consumption (kW)
     pv_sell_solar_margin: float = 0.95  # required solar fraction to allow PV selling
     pv_sell_min_price_spread: float = 0.0  # min sell price (€/kWh) to activate PV selling
+    pv_sell_margin: float = 1.0  # multiplier on the stored-value sell threshold
+    # Confidence factor on forecast solar when crediting discharge-assigned
+    # surplus absorption (over-forecast safety — never plan around solar that
+    # may not arrive).  1.0 = trust the forecast fully.
+    solar_forecast_margin: float = 0.85
 
     # SoC floor safeguard — keep-alive charging that prevents the battery
     # idle drain from pulling SoC below soc_min on cloudy/no-arbitrage days.
@@ -117,6 +122,9 @@ class OptimizationResult:
     baseline_cost: float = 0.0  # estimated daily cost without battery (€)
     emaldo_cost: float = 0.0   # estimated daily cost if Emaldo plan followed (€)
     emaldo_modes: list[int] = field(default_factory=list)  # Emaldo AI modes per slot
+    emaldo_grid_cost: float = 0.0   # grid cost under Emaldo plan, wear excluded (€)
+    emaldo_wear_total: float = 0.0  # wear cost of Emaldo-plan cycles (€)
+    emaldo_cycled_kwh: float = 0.0  # battery-internal kWh discharged under Emaldo plan
     charge_slots: int = 0
     discharge_slots: int = 0
     idle_slots: int = 0
@@ -128,11 +136,42 @@ class OptimizationResult:
     # False = third-party PV disabled (solar sells to grid at spot price).
     # Defaults to all-True (no change in behaviour until _plan_pv_sell_slots fills it).
     thirdparty_pv_slots: list[bool] = field(default_factory=lambda: [True] * 96)
+    # Battery cycles and wear accounting (F1 — net savings reporting).
+    cycled_kwh: float = 0.0        # battery-internal kWh discharged this plan
+    wear_cost_total: float = 0.0   # € of wear from those cycles
+    net_profit: float = 0.0        # total_profit minus wear_cost_total
 
     @property
     def slot_values(self) -> list[int]:
         """96 emaldo override byte values."""
         return [s.slot_value for s in self.slots]
+
+
+def optimizer_plan_cost_breakdown(result: OptimizationResult) -> dict[str, float]:
+    """Subcosts forming the optimizer plan cost (baseline_cost - net_profit).
+
+    grid_cost + wear_cost == the sensor state value.  grid_cost is the grid
+    purchase cost under the plan (baseline minus gross savings); wear_cost is
+    battery wear.  Money attrs 4 dp, cycled 3 dp (mirrors the savings sensor).
+    """
+    return {
+        "grid_cost": round(result.baseline_cost - result.total_profit, 4),
+        "wear_cost": round(result.wear_cost_total, 4),
+        "cycled_kwh": round(result.cycled_kwh, 3),
+    }
+
+
+def emaldo_plan_cost_breakdown(result: OptimizationResult) -> dict[str, float]:
+    """Subcosts forming the Emaldo plan cost (net: grid cost minus wear).
+
+    emaldo_grid_cost - emaldo_wear_cost == the sensor state value
+    (``emaldo_cost``).  Money attrs 4 dp, cycled 3 dp.
+    """
+    return {
+        "emaldo_grid_cost": round(result.emaldo_grid_cost, 4),
+        "emaldo_wear_cost": round(result.emaldo_wear_total, 4),
+        "emaldo_cycled_kwh": round(result.emaldo_cycled_kwh, 3),
+    }
 
 
 def compute_prices(
@@ -465,7 +504,7 @@ def _plan_pv_sell_slots(
     100% uninterrupted from a single cutover point onward.
 
     A single cutover slot T divides the day:
-      [start_slot, T)  — PV off: sell to grid (if sell_price > wear_cost)
+      [start_slot, T)  — PV off: sell to grid (if sell price beats storage)
       [T, end)         — PV on:  solar charges battery (default)
 
     T is the LATEST moment we can start charging and still reach soc_max
@@ -620,20 +659,44 @@ def _plan_pv_sell_slots(
     needed_kwh = final_need
 
     # Mark all solar slots in [sell_from, T_cutover) as sell (if profitable).
-    # Economic gate: exporting only beats storing when the export price is
-    # higher than the buy price at this slot — storing that kWh displaces a
-    # future grid buy (through the round-trip), so selling below the buy
-    # price loses money.  pv_sell_min_price_spread remains the config floor.
+    # Economic gate: storing a solar kWh displaces a future grid buy, so the
+    # marginal value of storage = the cheapest planned discharge slot's buy
+    # price, discounted by the full round-trip (charge + discharge losses).
+    # Export only when the sell price beats that stored value (AND the config
+    # floor).  Comparing against the same-slot buy price is wrong: that price
+    # always includes VAT + transfer fees, so it can never be beaten on a
+    # normal day and the gate is dead.  pv_sell_min_price_spread remains the
+    # absolute floor.  pv_sell_margin scales the threshold (e.g. 1.05 requires
+    # the export price to clear storage value by 5%).
     # Note: selling PV directly to grid incurs zero battery wear, so the
     # wear-cost term is not applied here (only round-trip charge/discharge).
+    discharge_slots = [sp.index for sp in slots if sp.action == "discharge"]
+    if discharge_slots:
+        sell_threshold = (
+            min(
+                (buy_prices[f] for f in discharge_slots if f < len(buy_prices)),
+                default=0.0,
+            )
+            * cfg.round_trip_factor
+            * cfg.pv_sell_margin
+        )
+    else:
+        # No discharge to displace — nothing to store for.  Fall back to the
+        # same-slot comparison (store now vs buy now), which is conservative.
+        sell_threshold = None
     for s in range(sell_from, T_cutover):
         sp = slot_map.get(s)
         if solar_15min[s] < _MIN_SOLAR_KW:
             continue
         if sp is not None and sp.action in ("charge", "charge_floor"):
             continue
-        if (sell_prices[s] > buy_prices[s]
-                and sell_prices[s] > cfg.pv_sell_min_price_spread):
+        if sell_prices[s] <= cfg.pv_sell_min_price_spread:
+            continue
+        if sell_threshold is not None:
+            above_threshold = sell_prices[s] > sell_threshold
+        else:
+            above_threshold = sell_prices[s] > buy_prices[s]
+        if above_threshold:
             pv_slots[s] = False
 
     cutover_h = (T_cutover * 15) // 60
@@ -1315,6 +1378,25 @@ def optimize(
             plan_actions[s] = "idle"
             available_soc += charge_kwh
 
+    # Discharge-assigned surplus slots also absorb solar — the Emaldo
+    # firmware charges from excess solar even in discharge mode.  The idle
+    # loop above skipped them (already assigned), which understated solar
+    # absorption in grid_charge_needed below.  Credit it here, scaled by
+    # the solar forecast margin so an over-forecast never leaves the plan
+    # grid-charge-starved.
+    for s in solar_surplus_slots:
+        if plan_actions.get(s) != "discharge":
+            continue
+        surplus_kw = -net_loads[s]
+        charge_kwh = (
+            min(surplus_kw, cfg.max_charge_kw)
+            * SLOT_DURATION_HOURS
+            * cfg.charge_efficiency
+        )
+        charge_kwh = min(charge_kwh, max(0.0, soc_max_kwh - available_soc))
+        charge_kwh *= cfg.solar_forecast_margin
+        available_soc += charge_kwh
+
     # Grid charging: only the deficit that solar + existing SoC cannot
     # cover for planned discharges.
     # Battery-internal kWh consumed per discharge slot = delivered_kwh / η_d.
@@ -1376,6 +1458,13 @@ def optimize(
         del plan_actions[_drop]
         _guard += 1
 
+    if _guard:
+        _LOGGER.debug(
+            "Over-commit correction: dropped %d discharge slot(s) to hold "
+            "floor %.1f%% (double-counted budget)",
+            _guard, cfg.soc_floor_target_pct,
+        )
+
     # Step 3b: SoC floor safeguard — keep-alive charging.
     # The greedy pass only charges when arbitrage is profitable.  On cloudy,
     # flat-price days no charge is planned and the unit's idle drain pulls
@@ -1400,6 +1489,7 @@ def optimize(
     actual_cost = 0.0
     baseline_cost = 0.0
     n_charge = n_discharge = n_idle = 0
+    cycled_kwh = 0.0  # battery-internal kWh discharged (F1 wear accounting)
 
     for s in range(n):
         action = "none"
@@ -1467,6 +1557,7 @@ def optimize(
                     load_kwh / cfg.discharge_efficiency,
                     max(0.0, soc - soc_min_kwh),
                 )
+                cycled_kwh += battery_draw
                 soc = max(soc - battery_draw - idle_drain, 0.0)
                 # Grid covers load portion the battery couldn't deliver
                 actual_grid_kwh += max(0.0, load_kwh - battery_draw * cfg.discharge_efficiency)
@@ -1539,6 +1630,7 @@ def optimize(
 
     # --- Emaldo plan cost: simulate battery following the Emaldo AI modes ---
     emaldo_cost = 0.0
+    e_cycled = 0.0  # battery-internal kWh discharged under the Emaldo plan
     if emaldo_modes is not None:
         e_soc = current_soc_kwh
         for s in range(n):
@@ -1569,6 +1661,7 @@ def optimize(
                     e_load_kwh / cfg.discharge_efficiency,
                     max(0.0, e_soc - soc_min_kwh),
                 )
+                e_cycled += e_bat_draw
                 e_soc = max(e_soc - e_bat_draw - idle_drain, 0.0)
                 # Grid covers load portion the battery couldn't deliver
                 e_grid_kwh += max(0.0, e_load_kwh - e_bat_draw * cfg.discharge_efficiency)
@@ -1578,16 +1671,35 @@ def optimize(
                 e_grid_kwh = max(net_loads[s], 0) * SLOT_DURATION_HOURS
             emaldo_cost += e_bp * e_grid_kwh - e_sp * e_export_kwh
 
+    # F1: battery wear is a real cost of every discharge kWh.  Report net
+    # savings (gross minus wear) so the headline number is honest; the
+    # plan-cost sensors follow suit (baseline_cost - net_profit nets wear
+    # in).  The cost-breakdown attributes expose the grid and wear
+    # components separately for dashboards.
+    # Emaldo's plan is netted the same way so the benchmark compares like
+    # with like (its schedule also cycles the battery).
+    wear_total = cfg.wear_cost_per_kwh * cycled_kwh
+    gross_profit = baseline_cost - actual_cost  # positive = savings vs no battery
+    emaldo_wear_total = cfg.wear_cost_per_kwh * e_cycled
+    emaldo_grid_cost = emaldo_cost  # pre-wear grid cost (net of export revenue)
+    emaldo_cost -= emaldo_wear_total  # unchanged net semantics
+
     result = OptimizationResult(
         slots=result_slots,
-        total_profit=baseline_cost - actual_cost,  # positive = savings vs no battery
+        total_profit=gross_profit,
         baseline_cost=baseline_cost,
         emaldo_cost=emaldo_cost,
         emaldo_modes=emaldo_modes or [],
+        emaldo_grid_cost=emaldo_grid_cost,
+        emaldo_wear_total=emaldo_wear_total,
+        emaldo_cycled_kwh=e_cycled,
         charge_slots=n_charge,
         discharge_slots=n_discharge,
         idle_slots=n_idle,
         safeguard_slots=sorted(safeguard_slots),
+        cycled_kwh=cycled_kwh,
+        wear_cost_total=wear_total,
+        net_profit=gross_profit - wear_total,
     )
 
     if enable_pv_strategy:

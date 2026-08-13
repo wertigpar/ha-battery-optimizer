@@ -54,6 +54,9 @@ from .const import (
     DEFAULT_SOC_RECOVERY_BUFFER_PCT,
     LOW_SOC_RERUN_MARGIN_PCT,
     LOW_SOC_RERUN_THROTTLE_MIN,
+    IDLE_GAP_RERUN_THROTTLE_MIN,
+    SOC_DIVERGENCE_RERUN_THRESHOLD_PCT,
+    SOC_DIVERGENCE_RERUN_THROTTLE_MIN,
     CONF_IDLE_STRATEGY,
     CONF_PRICE_SOURCE,
     PRICE_SOURCE_EMALDO,
@@ -66,6 +69,8 @@ from .const import (
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
     CONF_ENABLE_EMALDO_CONTROL,
     CONF_SOLAR_FORECAST_MODE,
+    CONF_SOLAR_FORECAST_SCALE,
+    CONF_SOLAR_ACTUAL_SENSOR,
     SOLAR_FORECAST_P10,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
@@ -73,6 +78,7 @@ from .const import (
     DEFAULT_ENABLE_EMALDO_CONTROL,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_SOLAR_FORECAST_MODE,
+    DEFAULT_SOLAR_FORECAST_SCALE,
     DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
@@ -84,10 +90,14 @@ from .const import (
 from .optimizer import (
     BatteryConfig,
     OptimizationResult,
+    SlotPlan,
     compute_prices,
     interpolate_solar_to_15min,
     optimize,
 )
+from .solar_scale import resolve_solar_scale
+from .solar_actual import counter_delta_kwh, normalize_to_kwh, resolve_solar_source
+from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -128,6 +138,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._entry = entry
         self._unsub_listeners: list[CALLBACK_TYPE] = []
         self._unsub_ha_started: CALLBACK_TYPE | None = None
+        self._unsub_startup: CALLBACK_TYPE | None = None
+        self._startup_attempts: int = 0
         self._last_result: OptimizationResult | None = None
         self._last_result_tomorrow: OptimizationResult | None = None
         self._last_run: datetime | None = None
@@ -157,6 +169,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "battery_optimizer_accuracy.json"
         )
         self._accuracy_history: list[dict] | None = None
+        # Persisted last-run runtime state — plan + snapshot survive restarts
+        # so the first accuracy compute after boot has data immediately.
+        self._runtime_state_path = self.hass.config.path(
+            "battery_optimizer_runtime.json"
+        )
+        self._runtime_state_restored = False
+        # Solar forecast scale — resolved per run, applied at the forecast
+        # choke point. The last value used by a plan run is retained so the
+        # NEXT accuracy computation can attribute the error to the scale that
+        # actually produced the slots being measured.
+        self._solar_scale: float = 1.0
+        self._last_result_solar_scale: float = 1.0
         # PV sell strategy
         self._pv_strategy_enabled: bool = self.config.get(
             CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY
@@ -170,6 +194,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         # Low-SoC forced re-run throttle
         self._last_low_soc_rerun: datetime | None = None
+        # L2 idle-gap replan throttle
+        self._last_idle_gap_rerun: datetime | None = None
+        # L3 divergence replan throttle
+        self._last_divergence_rerun: datetime | None = None
         # Startup flag — suppresses false-positive warnings before HA has fully started
         self._ha_started: bool = False
         # Emaldo device identity — resolved from hass.data at setup for device_info
@@ -340,6 +368,35 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         cfg = self._build_battery_config()
+
+        # L3 — divergence check (independent of the SoC safeguard): actual SoC
+        # has drifted more than the threshold from what the current plan
+        # projects for this slot.  Catches forecast error / unexpected loads /
+        # cheap-day under-discharge between the polled checkpoints.  Throttled
+        # so a SoC sensor that updates every few seconds cannot storm replans.
+        if self._last_result is not None:
+            now_slot = _current_slot_index()
+            if now_slot < len(self._last_result.slots):
+                planned_soc = self._last_result.slots[now_slot].soc_after
+                if abs(soc - planned_soc) > SOC_DIVERGENCE_RERUN_THRESHOLD_PCT:
+                    now = dt_util.now()
+                    if (
+                        self._last_divergence_rerun is not None
+                        and (now - self._last_divergence_rerun).total_seconds()
+                        < SOC_DIVERGENCE_RERUN_THROTTLE_MIN * 60
+                    ):
+                        return
+                    self._last_divergence_rerun = now
+                    _LOGGER.info(
+                        "SoC divergence: actual=%.1f%%, planned=%.1f%% "
+                        "(>%.0f%%) — forcing replan",
+                        soc, planned_soc, SOC_DIVERGENCE_RERUN_THRESHOLD_PCT,
+                    )
+                    self.hass.async_create_task(
+                        self.run_optimizer(reason="soc_divergence", force=True)
+                    )
+                    return
+
         if not cfg.enable_soc_safeguard:
             return
         if soc >= cfg.soc_min + LOW_SOC_RERUN_MARGIN_PCT:
@@ -633,7 +690,25 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             _LOGGER.debug("Solar forecast mode: P50 (median)")
             slots_30min = [s.get("pv_estimate", 0.0) for s in detailed]
-        return interpolate_solar_to_15min(slots_30min)
+        forecast_15 = interpolate_solar_to_15min(slots_30min)
+        # Whole-day over-forecast compensation. The constant multiplier
+        # commutes with the linear interpolation, so scaling AFTER it yields
+        # the same profile as scaling the 30-min slots.
+        return [v * self._solar_scale for v in forecast_15]
+
+    def _resolve_solar_scale(self) -> float:
+        """Resolve the whole-day solar scale: manual config or auto-tune.
+
+        Runs inside an executor (sync file I/O when the sidecar history has
+        not been loaded yet). ``0.0`` in config means "auto": tune the scale
+        from the persisted accuracy history via EWMA over raw-basis ratios.
+        """
+        configured = self.config.get(
+            CONF_SOLAR_FORECAST_SCALE, DEFAULT_SOLAR_FORECAST_SCALE
+        )
+        if self._accuracy_history is None:
+            self._accuracy_history = self._load_accuracy_history()
+        return resolve_solar_scale(configured, self._accuracy_history)
 
     def _resolve_emaldo_entity(self, key: str, domain: str = "sensor") -> str | None:
         """Resolve an Emaldo entity_id from the entity registry.
@@ -702,6 +777,24 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return float(state.state)
         except (ValueError, TypeError):
             return None
+
+    def _read_external_solar_kwh(self) -> float | None:
+        """Read the configured actual-solar counter, normalized to kWh.
+
+        Returns None when not configured, unavailable, non-numeric, or the
+        unit is neither Wh nor kWh — the caller decides fallback vs skip.
+        """
+        sensor_id = self.config.get(CONF_SOLAR_ACTUAL_SENSOR, "")
+        if not sensor_id:
+            return None
+        state = self.hass.states.get(sensor_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            value = float(state.state)
+        except (ValueError, TypeError):
+            return None
+        return normalize_to_kwh(value, state.attributes.get("unit_of_measurement"))
 
     # ── Auto base load ────────────────────────────────────────────────
 
@@ -835,19 +928,37 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elapsed += 1
 
         snap = self._last_run_actual_snapshot or {}
+        ext_now = self._read_external_solar_kwh()
+        solar_source = resolve_solar_source(
+            self.config.get(CONF_SOLAR_ACTUAL_SENSOR, "") != "",
+            "solar_ext" in snap and snap["solar_ext"] is not None,
+            ext_now is not None,
+        )
+        if solar_source == "skip":
+            _LOGGER.warning(
+                "External solar sensor (%s) unavailable — skipping accuracy "
+                "record to keep auto-tune training data single-sourced",
+                self.config.get(CONF_SOLAR_ACTUAL_SENSOR, ""),
+            )
+            return None
+
         accuracy: dict = {
             "elapsed_slots": elapsed,
             "planned_discharge_kwh": round(planned_discharge, 3),
             "planned_charge_kwh": round(planned_charge, 3),
             "planned_solar_kwh": round(planned_solar, 3),
+            "solar_scale_used": round(self._last_result_solar_scale, 3),
+            "solar_source": solar_source,
             "last_run": self._last_run.isoformat() if self._last_run else None,
         }
 
-        for emaldo_key, snap_key in [
+        emaldo_pairs = [
             ("battery_discharged_today", "discharge"),
             ("battery_charged_today", "charge"),
-            ("solar_energy_today", "solar"),
-        ]:
+        ]
+        if solar_source == "emaldo":
+            emaldo_pairs.append(("solar_energy_today", "solar"))
+        for emaldo_key, snap_key in emaldo_pairs:
             actual = self._read_emaldo_sensor_float(emaldo_key)
             if actual is not None and snap_key in snap and snap[snap_key] is not None:
                 delta = actual - snap[snap_key]
@@ -871,12 +982,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     accuracy[f"{snap_key}_reset_crossed"] = True
 
+        if solar_source == "external":
+            ext_delta, ext_reset = counter_delta_kwh(snap["solar_ext"], ext_now)
+            accuracy["actual_solar_kwh"] = round(ext_delta, 3)
+            accuracy["solar_error_kwh"] = round(
+                ext_delta - accuracy["planned_solar_kwh"], 3
+            )
+            if ext_reset:
+                accuracy["solar_reset_crossed"] = True
+
         return accuracy
 
     # ── Accuracy history (persisted JSON sidecar) ──────────────────────
 
     _ACCURACY_HISTORY_MAX_RECORDS = 1000
     _ACCURACY_HISTORY_MAX_AGE_DAYS = 60
+
+    # Startup run — short grace, then retry while Emaldo SoC is unreadable.
+    _STARTUP_GRACE_S = 15
+    _STARTUP_RETRY_DELAY_S = 30
+    _STARTUP_MAX_ATTEMPTS = 4
 
     def _load_accuracy_history(self) -> list[dict]:
         """Load persisted accuracy history from the JSON sidecar file."""
@@ -898,6 +1023,83 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning(
                 "Could not write accuracy history to %s", self._accuracy_history_path
             )
+
+    def _load_runtime_state(self) -> dict | None:
+        """Load persisted last-run runtime state; None when unusable."""
+        try:
+            with open(self._runtime_state_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _save_runtime_state(self) -> None:
+        """Persist the current last-run plan + snapshot for restart survival."""
+        if not self._last_result or self._last_run_slot is None or not self._last_run:
+            return
+        try:
+            with open(self._runtime_state_path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    serialize_runtime(
+                        last_run_slot=self._last_run_slot,
+                        last_run_initial_soc=self._last_run_initial_soc,
+                        last_run_scale=self._last_result_solar_scale,
+                        last_run_ts=self._last_run.isoformat(),
+                        snapshot=self._last_run_actual_snapshot or {},
+                        plan_slots=prune_plan_slots(
+                            self._last_result.slots, self._last_run_slot
+                        ),
+                    ),
+                    fh,
+                )
+        except OSError:
+            _LOGGER.warning(
+                "Could not write last-run runtime state to %s",
+                self._runtime_state_path,
+            )
+
+    async def _restore_runtime_state(self) -> None:
+        """Rehydrate the previous run's plan + snapshot after an HA restart.
+
+        Idempotent. Stale-day payloads (rebuild_runtime returns None) leave the
+        coordinator in the normal cold-start state (accuracy needs 2 runs).
+        File I/O runs on the executor — never blocks the event loop.
+        """
+        if self._runtime_state_restored:
+            return
+        self._runtime_state_restored = True
+        data = await self.hass.async_add_executor_job(self._load_runtime_state)
+        restored = rebuild_runtime(data, dt_util.now()) if data else None
+        if restored is None:
+            _LOGGER.info(
+                "No usable last-run runtime state — accuracy chain starts fresh"
+            )
+            return
+        self._last_run_slot = restored["last_run_slot"]
+        self._last_run_initial_soc = restored["last_run_initial_soc"]
+        self._last_result_solar_scale = restored["last_run_scale"]
+        self._last_run = dt_util.parse_datetime(restored["last_run"])
+        self._last_run_actual_snapshot = dict(restored["snapshot"])
+        self._last_result = OptimizationResult(
+            slots=[
+                SlotPlan(
+                    index=e[0],
+                    action=e[1],
+                    slot_value=0,
+                    buy_price=0.0,
+                    sell_price=0.0,
+                    soc_after=e[2],
+                    solar_kw=e[3],
+                )
+                for e in restored["plan_slots"]
+            ]
+        )
+        _LOGGER.info(
+            "Restored last-run runtime state: slot %d, %d plan slots, scale %.3f",
+            self._last_run_slot,
+            len(restored["plan_slots"]),
+            self._last_result_solar_scale,
+        )
 
     def _prune_accuracy_history(self) -> None:
         """Drop records older than the retention window and cap the list."""
@@ -974,6 +1176,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "planned_solar_kwh": accuracy.get("planned_solar_kwh"),
                 "actual_solar_kwh": accuracy.get("actual_solar_kwh"),
                 "solar_error_kwh": accuracy.get("solar_error_kwh"),
+                "solar_scale_used": accuracy.get("solar_scale_used"),
+                "solar_source": accuracy.get("solar_source"),
+                "solar_reset_crossed": accuracy.get("solar_reset_crossed"),
                 "planned_discharge_kwh": accuracy.get("planned_discharge_kwh"),
                 "actual_discharge_kwh": accuracy.get("actual_discharge_kwh"),
                 "discharge_error_kwh": accuracy.get("discharge_error_kwh"),
@@ -994,6 +1199,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             reason: Why this run was triggered.
             force: If False, skip if conditions haven't changed enough.
         """
+        await self._restore_runtime_state()
         _LOGGER.info("Optimizer triggered: reason=%s, force=%s", reason, force)
 
         # Gather data
@@ -1012,6 +1218,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             len(prices_today), min(prices_today), max(prices_today),
         )
 
+        # Solar forecast scale — manual config or auto-tuned from the accuracy
+        # sidecar (executor: sync file I/O). Applied inside _get_solcast_forecast.
+        self._solar_scale = await self.hass.async_add_executor_job(
+            self._resolve_solar_scale
+        )
         solar = self._get_solcast_forecast("today")
         soc = self._get_battery_soc()
         self._auto_base_load_value = await self._fetch_auto_base_load_kw()
@@ -1079,6 +1290,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_result = result
         self._last_run = dt_util.now()
         self._last_reason = reason
+        # Retain the scale THIS plan ran under — the next run's accuracy
+        # comparison attributes the solar error to it (raw-basis recovery).
+        self._last_result_solar_scale = self._solar_scale
 
         # Snapshot actual values for next accuracy comparison
         self._last_run_slot = now_slot
@@ -1088,6 +1302,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "charge": self._read_emaldo_sensor_float("battery_charged_today"),
             "solar": self._read_emaldo_sensor_float("solar_energy_today"),
         }
+        if self.config.get(CONF_SOLAR_ACTUAL_SENSOR, ""):
+            # None when unavailable → accuracy skips the record rather than
+            # mixing the Emaldo estimate into the external-source series.
+            self._last_run_actual_snapshot["solar_ext"] = (
+                self._read_external_solar_kwh()
+            )
+
+        await self.hass.async_add_executor_job(self._save_runtime_state)
 
         # Optimize tomorrow if prices available
         if prices_tomorrow is not None:
@@ -1154,6 +1376,33 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info(
                 "SoC deviation: actual=%.1f%%, planned=%.1f%% — re-optimizing",
                 current_soc, planned_soc,
+            )
+            return True
+
+        # L2 — idle-gap gate: the plan leaves the current slot idle while the
+        # grid is actually buying at a price above wear cost and the battery
+        # has headroom.  A re-run with the real (possibly higher) SoC lets the
+        # discharge allocation open the slot (SPLIT budget / plateau-edge
+        # shift) that the plan-time projection kept closed.
+        sp = self._last_result.slots[now_slot]
+        if (
+            sp.action in ("idle", "none")
+            and sp.buy_price > cfg.wear_cost_per_kwh
+            and sp.load_kw > sp.solar_kw + 0.01  # grid buying this slot
+            and current_soc > cfg.soc_min + LOW_SOC_RERUN_MARGIN_PCT
+        ):
+            now = dt_util.now()
+            if (
+                self._last_idle_gap_rerun is not None
+                and (now - self._last_idle_gap_rerun).total_seconds()
+                < IDLE_GAP_RERUN_THROTTLE_MIN * 60
+            ):
+                return False
+            self._last_idle_gap_rerun = now
+            _LOGGER.info(
+                "Idle-gap: plan idle @ %.1f%% while grid buys %.3f€/kWh "
+                "(wear %.3f€/kWh) — re-optimizing",
+                current_soc, sp.buy_price, cfg.wear_cost_per_kwh,
             )
             return True
 
@@ -1591,11 +1840,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._unsub_guard()
                 self._unsub_guard = None
 
-        # 5) Delayed startup run — populate sensors after restart
-        unsub = async_call_later(
-            self.hass, 90, self._startup_callback,
-        )
-        self._unsub_listeners.append(unsub)
+        # 5) Delayed startup run — populate sensors after restart.  Short
+        #    grace period + retry while the battery SoC is unreadable
+        #    (Emaldo stream not yet established) — replaces the old blanket
+        #    90s delay that burned a run during slow boots.
+        self._startup_attempts = 0
+        self._schedule_startup_run(self._STARTUP_GRACE_S)
 
         # 6) PV switch reconciliation — checks every 5 min that the switch
         #    matches the plan, catching restarts that lost transition timers
@@ -1613,10 +1863,40 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_ha_started = None
 
     @callback
+    def _schedule_startup_run(self, delay_s: int) -> None:
+        """Arm the one-shot startup run timer; cancels any prior arm."""
+        if self._unsub_startup is not None:
+            self._unsub_startup()
+        self._unsub_startup = async_call_later(
+            self.hass, delay_s, self._startup_callback
+        )
+
+    @callback
     def _startup_callback(self, _now) -> None:
-        """Run optimizer once after startup to restore sensor state."""
+        """Run optimizer once after startup to restore sensor state.
+
+        Retries with a growing delay while the battery SoC is unreadable
+        (Emaldo stream still establishing).  After ``_STARTUP_MAX_ATTEMPTS``
+        it gives up — the checkpoint interval / price watcher take over.
+        """
+        self._unsub_startup = None
         if self._last_result is not None:
             return  # Already ran (e.g. Nordpool triggered first)
+        self._startup_attempts += 1
+        if self._startup_attempts > self._STARTUP_MAX_ATTEMPTS:
+            _LOGGER.warning(
+                "Startup run gave up after %d attempts — battery SoC unreadable; "
+                "checkpoint/price watchers will take over",
+                self._STARTUP_MAX_ATTEMPTS,
+            )
+            return
+        if self._get_battery_soc() is None:
+            _LOGGER.info(
+                "Startup run attempt %d — battery SoC not ready, retrying in %ds",
+                self._startup_attempts, self._STARTUP_RETRY_DELAY_S,
+            )
+            self._schedule_startup_run(self._STARTUP_RETRY_DELAY_S)
+            return
         _LOGGER.info("Startup delayed run — populating optimizer sensors")
         self.hass.async_create_task(
             self.run_optimizer(reason="startup", force=True)
@@ -1965,6 +2245,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._unsub_ha_started is not None:
             self._unsub_ha_started()
             self._unsub_ha_started = None
+        if self._unsub_startup is not None:
+            self._unsub_startup()
+            self._unsub_startup = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """DataUpdateCoordinator callback — returns current state."""

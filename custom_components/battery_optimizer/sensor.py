@@ -20,7 +20,11 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SLOTS_PER_DAY, SLOT_DURATION_HOURS
 from .coordinator import BatteryOptimizerCoordinator, _current_slot_index
-from .optimizer import OptimizationResult
+from .optimizer import (
+    OptimizationResult,
+    emaldo_plan_cost_breakdown,
+    optimizer_plan_cost_breakdown,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -172,7 +176,12 @@ class _TomorrowBaseOptimizerSensor(_BaseOptimizerSensor):
 
 
 class EstimatedSavingsSensor(_BaseOptimizerSensor):
-    """Rest-of-day estimated savings/profit from optimized schedule."""
+    """Rest-of-day estimated savings/profit from optimized schedule.
+
+    Value is NET savings: gross savings minus battery wear cost, so the
+    headline number reflects what is actually gained.  Gross savings and
+    the wear breakdown are exposed as attributes.
+    """
 
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_native_unit_of_measurement = "€"
@@ -186,7 +195,17 @@ class EstimatedSavingsSensor(_BaseOptimizerSensor):
     def native_value(self) -> float | None:
         if self._result is None:
             return None
-        return round(self._result.total_profit, 4)
+        return round(self._result.net_profit, 4)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None:
+            return {}
+        return {
+            "gross_savings": round(self._result.total_profit, 4),
+            "wear_cost": round(self._result.wear_cost_total, 4),
+            "cycled_kwh": round(self._result.cycled_kwh, 3),
+        }
 
 
 class BaselineCostSensor(_BaseOptimizerSensor):
@@ -224,6 +243,12 @@ class EmaldoPlanCostSensor(_BaseOptimizerSensor):
             return None
         return round(self._result.emaldo_cost, 4)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None:
+            return {}
+        return emaldo_plan_cost_breakdown(self._result)
+
 
 class OptimizerPlanCostSensor(_BaseOptimizerSensor):
     """Rest-of-day estimated cost following the optimizer's schedule."""
@@ -240,7 +265,14 @@ class OptimizerPlanCostSensor(_BaseOptimizerSensor):
     def native_value(self) -> float | None:
         if self._result is None:
             return None
-        return round(self._result.baseline_cost - self._result.total_profit, 4)
+        # Net plan cost: baseline minus NET savings (wear included).
+        return round(self._result.baseline_cost - self._result.net_profit, 4)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None:
+            return {}
+        return optimizer_plan_cost_breakdown(self._result)
 
 
 class TomorrowEstimatedSavingsSensor(_TomorrowBaseOptimizerSensor):
@@ -258,7 +290,7 @@ class TomorrowEstimatedSavingsSensor(_TomorrowBaseOptimizerSensor):
     def native_value(self) -> float | None:
         if self._result is None:
             return None
-        return round(self._result.total_profit, 4)
+        return round(self._result.net_profit, 4)
 
 
 class TomorrowBaselineCostSensor(_TomorrowBaseOptimizerSensor):
@@ -296,6 +328,12 @@ class TomorrowEmaldoPlanCostSensor(_TomorrowBaseOptimizerSensor):
             return None
         return round(self._result.emaldo_cost, 4)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None:
+            return {}
+        return emaldo_plan_cost_breakdown(self._result)
+
 
 class TomorrowOptimizerPlanCostSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated cost following the optimizer's schedule."""
@@ -312,7 +350,14 @@ class TomorrowOptimizerPlanCostSensor(_TomorrowBaseOptimizerSensor):
     def native_value(self) -> float | None:
         if self._result is None:
             return None
-        return round(self._result.baseline_cost - self._result.total_profit, 4)
+        # Net plan cost: baseline minus NET savings (wear included).
+        return round(self._result.baseline_cost - self._result.net_profit, 4)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None:
+            return {}
+        return optimizer_plan_cost_breakdown(self._result)
 
 
 class EmaldoScheduleChartSensor(_BaseOptimizerSensor):
