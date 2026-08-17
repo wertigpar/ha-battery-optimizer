@@ -11,13 +11,18 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    ConfigSubentry,
+    ConfigSubentryFlow,
     OptionsFlow,
     OptionsFlowWithConfigEntry,
 )
 from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv
 
 from .const import (
     DOMAIN,
+    SUBENTRY_TYPE_RULE,
+    DEFAULT_RULE_LABEL,
     CONF_SPOT_SENSOR,
     CONF_SOLCAST_TODAY,
     CONF_SOLCAST_TOMORROW,
@@ -84,6 +89,15 @@ from .const import (
     DEFAULT_SOLAR_FORECAST_SCALE,
     DEFAULT_SOLAR_ACTUAL_SENSOR,
     SOLAR_SCALE_MAX,
+)
+from .rules import (
+    UserRule,
+    rule_errors,
+    rule_from_data,
+    LEVEL_WEEKDAY,
+    LEVEL_DATE,
+    ACTIONS,
+    PV_BEHAVIORS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -285,6 +299,112 @@ def _build_schema(
     )
 
 
+def _rule_schema(defaults: dict | None = None) -> vol.Schema:
+    d = defaults or {}
+    return vol.Schema(
+        {
+            vol.Optional("label", default=d.get("label", "")): str,
+            vol.Required(
+                "level", default=d.get("level", LEVEL_WEEKDAY)
+            ): vol.In([LEVEL_WEEKDAY, LEVEL_DATE]),
+            vol.Optional(
+                "days", default=d.get("days", [0])
+            ): vol.All(cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))]),
+            vol.Optional("start_date", default=d.get("start_date", "")): str,
+            vol.Optional("end_date", default=d.get("end_date", "")): str,
+            vol.Required("start_time", default=d.get("start_time", "07:00")): str,
+            vol.Required("end_time", default=d.get("end_time", "17:00")): str,
+            vol.Required(
+                "action", default=d.get("action", "charge")
+            ): vol.In(ACTIONS),
+            vol.Optional(
+                "soc_target", default=d.get("soc_target", 90)
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+            vol.Required(
+                "pv_sell", default=d.get("pv_sell", "inherit")
+            ): vol.In(PV_BEHAVIORS),
+        }
+    )
+
+
+class RuleSubentryFlow(ConfigSubentryFlow):
+    """Create or edit a schedule rule subentry."""
+
+    async def _shared_show_form(self, defaults: dict | None, errors: dict | None):
+        return self.async_show_form(
+            step_id=self.init_step or "user",
+            data_schema=_rule_schema(defaults),
+            errors=errors or {},
+        )
+
+    async def async_step_user(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        return await self._process(user_input)
+
+    async def async_step_reconfigure(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        subentry = self._get_reconfigure_subentry()
+        if user_input is None:
+            return await self._shared_show_form(
+                defaults=dict(subentry.data), errors=None
+            )
+        return await self._process(user_input, editing=subentry)
+
+    async def _process(
+        self,
+        user_input: dict | None,
+        editing: ConfigSubentry | None = None,
+    ) -> ConfigFlowResult:
+        if user_input is None:
+            return await self._shared_show_form(defaults=None, errors=None)
+
+        rule = rule_from_data(user_input)
+        siblings = self._same_level_siblings(rule.level, editing)
+        errors = rule_errors(rule, siblings)
+        if errors:
+            return await self._shared_show_form(
+                defaults=user_input, errors={"base": "; ".join(errors)}
+            )
+
+        data = {
+            "level": rule.level,
+            "days": rule.days,
+            "start_date": rule.start_date,
+            "end_date": rule.end_date,
+            "start_time": rule.start_time,
+            "end_time": rule.end_time,
+            "action": rule.action,
+            "soc_target": rule.soc_target,
+            "pv_sell": rule.pv_sell,
+            "label": rule.label,
+        }
+        title = rule.label or f"{rule.level} {rule.start_time}-{rule.end_time}"
+
+        if editing is not None:
+            entry = self._get_entry()
+            return self.async_update_and_abort(
+                entry=entry, subentry=editing, data=data, title=title
+            )
+        return self.async_create_entry(title=title, data=data)
+
+    def _same_level_siblings(
+        self, level: str, editing: ConfigSubentry | None
+    ) -> list[UserRule]:
+        entry = self._get_entry()
+        siblings = []
+        for sub in entry.subentries.values():
+            if sub.subentry_type != SUBENTRY_TYPE_RULE:
+                continue
+            if editing is not None and sub.subentry_id == editing.subentry_id:
+                continue
+            rule = rule_from_data(dict(sub.data))
+            if rule.level == level:
+                siblings.append(rule)
+        return siblings
+
+
 class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Battery Optimizer."""
 
@@ -294,6 +414,14 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         return BatteryOptimizerOptionsFlow(config_entry)
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Return supported subentry types: schedule rules."""
+        return {SUBENTRY_TYPE_RULE: RuleSubentryFlow}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

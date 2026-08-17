@@ -14,8 +14,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    SUBENTRY_TYPE_RULE,
+    DEFAULT_RULE_LABEL,
+)
 from .coordinator import BatteryOptimizerCoordinator
+from .rules import LEVEL_DEFAULT, ACTION_OPTIMIZER
 from .services import async_register_services, async_unregister_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,11 +28,50 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
 
 
+async def _ensure_default_rule(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Create the default 'optimizer everywhere' rule subentry if absent.
+
+    Called on every setup — recreates it even if the user deleted it, so
+    the default rule is effectively non-deletable.
+    """
+    existing = [
+        sub
+        for sub in entry.subentries.values()
+        if sub.subentry_type == SUBENTRY_TYPE_RULE
+    ]
+    if any(dict(sub.data).get("level") == LEVEL_DEFAULT for sub in existing):
+        return
+    from homeassistant.config_entries import ConfigSubentry
+
+    hass.config_entries.async_add_subentry(
+        entry,
+        ConfigSubentry(
+            subentry_type=SUBENTRY_TYPE_RULE,
+            title=DEFAULT_RULE_LABEL,
+            unique_id="default_rule",
+            data={
+                "level": LEVEL_DEFAULT,
+                "days": [],
+                "start_date": None,
+                "end_date": None,
+                "start_time": "00:00",
+                "end_time": "24:00",
+                "action": ACTION_OPTIMIZER,
+                "soc_target": None,
+                "pv_sell": "inherit",
+                "label": DEFAULT_RULE_LABEL,
+            },
+        ),
+    )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Battery Optimizer from a config entry."""
     coordinator = BatteryOptimizerCoordinator(hass, entry)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    await _ensure_default_rule(hass, entry)
 
     # Set up checkpoint & Nordpool listeners
     coordinator.async_setup_listeners()

@@ -102,11 +102,29 @@
       "emaldo_schedule_chart": { "name": "Emaldo Schedule" },
       "schedule_chart": { "name": "Schedule Chart" },
       "auto_base_load": { "name": "Auto Base Load" },
-      "plan_accuracy": { "name": "Plan Accuracy" }
+      "plan_accuracy": { "name": "Plan Accuracy" },
+      "user_schedule_chart": { "name": "User Schedule" }
     },
     "switch": {
       "pv_strategy": { "name": "PV Sell Strategy" },
       "emaldo_control_enable": { "name": "Emaldo Control" }
+    }
+  },
+  "subentry": {
+    "rule": {
+      "title": "Schedule rule",
+      "data": {
+        "label": "Label",
+        "level": "Applies to",
+        "days": "Weekdays",
+        "start_date": "Start date",
+        "end_date": "End date",
+        "start_time": "Start time",
+        "end_time": "End time",
+        "action": "Action",
+        "soc_target": "SoC target (%)",
+        "pv_sell": "PV behavior"
+      }
     }
   }
 }

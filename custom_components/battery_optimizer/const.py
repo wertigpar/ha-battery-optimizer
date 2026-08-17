@@ -124,3 +124,7 @@ SLOT_DURATION_HOURS = 0.25  # 15 minutes
 
 # Fixed midnight checkpoint (always runs regardless of interval)
 MIDNIGHT_CHECKPOINT = (0, 1)
+
+# ── Config subentries ────────────────────────────────────────────────
+SUBENTRY_TYPE_RULE = "rule"
+DEFAULT_RULE_LABEL = "Default"
