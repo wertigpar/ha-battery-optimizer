@@ -251,6 +251,7 @@ def _simulate_soc_trajectory(
     *,
     start_slot: int,
     initial_soc_kwh: float,
+    charge_targets: dict[int, int] | None = None,
 ) -> list[float]:
     """Forward-simulate the true (unclamped) SoC trajectory in kWh.
 
@@ -274,8 +275,9 @@ def _simulate_soc_trajectory(
             continue
         action = plan_actions.get(s)
         if action == "charge":
+            target_kwh = cfg.capacity_kwh * (charge_targets or {}).get(s, int(cfg.soc_max)) / 100.0
             charge_kwh = cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
-            soc = min(soc + charge_kwh - idle_drain, soc_max_kwh)
+            soc = min(soc + charge_kwh - idle_drain, target_kwh)
         elif action == "charge_floor":
             # Keep-alive charge: battery charges only up to the floor target
             # ("charge to N%" byte stops at N%).

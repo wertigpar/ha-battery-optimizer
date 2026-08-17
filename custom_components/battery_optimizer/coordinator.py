@@ -6,7 +6,7 @@ and pushes the resulting schedule to the Emaldo integration.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import json
 import logging
 from typing import Any
@@ -30,6 +30,7 @@ from .const import (
     EMALDO_DOMAIN,
     SLOT_NO_OVERRIDE,
     SLOT_IDLE,
+    SUBENTRY_TYPE_RULE,
     SLOTS_PER_DAY,
     MIDNIGHT_CHECKPOINT,
     CONF_SPOT_SENSOR,
@@ -94,6 +95,15 @@ from .optimizer import (
     compute_prices,
     interpolate_solar_to_15min,
     optimize,
+    _simulate_soc_trajectory,
+)
+from .rules import (
+    UserRule,
+    rule_from_data,
+    expand_day,
+    mask_plan,
+    LEVEL_DEFAULT,
+    SlotWinner,
 )
 from .solar_scale import resolve_solar_scale
 from .solar_actual import counter_delta_kwh, normalize_to_kwh, resolve_solar_source
@@ -144,6 +154,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_result_tomorrow: OptimizationResult | None = None
         self._last_run: datetime | None = None
         self._last_reason: str = ""
+        self._last_sources: list[str] | None = None
+        self._last_user_winners: list[SlotWinner] | None = None
         self._activated_time: str | None = None
         # SoC Guard state
         self._unsub_guard: CALLBACK_TYPE | None = None
@@ -1287,6 +1299,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         result.reason = reason
 
+        # ── User schedule layer: apply rules as a mask ──────────────
+        user_rules = self._read_user_rules()
+        today_date = dt_util.now().date()
+        if any(r.action != "optimizer" or r.level != LEVEL_DEFAULT
+               for r in user_rules):
+            self._apply_user_mask(
+                result, user_rules, solar, cfg, start_slot=now_slot,
+                initial_soc_kwh=cfg.capacity_kwh * soc / 100.0,
+                day=today_date,
+            )
+        else:
+            # only the default optimizer rule — pure fast path, unchanged
+            self._last_sources = None
+            self._last_user_winners = None
+
         self._last_result = result
         self._last_run = dt_util.now()
         self._last_reason = reason
@@ -1327,6 +1354,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 emaldo_modes=emaldo_modes,
             )
             self._last_result_tomorrow = result_tomorrow
+            self._apply_user_mask(
+                result_tomorrow, user_rules, solar_tomorrow, cfg,
+                start_slot=0,
+                initial_soc_kwh=cfg.capacity_kwh * (
+                    result.slots[-1].soc_after if result.slots else cfg.soc_min
+                ) / 100.0,
+                day=(today_date + timedelta(days=1)),
+                store_last=False,
+            )
             _LOGGER.info(
                 "Tomorrow optimization: savings=%.4f€, C=%d D=%d I=%d",
                 result_tomorrow.total_profit,
@@ -1356,6 +1392,104 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         })
 
         return result
+
+    def _read_user_rules(self) -> list[UserRule]:
+        """Read schedule rules from config subentries."""
+        rules: list[UserRule] = []
+        try:
+            for sub in self._entry.subentries.values():
+                if sub.subentry_type != SUBENTRY_TYPE_RULE:
+                    continue
+                try:
+                    rules.append(rule_from_data(dict(sub.data)))
+                except Exception:
+                    _LOGGER.warning(
+                        "Skipping invalid schedule rule subentry %s", sub.subentry_id
+                    )
+        except Exception:
+            _LOGGER.warning("Could not read schedule rule subentries")
+        if not any(r.level == LEVEL_DEFAULT for r in rules):
+            rules.append(rule_from_data({
+                "level": LEVEL_DEFAULT, "days": [], "start_date": None,
+                "end_date": None, "start_time": "00:00", "end_time": "24:00",
+                "action": "optimizer", "soc_target": None,
+                "pv_sell": "inherit", "label": "Default",
+            }))
+        return rules
+
+    def _apply_user_mask(
+        self,
+        result: OptimizationResult,
+        rules: list[UserRule],
+        solar_15min: list[float],
+        cfg: BatteryConfig,
+        *,
+        start_slot: int,
+        initial_soc_kwh: float,
+        day: date,
+        store_last: bool = True,
+    ) -> None:
+        """Apply user rules to a result in place: bytes, PV, actions, SoC.
+
+        Slots where the winning rule is a manual action or 'original' get
+        their byte overwritten; optimizer/empty slots keep the plan.  The
+        SoC trajectory is re-simulated from the masked actions so
+        soc_after, tomorrow's start SoC, the SoC guard and the dashboard
+        forecast all reflect what will actually be pushed.
+        """
+        winners = expand_day(rules, day)
+        masked, masked_pv, sources, _pvs = mask_plan(
+            result.slot_values, result.thirdparty_pv_slots, winners
+        )
+        if store_last:
+            self._last_user_winners = winners
+            self._last_sources = sources
+
+        n_charge = n_discharge = n_idle = 0
+        charge_targets: dict[int, int] = {}
+        for sp in result.slots:
+            if sp.index < start_slot:
+                continue
+            byte = masked[sp.index]
+            sp.slot_value = byte
+            if byte == 0:
+                sp.action = "idle"
+                n_idle += 1
+            elif byte > 0x80:
+                sp.action = "discharge"
+                n_discharge += 1
+            elif byte == 0x80:
+                sp.action = "idle"  # original: AI decides; count as idle
+                n_idle += 1
+            else:  # 1..100
+                sp.action = "charge"
+                n_charge += 1
+                charge_targets[sp.index] = byte
+
+        plan_actions = {sp.index: sp.action for sp in result.slots}
+        net_loads = [cfg.base_load_kw - solar_15min[i] for i in range(96)]
+        traj_kwh = _simulate_soc_trajectory(
+            plan_actions, net_loads, solar_15min, cfg,
+            start_slot=start_slot, initial_soc_kwh=initial_soc_kwh,
+            charge_targets=charge_targets,
+        )
+        for sp in result.slots:
+            if sp.index < len(traj_kwh):
+                sp.soc_after = round(traj_kwh[sp.index] / cfg.capacity_kwh * 100.0, 1)
+        result.thirdparty_pv_slots = masked_pv
+        result.charge_slots = n_charge
+        result.discharge_slots = n_discharge
+        result.idle_slots = n_idle
+
+    @property
+    def last_sources(self) -> list[str] | None:
+        """Per-slot sources ('user'/'internal'/'optimizer') for today."""
+        return self._last_sources
+
+    @property
+    def last_user_winners(self) -> list[SlotWinner] | None:
+        """Winning rule decisions for today's plan."""
+        return self._last_user_winners
 
     def _should_reoptimize(self, current_soc: float | None, cfg: BatteryConfig) -> bool:
         """Check if conditions changed enough to warrant re-optimization.
@@ -1953,12 +2087,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     min_soc = plan[i].soc_after
 
         if min_soc is not None:
-            return max(int(min_soc), int(cfg.soc_min))
+            marker = max(int(min_soc), int(cfg.soc_min))
+        else:
+            # No discharge in this window — use soc_min (most permissive).
+            # This is safe because non-discharge slots (idle/charge) don't
+            # draw from the battery via grid, so the marker is a no-op.
+            marker = int(cfg.soc_min)
 
-        # No discharge in this window — use soc_min (most permissive).
-        # This is safe because non-discharge slots (idle/charge) don't
-        # draw from the battery via grid, so the marker is a no-op.
-        return int(cfg.soc_min)
+        # User rule floors: a user discharge@N rule in the look-ahead
+        # window is authoritative — never drain below it.
+        winners = getattr(self, "_last_user_winners", None)
+        if winners is not None:
+            guard_interval = self._config_int(
+                CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
+            ) or 120
+            window_end = min(now_slot + max(guard_interval, 15) // 15, 96)
+            for s in range(now_slot, window_end):
+                w = winners[s] if s < len(winners) else None
+                if w is not None and w.action == "discharge" and w.soc_target is not None:
+                    marker = min(marker, w.soc_target)
+        return marker
 
     @callback
     def _soc_guard_callback(self, now: datetime) -> None:
