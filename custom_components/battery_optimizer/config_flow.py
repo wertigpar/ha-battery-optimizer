@@ -22,7 +22,6 @@ from homeassistant.helpers import config_validation as cv
 from .const import (
     DOMAIN,
     SUBENTRY_TYPE_RULE,
-    DEFAULT_RULE_LABEL,
     CONF_SPOT_SENSOR,
     CONF_SOLCAST_TODAY,
     CONF_SOLCAST_TOMORROW,
