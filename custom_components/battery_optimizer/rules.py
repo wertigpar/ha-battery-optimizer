@@ -107,7 +107,7 @@ def rule_from_data(data: dict) -> UserRule:
     """
     return UserRule(
         level=data.get("level", LEVEL_DEFAULT),
-        days=list(data.get("days", [])),
+        days=list(data.get("days") or []),
         start_date=data.get("start_date") or None,
         end_date=data.get("end_date") or None,
         start_time=data.get("start_time", "00:00"),
@@ -160,6 +160,11 @@ def rule_errors(rule: UserRule, siblings: list[UserRule]) -> list[str]:
             errors.append("Date rule needs a start date")
         elif d1 is not None and d1 < d0:
             errors.append("End date before start date")
+        if start_m is not None and end_m is not None and end_m < start_m:
+            # overnight (end < start) requires a multi-day range
+            d_end = _parse_date(rule.end_date) if rule.end_date else None
+            if d_end is None or d_end == d0:
+                errors.append("Overnight date rules need an end date after the start date")
 
     # Same-level overlap check
     for other in siblings:
@@ -232,14 +237,11 @@ def _date_rule_segments(rule: UserRule, day: date) -> list[tuple[int, int]]:
         return []
     if end_m > start_m:
         return [(start_m, end_m)]
-    # overnight
+    # overnight (multi-day only — single-day rejected in rule_errors)
     if day == d0:
         return [(start_m, 24 * 60)]
-    if day == d1 and day != d0:
+    if day == d1:
         return [(0, end_m)]
-    if d1 == d0:
-        # single-day overnight: start..24h and 0..end same day
-        return [(start_m, 24 * 60), (0, end_m)]
     return [(0, 24 * 60)]  # middle day, full coverage
 
 
