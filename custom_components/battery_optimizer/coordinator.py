@@ -313,7 +313,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return DeviceInfo(
             identifiers={(DOMAIN, self._emaldo_device_id)},
-            name="Battery Optimizer",
+            name="Battery Optimizer Configuration",
             manufacturer="Emaldo",
             model="Optimized Battery",
             via_device=(EMALDO_DOMAIN, self._emaldo_device_id),

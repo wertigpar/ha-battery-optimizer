@@ -32,14 +32,36 @@ async def _ensure_default_rule(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Create the default 'optimizer everywhere' rule subentry if absent.
 
     Called on every setup — recreates it even if the user deleted it, so
-    the default rule is effectively non-deletable.
+    the default rule is effectively non-deletable.  Also migrates an
+    existing default rule whose title predates the rename to
+    ``DEFAULT_RULE_LABEL``.
     """
     existing = [
         sub
         for sub in entry.subentries.values()
         if sub.subentry_type == SUBENTRY_TYPE_RULE
     ]
-    if any(dict(sub.data).get("level") == LEVEL_DEFAULT for sub in existing):
+    default = next(
+        (sub for sub in existing if dict(sub.data).get("level") == LEVEL_DEFAULT),
+        None,
+    )
+    if default is not None:
+        # Migrate pre-rename installs: title AND the stored data label
+        # (the flow derives a subentry's title from rule.label on edit, so
+        # a stale label would revert the row title to "Default").
+        needs_label = dict(default.data).get("label") != DEFAULT_RULE_LABEL
+        if default.title != DEFAULT_RULE_LABEL or needs_label:
+            _LOGGER.info(
+                "Battery Optimizer: renamed default rule subentry '%s' -> '%s'",
+                default.title,
+                DEFAULT_RULE_LABEL,
+            )
+            data = dict(default.data)
+            if needs_label:
+                data["label"] = DEFAULT_RULE_LABEL
+            hass.config_entries.async_update_subentry(
+                entry, default, title=DEFAULT_RULE_LABEL, data=data
+            )
         return
     from homeassistant.config_entries import ConfigSubentry
 
@@ -62,6 +84,44 @@ async def _ensure_default_rule(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 "label": DEFAULT_RULE_LABEL,
             },
         ),
+    )
+
+
+async def _bind_device_to_default_subentry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: BatteryOptimizerCoordinator,
+) -> None:
+    """Name the virtual device and bind it to the default rule subentry.
+
+    Idempotent: ``async_get_or_create`` reuses the device matching
+    ``identifiers`` and only writes when something actually changes
+    (name, subentry binding).  A user-renamed device keeps its custom
+    name via ``name_by_user``.
+    """
+    if coordinator._emaldo_device_id is None:
+        return
+    default_sub = next(
+        (
+            sub
+            for sub in entry.subentries.values()
+            if sub.subentry_type == SUBENTRY_TYPE_RULE
+            and dict(sub.data).get("level") == LEVEL_DEFAULT
+        ),
+        None,
+    )
+    if default_sub is None:
+        return
+    from homeassistant.helpers import device_registry as dr
+
+    dev_reg = dr.async_get(hass)
+    dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        config_subentry_id=default_sub.subentry_id,
+        identifiers={(DOMAIN, coordinator._emaldo_device_id)},
+        name="Battery Optimizer Configuration",
+        manufacturer="Emaldo",
+        model="Optimized Battery",
     )
 
 
@@ -102,6 +162,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.info(
                 "Battery Optimizer: Emaldo device resolved after startup — reloading"
             )
+            await _bind_device_to_default_subentry(hass, entry, coordinator)
             await hass.config_entries.async_reload(entry.entry_id)
 
     def _unload_ha_started() -> None:
@@ -115,6 +176,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "homeassistant_started", _on_home_assistant_started
         )
         entry.async_on_unload(_unload_ha_started)
+    else:
+        await _bind_device_to_default_subentry(hass, entry, coordinator)
 
     _LOGGER.info("Battery Optimizer set up successfully")
     return True

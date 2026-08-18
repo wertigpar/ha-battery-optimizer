@@ -127,4 +127,4 @@ MIDNIGHT_CHECKPOINT = (0, 1)
 
 # ── Config subentries ────────────────────────────────────────────────
 SUBENTRY_TYPE_RULE = "rule"
-DEFAULT_RULE_LABEL = "Default"
+DEFAULT_RULE_LABEL = "Default Schedule"

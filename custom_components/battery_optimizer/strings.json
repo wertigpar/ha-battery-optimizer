@@ -126,5 +126,24 @@
         "pv_sell": "PV behavior"
       }
     }
+  },
+  "config_subentries": {
+    "rule": {
+      "entry_type": "Schedule",
+      "abort": {
+        "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+      },
+      "initiate_flow": {
+        "user": "Add new schedule"
+      },
+      "step": {
+        "user": {
+          "title": "Schedule rule"
+        },
+        "reconfigure": {
+          "title": "Edit schedule rule"
+        }
+      }
+    }
   }
 }
