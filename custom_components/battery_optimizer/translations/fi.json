@@ -163,6 +163,9 @@
         "detail_original": { "title": "Alkuperäisen aikataulun sääntö" },
         "detail_optimizer": { "title": "Optimoijan aikataulusääntö" }
       }
+    },
+    "device": {
+      "entry_type": "Laite"
     }
   }
 }

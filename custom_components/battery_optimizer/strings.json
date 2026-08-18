@@ -163,6 +163,9 @@
         "detail_original": { "title": "Original schedule rule" },
         "detail_optimizer": { "title": "Optimizer schedule rule" }
       }
+    },
+    "device": {
+      "entry_type": "Device"
     }
   }
 }

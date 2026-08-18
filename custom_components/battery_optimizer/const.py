@@ -129,6 +129,10 @@ MIDNIGHT_CHECKPOINT = (0, 1)
 SUBENTRY_TYPE_RULE = "rule"
 DEFAULT_RULE_LABEL = "Default Schedule"
 
+SUBENTRY_TYPE_DEVICE = "device"
+DEVICE_SUBENTRY_LABEL = "Battery Optimizer Configuration"
+DEVICE_SUBENTRY_UNIQUE_ID = "optimizer_device"
+
 # ── Currency (Nord Pool region, mirrors emaldo price_unit_for_timezone) ─
 _TZ_CURRENCY = {
     "Europe/Stockholm": "SEK",

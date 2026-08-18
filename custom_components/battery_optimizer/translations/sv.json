@@ -163,6 +163,9 @@
         "detail_original": { "title": "Regel för ursprungligt schema" },
         "detail_optimizer": { "title": "Optimizerschemaregel" }
       }
+    },
+    "device": {
+      "entry_type": "Enhet"
     }
   }
 }

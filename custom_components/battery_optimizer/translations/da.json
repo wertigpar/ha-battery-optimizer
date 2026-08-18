@@ -163,6 +163,9 @@
         "detail_original": { "title": "Regel for oprindelig tidsplan" },
         "detail_optimizer": { "title": "Optimizer-tidsplanregel" }
       }
+    },
+    "device": {
+      "entry_type": "Enhed"
     }
   }
 }
