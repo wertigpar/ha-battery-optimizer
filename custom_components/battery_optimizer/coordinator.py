@@ -1447,6 +1447,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         n_charge = n_discharge = n_idle = 0
         charge_targets: dict[int, int] = {}
+        discharge_targets: dict[int, int] = {}
         for sp in result.slots:
             if sp.index < start_slot:
                 continue
@@ -1458,6 +1459,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif byte > 0x80:
                 sp.action = "discharge"
                 n_discharge += 1
+                discharge_targets[sp.index] = 256 - byte
             elif byte == 0x80:
                 sp.action = "idle"  # original: AI decides; count as idle
                 n_idle += 1
@@ -1472,6 +1474,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             plan_actions, net_loads, solar_15min, cfg,
             start_slot=start_slot, initial_soc_kwh=initial_soc_kwh,
             charge_targets=charge_targets,
+            discharge_targets=discharge_targets,
         )
         for sp in result.slots:
             if sp.index < len(traj_kwh):

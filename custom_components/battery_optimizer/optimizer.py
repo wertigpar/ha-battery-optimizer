@@ -252,6 +252,7 @@ def _simulate_soc_trajectory(
     start_slot: int,
     initial_soc_kwh: float,
     charge_targets: dict[int, int] | None = None,
+    discharge_targets: dict[int, int] | None = None,
 ) -> list[float]:
     """Forward-simulate the true (unclamped) SoC trajectory in kWh.
 
@@ -263,7 +264,6 @@ def _simulate_soc_trajectory(
     """
     n = SLOTS_PER_DAY
     soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
-    soc_min_kwh = cfg.capacity_kwh * cfg.soc_min / 100.0
     floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
     idle_drain = cfg.idle_drain_per_slot_kwh
     soc = initial_soc_kwh
@@ -289,12 +289,13 @@ def _simulate_soc_trajectory(
         elif action == "discharge":
             if net_loads[s] > 0:
                 load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+                floor_pct = (discharge_targets or {}).get(s, int(cfg.soc_min))
+                floor_kwh = cfg.capacity_kwh * floor_pct / 100.0
                 # The firmware stops discharging at the slot's SoC marker
-                # (≥ soc_min) — model that: battery draw is capped by the
-                # energy above the floor.  Idle drain continues regardless.
+                # (user floor N for masked slots, else soc_min) — model that.
                 battery_draw = min(
                     load_kwh / cfg.discharge_efficiency,
-                    max(0.0, soc - soc_min_kwh),
+                    max(0.0, soc - floor_kwh),
                 )
                 soc = soc - battery_draw - idle_drain
             else:
