@@ -114,6 +114,13 @@ async def _ensure_device_subentry(
     reuses the device matching ``identifiers`` and only writes when
     something actually changes.  A user-renamed device keeps its custom
     name via ``name_by_user``.
+
+    The device is created without a ``config_subentry_id``: passing one
+    to ``async_get_or_create`` on an EXISTING device silently moves it to
+    that subentry, which HA deprecates (detected-usage warning, breaks in
+    2027.8) and which orphaned this integration's entities.  The subentry
+    binding is instead moved explicitly with ``async_update_device``, and
+    only when it actually differs.
     """
     if coordinator._emaldo_device_id is None:
         return
@@ -149,14 +156,38 @@ async def _ensure_device_subentry(
     from homeassistant.helpers import device_registry as dr
 
     dev_reg = dr.async_get(hass)
-    dev_reg.async_get_or_create(
+    device = dev_reg.async_get_or_create(
         config_entry_id=entry.entry_id,
-        config_subentry_id=device_sub.subentry_id,
         identifiers={(DOMAIN, coordinator._emaldo_device_id)},
         name=DEVICE_SUBENTRY_LABEL,
         manufacturer="Emaldo",
         model="Optimized Battery",
     )
+    # Only reassign the subentry binding when it actually differs.  Using
+    # async_update_device (not async_get_or_create with config_subentry_id)
+    # is the supported way to move a device between subentries — passing
+    # config_subentry_id to async_get_or_create on an existing device
+    # triggers a deprecation warning (breaks 2027.8) and can orphan entities.
+    bound = device.config_entries_subentries.get(entry.entry_id, set())
+    if bound == {device_sub.subentry_id}:
+        return
+    # Add first, then remove each stale binding.  A single call passing both
+    # add_config_subentry_id and remove_config_subentry_id for the same
+    # config entry rebuilds the subentry set from the pre-add snapshot and
+    # ends up DELETING the device; two separate calls leave exactly
+    # {device_sub} on both the legacy (2026.2.x) and single-owner (2026.8+)
+    # device registries.
+    dev_reg.async_update_device(
+        device.id,
+        add_config_entry_id=entry.entry_id,
+        add_config_subentry_id=device_sub.subentry_id,
+    )
+    for stale in bound - {device_sub.subentry_id}:
+        dev_reg.async_update_device(
+            device.id,
+            remove_config_entry_id=entry.entry_id,
+            remove_config_subentry_id=stale,
+        )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -196,7 +227,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.info(
                 "Battery Optimizer: Emaldo device resolved after startup — reloading"
             )
-            await _ensure_device_subentry(hass, entry, coordinator)
+            # Deliberately NO _ensure_device_subentry here.  The reload re-runs
+            # async_setup_entry, whose else-branch (device now resolved) calls
+            # _ensure_device_subentry AFTER platforms are forwarded and the
+            # update listener is registered.  Calling it before the reload
+            # would create the device subentry while the listener from the
+            # FIRST setup is live, firing _async_options_updated -> run_optimizer
+            # mid-startup on a half-set-up entry.
             await hass.config_entries.async_reload(entry.entry_id)
 
     def _unload_ha_started() -> None:
