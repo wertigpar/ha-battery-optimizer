@@ -467,6 +467,7 @@ class UserScheduleChartSensor(_BaseOptimizerSensor):
         sources = self.coordinator.last_sources
         winners = self.coordinator.last_user_winners or []
         pv = result.thirdparty_pv_slots
+        pvs = self.coordinator.last_pv_sources or []
         now_ha = dt_util.now()
         today_midnight = now_ha.replace(hour=0, minute=0, second=0, microsecond=0)
         slots_data = []
@@ -487,6 +488,7 @@ class UserScheduleChartSensor(_BaseOptimizerSensor):
                 "source": sources[idx] if idx < len(sources) else "optimizer",
                 "soc_target": w.soc_target if w else None,
                 "pv_sell": (not pv[idx]) if idx < len(pv) else False,
+                "pv_source": pvs[idx] if idx < len(pvs) else "optimizer",
             })
         return {"schedule": slots_data}
 

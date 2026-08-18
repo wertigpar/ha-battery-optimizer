@@ -136,7 +136,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options flow update — re-create listeners with new sensor IDs."""
+    """Handle options/subentry update — refresh listeners and re-run optimizer."""
     coordinator: BatteryOptimizerCoordinator = hass.data[DOMAIN][entry.entry_id]
     coordinator.async_setup_listeners()
     _LOGGER.info("Battery Optimizer options updated, listeners refreshed")
+    if coordinator._ha_started:
+        # Rules (subentries) changed — apply immediately, not at next poll.
+        await coordinator.run_optimizer(reason="config_change", force=True)

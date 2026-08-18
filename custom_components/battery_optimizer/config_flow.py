@@ -95,6 +95,7 @@ from .rules import (
     rule_from_data,
     LEVEL_WEEKDAY,
     LEVEL_DATE,
+    LEVEL_DEFAULT,
     ACTIONS,
     PV_BEHAVIORS,
 )
@@ -305,12 +306,16 @@ def _rule_schema(defaults: dict | None = None) -> vol.Schema:
             vol.Optional("label", default=d.get("label", "")): str,
             vol.Required(
                 "level", default=d.get("level", LEVEL_WEEKDAY)
-            ): vol.In([LEVEL_WEEKDAY, LEVEL_DATE]),
+            ): vol.In([LEVEL_WEEKDAY, LEVEL_DATE, LEVEL_DEFAULT]),
             vol.Optional(
                 "days", default=d.get("days", [0])
             ): vol.All(cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))]),
-            vol.Optional("start_date", default=d.get("start_date", "")): str,
-            vol.Optional("end_date", default=d.get("end_date", "")): str,
+            vol.Optional(
+                "start_date", default=d.get("start_date", "")
+            ): vol.Any(str, None),
+            vol.Optional(
+                "end_date", default=d.get("end_date", "")
+            ): vol.Any(str, None),
             vol.Required("start_time", default=d.get("start_time", "07:00")): str,
             vol.Required("end_time", default=d.get("end_time", "17:00")): str,
             vol.Required(
@@ -318,7 +323,7 @@ def _rule_schema(defaults: dict | None = None) -> vol.Schema:
             ): vol.In(ACTIONS),
             vol.Optional(
                 "soc_target", default=d.get("soc_target", 90)
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+            ): vol.Any(vol.All(vol.Coerce(int), vol.Range(min=1, max=100)), None),
             vol.Required(
                 "pv_sell", default=d.get("pv_sell", "inherit")
             ): vol.In(PV_BEHAVIORS),

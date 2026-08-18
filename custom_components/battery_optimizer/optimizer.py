@@ -277,7 +277,13 @@ def _simulate_soc_trajectory(
         if action == "charge":
             target_kwh = cfg.capacity_kwh * (charge_targets or {}).get(s, int(cfg.soc_max)) / 100.0
             charge_kwh = cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
-            soc = min(soc + charge_kwh - idle_drain, target_kwh)
+            # Physically a "charge to N%" byte is a no-op when the battery
+            # is already above N% — it never discharges down to its target.
+            # Idle drain still applies.
+            soc = max(
+                soc - idle_drain,
+                min(soc + charge_kwh - idle_drain, target_kwh),
+            )
         elif action == "charge_floor":
             # Keep-alive charge: battery charges only up to the floor target
             # ("charge to N%" byte stops at N%).

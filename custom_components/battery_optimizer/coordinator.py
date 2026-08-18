@@ -156,6 +156,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_reason: str = ""
         self._last_sources: list[str] | None = None
         self._last_user_winners: list[SlotWinner] | None = None
+        self._last_pv_sources: list[str] | None = None
         self._activated_time: str | None = None
         # SoC Guard state
         self._unsub_guard: CALLBACK_TYPE | None = None
@@ -1438,12 +1439,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         forecast all reflect what will actually be pushed.
         """
         winners = expand_day(rules, day)
-        masked, masked_pv, sources, _pvs = mask_plan(
+        masked, masked_pv, sources, pv_sources = mask_plan(
             result.slot_values, result.thirdparty_pv_slots, winners
         )
         if store_last:
             self._last_user_winners = winners
             self._last_sources = sources
+            self._last_pv_sources = pv_sources
 
         n_charge = n_discharge = n_idle = 0
         charge_targets: dict[int, int] = {}
@@ -1488,6 +1490,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def last_sources(self) -> list[str] | None:
         """Per-slot sources ('user'/'internal'/'optimizer') for today."""
         return self._last_sources
+
+    @property
+    def last_pv_sources(self) -> list[str] | None:
+        """Per-slot PV sources ('user' where a rule set PV, else 'optimizer')."""
+        return self._last_pv_sources
 
     @property
     def last_user_winners(self) -> list[SlotWinner] | None:
@@ -2098,7 +2105,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             marker = int(cfg.soc_min)
 
         # User rule floors: a user discharge@N rule in the look-ahead
-        # window is authoritative — never drain below it.
+        # window is authoritative — never drain below it.  The user's
+        # floor is a "never below N" constraint, so it RAISES the marker
+        # (the optimizer-derived floor is only a lower bound).  Using
+        # min() here would let an optimizer discharge@15 elsewhere in the
+        # window pull the marker down and the guard's global remap would
+        # rewrite the user's discharge@40 byte to discharge-to-15.
         winners = getattr(self, "_last_user_winners", None)
         if winners is not None:
             guard_interval = self._config_int(
@@ -2108,7 +2120,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for s in range(now_slot, window_end):
                 w = winners[s] if s < len(winners) else None
                 if w is not None and w.action == "discharge" and w.soc_target is not None:
-                    marker = min(marker, w.soc_target)
+                    marker = max(marker, w.soc_target)
         return marker
 
     @callback
