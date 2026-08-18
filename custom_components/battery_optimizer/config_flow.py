@@ -27,6 +27,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     DOMAIN,
     SUBENTRY_TYPE_RULE,
+    DEFAULT_RULE_LABEL,
     CONF_SPOT_SENSOR,
     CONF_SOLCAST_TODAY,
     CONF_SOLCAST_TOMORROW,
@@ -98,6 +99,7 @@ from .rules import (
     UserRule,
     rule_errors,
     rule_from_data,
+    rule_summary,
     LEVEL_WEEKDAY,
     LEVEL_DATE,
     LEVEL_DEFAULT,
@@ -368,9 +370,15 @@ class RuleSubentryFlow(ConfigSubentryFlow):
 
     async def _menu_or_route(self, user_input) -> ConfigFlowResult:
         if user_input is None:
+            menu = dict(self.ACTION_MENU)
+            if self.source == SOURCE_RECONFIGURE:
+                subentry = self._get_reconfigure_subentry()
+                action = dict(subentry.data).get("action")
+                if action in menu:
+                    menu[action] = f"{menu[action]} (current)"
             return self.async_show_menu(
                 step_id=self.init_step or "user",
-                menu_options=self.ACTION_MENU,
+                menu_options=menu,
             )
         # user picked an action from the menu — route to the action step
         action = user_input["next_step_id"]
@@ -453,7 +461,13 @@ class RuleSubentryFlow(ConfigSubentryFlow):
             "pv_sell": rule.pv_sell,
             "label": rule.label,
         }
-        title = rule.label or f"{rule.level} {rule.start_time}-{rule.end_time}"
+        # default rule keeps its stable "Default Schedule" label
+        if rule.level == LEVEL_DEFAULT:
+            title = DEFAULT_RULE_LABEL
+        elif rule.label:
+            title = f"{rule.label}: {rule_summary(rule)}"
+        else:
+            title = rule_summary(rule)
 
         if editing is not None:
             entry = self._get_entry()

@@ -63,6 +63,77 @@ class SlotWinner:
     rule_index: int | None = None
 
 
+WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _weekday_range_summary(days: list[int]) -> str:
+    """Group weekday ints into ranges: [0,1,2,4,5] -> 'Mon–Wed, Fri–Sat'.
+
+    Full week (all seven days) -> 'Every day'.  Empty -> 'Weekday'.
+    Sat (5) and Sun (6) never merge into a range — the weekend pair
+    always renders as two names ("Sat, Sun").
+    """
+    if not days:
+        return "Weekday"
+    if len(days) == 7 and set(days) == set(range(7)):
+        return "Every day"
+    ordered = sorted(days)
+    parts: list[str] = []
+    run_start = ordered[0]
+    prev = ordered[0]
+    for day in ordered[1:]:
+        if day == prev + 1 and prev != 5:
+            prev = day
+            continue
+        if run_start == prev:
+            parts.append(WEEKDAY_NAMES[run_start])
+        else:
+            parts.append(f"{WEEKDAY_NAMES[run_start]}–{WEEKDAY_NAMES[prev]}")
+        run_start = prev = day
+    if run_start == prev:
+        parts.append(WEEKDAY_NAMES[run_start])
+    else:
+        parts.append(f"{WEEKDAY_NAMES[run_start]}–{WEEKDAY_NAMES[prev]}")
+    return ", ".join(parts)
+
+
+def _action_label(rule: UserRule) -> str:
+    if rule.action == ACTION_CHARGE:
+        target = rule.soc_target if rule.soc_target is not None else "?"
+        return f"Charge to {target}%"
+    if rule.action == ACTION_DISCHARGE:
+        target = rule.soc_target if rule.soc_target is not None else "?"
+        return f"Discharge to {target}%"
+    return {
+        ACTION_IDLE: "Idle",
+        ACTION_ORIGINAL: "Original",
+        ACTION_OPTIMIZER: "Optimizer",
+    }.get(rule.action, rule.action)
+
+
+def rule_summary(rule: UserRule) -> str:
+    """One-line human summary of a rule for the config list / flow titles.
+
+    Default rules show no days and omit the time part when they cover the
+    full day; all other levels always show days and time.
+    """
+    action = _action_label(rule)
+
+    if rule.level == LEVEL_DEFAULT:
+        if rule.start_time == "00:00" and rule.end_time == "24:00":
+            return action
+        return f"{action} · {rule.start_time}–{rule.end_time}"
+
+    if rule.level == LEVEL_DATE:
+        days = rule.start_date or "Every day"
+        if rule.end_date and rule.end_date != rule.start_date:
+            days = f"{rule.start_date}–{rule.end_date}"
+    else:
+        days = _weekday_range_summary(rule.days)
+
+    return f"{action} · {days} · {rule.start_time}–{rule.end_time}"
+
+
 def _parse_hhmm(value: str) -> tuple[int, int] | None:
     """Parse 'HH:MM' -> (hours, minutes); None when malformed."""
     try:
