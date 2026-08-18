@@ -110,23 +110,6 @@
       "emaldo_control_enable": { "name": "Emaldo-styring" }
     }
   },
-  "subentry": {
-    "rule": {
-      "title": "Tidsplanregel",
-      "data": {
-        "label": "Etiket",
-        "level": "Gælder for",
-        "days": "Ugedage",
-        "start_date": "Startdato",
-        "end_date": "Slutdato",
-        "start_time": "Starttidspunkt",
-        "end_time": "Sluttidspunkt",
-        "action": "Handling",
-        "soc_target": "SoC-mål (%)",
-        "pv_sell": "PV-adfærd"
-      }
-    }
-  },
   "config_subentries": {
     "rule": {
       "entry_type": "Tidsplan",
@@ -163,15 +146,76 @@
             "optimizer": "Optimizer-tidsplan"
           }
         },
-        "detail_charge": { "title": "Opladningsregel" },
-        "detail_idle": { "title": "Inaktiv regel" },
-        "detail_discharge": { "title": "Afladningsregel" },
-        "detail_original": { "title": "Regel for oprindelig tidsplan" },
-        "detail_optimizer": { "title": "Optimizer-tidsplanregel" }
+        "detail_charge": {
+          "title": "Opladningsregel",
+          "data": {
+            "label": "Etiket",
+            "days": "Ugedage",
+            "start_date": "Startdato",
+            "end_date": "Slutdato",
+            "start_time": "Starttidspunkt",
+            "end_time": "Sluttidspunkt",
+            "soc_target": "SoC-mål (%)",
+            "pv_sell": "PV-adfærd"
+          }
+        },
+        "detail_idle": {
+          "title": "Inaktiv regel",
+          "data": {
+            "label": "Etiket",
+            "days": "Ugedage",
+            "start_date": "Startdato",
+            "end_date": "Slutdato",
+            "start_time": "Starttidspunkt",
+            "end_time": "Sluttidspunkt",
+            "pv_sell": "PV-adfærd"
+          }
+        },
+        "detail_discharge": {
+          "title": "Afladningsregel",
+          "data": {
+            "label": "Etiket",
+            "days": "Ugedage",
+            "start_date": "Startdato",
+            "end_date": "Slutdato",
+            "start_time": "Starttidspunkt",
+            "end_time": "Sluttidspunkt",
+            "soc_target": "SoC-mål (%)",
+            "pv_sell": "PV-adfærd"
+          }
+        },
+        "detail_original": {
+          "title": "Regel for oprindelig tidsplan",
+          "data": {
+            "label": "Etiket",
+            "days": "Ugedage",
+            "start_date": "Startdato",
+            "end_date": "Slutdato",
+            "start_time": "Starttidspunkt",
+            "end_time": "Sluttidspunkt",
+            "pv_sell": "PV-adfærd"
+          }
+        },
+        "detail_optimizer": {
+          "title": "Optimizer-tidsplanregel",
+          "data": {
+            "label": "Etiket",
+            "days": "Ugedage",
+            "start_date": "Startdato",
+            "end_date": "Slutdato",
+            "start_time": "Starttidspunkt",
+            "end_time": "Sluttidspunkt",
+            "pv_sell": "PV-adfærd"
+          }
+        }
       }
     },
     "device": {
-      "entry_type": "Enhed"
+      "entry_type": "Enhed",
+      "initiate_flow": {
+        "user": "Tilføj enhed"
+      },
+      "step": {}
     }
   }
 }

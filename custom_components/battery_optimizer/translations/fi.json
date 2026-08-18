@@ -110,23 +110,6 @@
       "emaldo_control_enable": { "name": "Emaldo-ohjaus" }
     }
   },
-  "subentry": {
-    "rule": {
-      "title": "Aikataulusääntö",
-      "data": {
-        "label": "Nimike",
-        "level": "Koskee",
-        "days": "Viikonpäivät",
-        "start_date": "Aloituspäivä",
-        "end_date": "Lopetuspäivä",
-        "start_time": "Aloitusaika",
-        "end_time": "Lopetusaika",
-        "action": "Toiminto",
-        "soc_target": "SoC-tavoite (%)",
-        "pv_sell": "PV-käyttäytyminen"
-      }
-    }
-  },
   "config_subentries": {
     "rule": {
       "entry_type": "Aikataulu",
@@ -163,15 +146,76 @@
             "optimizer": "Optimoijan aikataulu"
           }
         },
-        "detail_charge": { "title": "Lataussääntö" },
-        "detail_idle": { "title": "Lepotilan sääntö" },
-        "detail_discharge": { "title": "Purkaussääntö" },
-        "detail_original": { "title": "Alkuperäisen aikataulun sääntö" },
-        "detail_optimizer": { "title": "Optimoijan aikataulusääntö" }
+        "detail_charge": {
+          "title": "Lataussääntö",
+          "data": {
+            "label": "Nimike",
+            "days": "Viikonpäivät",
+            "start_date": "Aloituspäivä",
+            "end_date": "Lopetuspäivä",
+            "start_time": "Aloitusaika",
+            "end_time": "Lopetusaika",
+            "soc_target": "SoC-tavoite (%)",
+            "pv_sell": "PV-käyttäytyminen"
+          }
+        },
+        "detail_idle": {
+          "title": "Lepotilan sääntö",
+          "data": {
+            "label": "Nimike",
+            "days": "Viikonpäivät",
+            "start_date": "Aloituspäivä",
+            "end_date": "Lopetuspäivä",
+            "start_time": "Aloitusaika",
+            "end_time": "Lopetusaika",
+            "pv_sell": "PV-käyttäytyminen"
+          }
+        },
+        "detail_discharge": {
+          "title": "Purkaussääntö",
+          "data": {
+            "label": "Nimike",
+            "days": "Viikonpäivät",
+            "start_date": "Aloituspäivä",
+            "end_date": "Lopetuspäivä",
+            "start_time": "Aloitusaika",
+            "end_time": "Lopetusaika",
+            "soc_target": "SoC-tavoite (%)",
+            "pv_sell": "PV-käyttäytyminen"
+          }
+        },
+        "detail_original": {
+          "title": "Alkuperäisen aikataulun sääntö",
+          "data": {
+            "label": "Nimike",
+            "days": "Viikonpäivät",
+            "start_date": "Aloituspäivä",
+            "end_date": "Lopetuspäivä",
+            "start_time": "Aloitusaika",
+            "end_time": "Lopetusaika",
+            "pv_sell": "PV-käyttäytyminen"
+          }
+        },
+        "detail_optimizer": {
+          "title": "Optimoijan aikataulusääntö",
+          "data": {
+            "label": "Nimike",
+            "days": "Viikonpäivät",
+            "start_date": "Aloituspäivä",
+            "end_date": "Lopetuspäivä",
+            "start_time": "Aloitusaika",
+            "end_time": "Lopetusaika",
+            "pv_sell": "PV-käyttäytyminen"
+          }
+        }
       }
     },
     "device": {
-      "entry_type": "Laite"
+      "entry_type": "Laite",
+      "initiate_flow": {
+        "user": "Lisää laite"
+      },
+      "step": {}
     }
   }
 }

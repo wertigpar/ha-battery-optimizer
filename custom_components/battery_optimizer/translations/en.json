@@ -110,23 +110,6 @@
       "emaldo_control_enable": { "name": "Emaldo Control" }
     }
   },
-  "subentry": {
-    "rule": {
-      "title": "Schedule rule",
-      "data": {
-        "label": "Label",
-        "level": "Applies to",
-        "days": "Weekdays",
-        "start_date": "Start date",
-        "end_date": "End date",
-        "start_time": "Start time",
-        "end_time": "End time",
-        "action": "Action",
-        "soc_target": "SoC target (%)",
-        "pv_sell": "PV behavior"
-      }
-    }
-  },
   "config_subentries": {
     "rule": {
       "entry_type": "Schedule",
@@ -163,15 +146,76 @@
             "optimizer": "Optimizer schedule"
           }
         },
-        "detail_charge": { "title": "Charge rule" },
-        "detail_idle": { "title": "Idle rule" },
-        "detail_discharge": { "title": "Discharge rule" },
-        "detail_original": { "title": "Original schedule rule" },
-        "detail_optimizer": { "title": "Optimizer schedule rule" }
+        "detail_charge": {
+          "title": "Charge rule",
+          "data": {
+            "label": "Label",
+            "days": "Weekdays",
+            "start_date": "Start date",
+            "end_date": "End date",
+            "start_time": "Start time",
+            "end_time": "End time",
+            "soc_target": "SoC target (%)",
+            "pv_sell": "PV behavior"
+          }
+        },
+        "detail_idle": {
+          "title": "Idle rule",
+          "data": {
+            "label": "Label",
+            "days": "Weekdays",
+            "start_date": "Start date",
+            "end_date": "End date",
+            "start_time": "Start time",
+            "end_time": "End time",
+            "pv_sell": "PV behavior"
+          }
+        },
+        "detail_discharge": {
+          "title": "Discharge rule",
+          "data": {
+            "label": "Label",
+            "days": "Weekdays",
+            "start_date": "Start date",
+            "end_date": "End date",
+            "start_time": "Start time",
+            "end_time": "End time",
+            "soc_target": "SoC target (%)",
+            "pv_sell": "PV behavior"
+          }
+        },
+        "detail_original": {
+          "title": "Original schedule rule",
+          "data": {
+            "label": "Label",
+            "days": "Weekdays",
+            "start_date": "Start date",
+            "end_date": "End date",
+            "start_time": "Start time",
+            "end_time": "End time",
+            "pv_sell": "PV behavior"
+          }
+        },
+        "detail_optimizer": {
+          "title": "Optimizer schedule rule",
+          "data": {
+            "label": "Label",
+            "days": "Weekdays",
+            "start_date": "Start date",
+            "end_date": "End date",
+            "start_time": "Start time",
+            "end_time": "End time",
+            "pv_sell": "PV behavior"
+          }
+        }
       }
     },
     "device": {
-      "entry_type": "Device"
+      "entry_type": "Device",
+      "initiate_flow": {
+        "user": "Add device"
+      },
+      "step": {}
     }
   }
 }

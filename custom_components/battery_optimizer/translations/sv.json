@@ -110,23 +110,6 @@
       "emaldo_control_enable": { "name": "Emaldostyrning" }
     }
   },
-  "subentry": {
-    "rule": {
-      "title": "Schemaregel",
-      "data": {
-        "label": "Etikett",
-        "level": "Gäller för",
-        "days": "Vardagar",
-        "start_date": "Startdatum",
-        "end_date": "Slutdatum",
-        "start_time": "Starttid",
-        "end_time": "Sluttid",
-        "action": "Åtgärd",
-        "soc_target": "SoC-mål (%)",
-        "pv_sell": "PV-beteende"
-      }
-    }
-  },
   "config_subentries": {
     "rule": {
       "entry_type": "Schema",
@@ -163,15 +146,76 @@
             "optimizer": "Optimizerschema"
           }
         },
-        "detail_charge": { "title": "Laddningsregel" },
-        "detail_idle": { "title": "Inaktiv regel" },
-        "detail_discharge": { "title": "Urladdningsregel" },
-        "detail_original": { "title": "Regel för ursprungligt schema" },
-        "detail_optimizer": { "title": "Optimizerschemaregel" }
+        "detail_charge": {
+          "title": "Laddningsregel",
+          "data": {
+            "label": "Etikett",
+            "days": "Vardagar",
+            "start_date": "Startdatum",
+            "end_date": "Slutdatum",
+            "start_time": "Starttid",
+            "end_time": "Sluttid",
+            "soc_target": "SoC-mål (%)",
+            "pv_sell": "PV-beteende"
+          }
+        },
+        "detail_idle": {
+          "title": "Inaktiv regel",
+          "data": {
+            "label": "Etikett",
+            "days": "Vardagar",
+            "start_date": "Startdatum",
+            "end_date": "Slutdatum",
+            "start_time": "Starttid",
+            "end_time": "Sluttid",
+            "pv_sell": "PV-beteende"
+          }
+        },
+        "detail_discharge": {
+          "title": "Urladdningsregel",
+          "data": {
+            "label": "Etikett",
+            "days": "Vardagar",
+            "start_date": "Startdatum",
+            "end_date": "Slutdatum",
+            "start_time": "Starttid",
+            "end_time": "Sluttid",
+            "soc_target": "SoC-mål (%)",
+            "pv_sell": "PV-beteende"
+          }
+        },
+        "detail_original": {
+          "title": "Regel för ursprungligt schema",
+          "data": {
+            "label": "Etikett",
+            "days": "Vardagar",
+            "start_date": "Startdatum",
+            "end_date": "Slutdatum",
+            "start_time": "Starttid",
+            "end_time": "Sluttid",
+            "pv_sell": "PV-beteende"
+          }
+        },
+        "detail_optimizer": {
+          "title": "Optimizerschemaregel",
+          "data": {
+            "label": "Etikett",
+            "days": "Vardagar",
+            "start_date": "Startdatum",
+            "end_date": "Slutdatum",
+            "start_time": "Starttid",
+            "end_time": "Sluttid",
+            "pv_sell": "PV-beteende"
+          }
+        }
       }
     },
     "device": {
-      "entry_type": "Enhet"
+      "entry_type": "Enhet",
+      "initiate_flow": {
+        "user": "Lägg till enhet"
+      },
+      "step": {}
     }
   }
 }
