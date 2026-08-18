@@ -486,7 +486,7 @@ class UserScheduleChartSensor(_BaseOptimizerSensor):
                 "target_soc": target_soc,
                 "source": sources[idx] if idx < len(sources) else "optimizer",
                 "soc_target": w.soc_target if w else None,
-                "pv_sell": pv[idx] if idx < len(pv) else True,
+                "pv_sell": (not pv[idx]) if idx < len(pv) else False,
             })
         return {"schedule": slots_data}
 
