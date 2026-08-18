@@ -20,6 +20,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.selector import (
+    DateSelector,
     SelectSelector,
     SelectSelectorConfig,
 )
@@ -305,8 +306,14 @@ def _build_schema(
     )
 
 
-def _rule_schema(defaults: dict | None = None, *, action: str | None = None) -> vol.Schema:
+def _rule_schema(
+    defaults: dict | None = None,
+    *,
+    action: str | None = None,
+    level: str | None = None,
+) -> vol.Schema:
     d = defaults or {}
+    level = level or d.get("level", LEVEL_WEEKDAY)
     weekday_options = [
         {"label": "Mon", "value": "0"}, {"label": "Tue", "value": "1"},
         {"label": "Wed", "value": "2"}, {"label": "Thu", "value": "3"},
@@ -321,35 +328,39 @@ def _rule_schema(defaults: dict | None = None, *, action: str | None = None) -> 
                 "soc_target", default=d.get("soc_target")
             ): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=1, max=100))),
         }
-    return vol.Schema(
-        {
-            vol.Optional("label", default=d.get("label", "")): str,
-            vol.Required(
-                "level", default=d.get("level", LEVEL_WEEKDAY)
-            ): vol.In([LEVEL_WEEKDAY, LEVEL_DATE, LEVEL_DEFAULT]),
-            vol.Optional(
-                "days", default=days_default
-            ): SelectSelector(
-                SelectSelectorConfig(options=weekday_options, multiple=True)
-            ),
-            vol.Optional(
-                "start_date", default=d.get("start_date") or None
-            ): vol.Any(None, str),
-            vol.Optional(
-                "end_date", default=d.get("end_date") or None
-            ): vol.Any(None, str),
-            vol.Required("start_time", default=d.get("start_time", "07:00")): str,
-            vol.Required("end_time", default=d.get("end_time", "17:00")): str,
-            **soc_target_field,
-            vol.Required(
-                "pv_sell", default=d.get("pv_sell", "inherit")
-            ): vol.In(PV_BEHAVIORS),
-        }
-    )
+    # Only the fields relevant to the chosen level are shown; the level
+    # itself was picked in the first menu step, so it is not a form field.
+    fields: dict = {
+        vol.Optional("label", default=d.get("label", "")): str,
+    }
+    if level == LEVEL_WEEKDAY:
+        fields[vol.Optional("days", default=days_default)] = SelectSelector(
+            SelectSelectorConfig(options=weekday_options, multiple=True)
+        )
+    elif level == LEVEL_DATE:
+        fields[
+            vol.Optional("start_date", default=d.get("start_date") or None)
+        ] = vol.Any(None, DateSelector())
+        fields[
+            vol.Optional("end_date", default=d.get("end_date") or None)
+        ] = vol.Any(None, DateSelector())
+    fields[vol.Required("start_time", default=d.get("start_time", "07:00"))] = str
+    fields[vol.Required("end_time", default=d.get("end_time", "17:00"))] = str
+    fields.update(soc_target_field)
+    fields[
+        vol.Required("pv_sell", default=d.get("pv_sell", "inherit"))
+    ] = vol.In(PV_BEHAVIORS)
+    return vol.Schema(fields)
 
 
 class RuleSubentryFlow(ConfigSubentryFlow):
     """Create or edit a schedule rule subentry."""
+
+    LEVEL_MENU = {
+        "weekday": "Weekday rules",
+        "date": "Date rules",
+        "default": "Default rule",
+    }
 
     ACTION_MENU = {
         "charge": "Charge to target SoC",
@@ -359,31 +370,61 @@ class RuleSubentryFlow(ConfigSubentryFlow):
         "optimizer": "Optimizer schedule",
     }
 
-    # menu keys -> step methods
+    # Menu dispatch contract (data_entry_flow._async_handle_step): a menu
+    # pick routes to ``async_step_<next_step_id>(None)``, and every menu
+    # result's ``step_id`` must itself be an existing step method.  The
+    # level menu's keys are the level steps below, which record the chosen
+    # level and show the action menu; the action menu's keys are the action
+    # steps (charge/idle/...), which route to the detail form.
     async def async_step_user(self, user_input=None) -> ConfigFlowResult:
-        """Create flow: choose the action type first."""
-        return await self._menu_or_route(user_input)
+        """Create flow: choose the rule level first."""
+        return self._level_menu()
 
     async def async_step_reconfigure(self, user_input=None) -> ConfigFlowResult:
-        """Edit flow: choose (or confirm) the action type."""
-        return await self._menu_or_route(user_input)
+        """Edit flow: choose (or confirm) the rule level."""
+        return self._level_menu()
 
-    async def _menu_or_route(self, user_input) -> ConfigFlowResult:
-        if user_input is None:
-            menu = dict(self.ACTION_MENU)
-            if self.source == SOURCE_RECONFIGURE:
-                subentry = self._get_reconfigure_subentry()
-                action = dict(subentry.data).get("action")
-                if action in menu:
-                    menu[action] = f"{menu[action]} (current)"
-            return self.async_show_menu(
-                step_id=self.init_step or "user",
-                menu_options=menu,
-            )
-        # user picked an action from the menu — route to the action step
-        action = user_input["next_step_id"]
-        step = getattr(self, f"async_step_{action}")
-        return await step(None)
+    def _level_menu(self) -> ConfigFlowResult:
+        menu = dict(self.LEVEL_MENU)
+        if self.source == SOURCE_RECONFIGURE:
+            subentry = self._get_reconfigure_subentry()
+            level = dict(subentry.data).get("level")
+            if level in menu:
+                menu[level] = f"{menu[level]} (current)"
+        return self.async_show_menu(
+            step_id=self.init_step or "user",
+            menu_options=menu,
+        )
+
+    async def async_step_weekday(self, user_input=None) -> ConfigFlowResult:
+        return self._select_level(LEVEL_WEEKDAY)
+
+    async def async_step_date(self, user_input=None) -> ConfigFlowResult:
+        return self._select_level(LEVEL_DATE)
+
+    async def async_step_default(self, user_input=None) -> ConfigFlowResult:
+        return self._select_level(LEVEL_DEFAULT)
+
+    def _select_level(self, level: str) -> ConfigFlowResult:
+        """Remember the chosen level, then show the action menu."""
+        self._selected_level = level
+        menu = dict(self.ACTION_MENU)
+        if self.source == SOURCE_RECONFIGURE:
+            subentry = self._get_reconfigure_subentry()
+            action = dict(subentry.data).get("action")
+            if action in menu:
+                menu[action] = f"{menu[action]} (current)"
+        return self.async_show_menu(
+            step_id="action",
+            menu_options=menu,
+        )
+
+    # The action menu's step_id must exist even though picks dispatch
+    # directly to the action steps; this stub only re-shows the menu.
+    async def async_step_action(self, user_input=None) -> ConfigFlowResult:
+        return self._select_level(
+            getattr(self, "_selected_level", None) or LEVEL_WEEKDAY
+        )
 
     async def async_step_charge(self, user_input=None):
         return await self._detail_step("charge", user_input)
@@ -428,10 +469,15 @@ class RuleSubentryFlow(ConfigSubentryFlow):
         reconfigure = self.source == SOURCE_RECONFIGURE
         editing = self._get_reconfigure_subentry() if reconfigure else None
         defaults = dict(editing.data) if editing is not None else {}
+        # Level comes from the first menu step (create or edit); on a bare
+        # re-show fall back to the stored value.
+        level = getattr(self, "_selected_level", None) or defaults.get(
+            "level", LEVEL_WEEKDAY
+        )
         if user_input is None:
             return self.async_show_form(
                 step_id=f"detail_{action}",
-                data_schema=_rule_schema(defaults, action=action),
+                data_schema=_rule_schema(defaults, action=action, level=level),
                 errors={},
             )
 
@@ -439,13 +485,13 @@ class RuleSubentryFlow(ConfigSubentryFlow):
         raw_days = user_input.get("days")
         if raw_days is not None:
             user_input["days"] = [int(x) for x in raw_days]
-        rule = rule_from_data({**user_input, "action": action})
+        rule = rule_from_data({**user_input, "action": action, "level": level})
         siblings = self._same_level_siblings(rule.level, editing)
         errors = rule_errors(rule, siblings)
         if errors:
             return self.async_show_form(
                 step_id=f"detail_{action}",
-                data_schema=_rule_schema(user_input, action=action),
+                data_schema=_rule_schema(user_input, action=action, level=level),
                 errors={"base": "; ".join(errors)},
             )
 

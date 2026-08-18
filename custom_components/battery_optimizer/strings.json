@@ -131,7 +131,7 @@
     "rule": {
       "entry_type": "Schedule",
       "abort": {
-        "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+        "reconfigure_successful": "Re-configuration was successful"
       },
       "initiate_flow": {
         "user": "Add new schedule"
@@ -140,15 +140,21 @@
         "user": {
           "title": "Schedule rule",
           "menu_options": {
-            "charge": "Charge to target SoC",
-            "idle": "Idle",
-            "discharge": "Discharge to floor SoC",
-            "original": "Original schedule (battery AI)",
-            "optimizer": "Optimizer schedule"
+            "weekday": "Weekday rules",
+            "date": "Date rules",
+            "default": "Default rule"
           }
         },
         "reconfigure": {
           "title": "Edit schedule rule",
+          "menu_options": {
+            "weekday": "Weekday rules",
+            "date": "Date rules",
+            "default": "Default rule"
+          }
+        },
+        "action": {
+          "title": "Action",
           "menu_options": {
             "charge": "Charge to target SoC",
             "idle": "Idle",

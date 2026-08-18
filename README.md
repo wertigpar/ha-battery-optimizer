@@ -87,15 +87,23 @@ The optimizer compares its plan against the battery's internal AI schedule (read
    custom_components/
    ├── battery_optimizer/
    │   ├── __init__.py
+   │   ├── brand/                  # logos + icons (HACS branding)
+   │   ├── button.py
    │   ├── config_flow.py
    │   ├── const.py
    │   ├── coordinator.py
    │   ├── manifest.json
    │   ├── optimizer.py
+   │   ├── rules.py
+   │   ├── runtime_state.py
    │   ├── sensor.py
    │   ├── services.py
    │   ├── services.yaml
-   │   └── strings.json
+   │   ├── solar_actual.py
+   │   ├── solar_scale.py
+   │   ├── strings.json
+   │   ├── switch.py
+   │   └── translations/           # da, en, fi, nb, sv
    └── emaldo/
        └── ...
    ```
@@ -139,10 +147,11 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Solar forecast mode** | Which Solcast percentile to use for charge planning. `p10` (default) uses the pessimistic 10th-percentile forecast — weather-aware, causes the optimizer to add more grid charge slots on cloudy/uncertain days. `p50` uses the median, which can leave the battery undercharged when actual solar is lower than expected. | `p10` |
 | **Solar forecast scale** | Whole-day multiplier applied to the solar forecast before planning. `0` (default) = auto-tune from the accuracy history (see [Plan Accuracy](#plan-accuracy)); e.g. `0.8` scales the forecast down by 20% when it over-predicts. Manual values are clamped to 0.3–1.2. | `0` (auto) |
 | **Actual solar sensor** | Entity ID of a cumulative energy counter for actual PV production (e.g. daily inverter yield, Wh or kWh). Used for plan-vs-actual accuracy and the solar-scale auto-tune instead of the Emaldo-internal estimate (balance-derived, distorted by household loads). Empty (default) = Emaldo-internal estimate. | *(empty)* |
-| **Min solar fraction for PV sell** | Minimum fraction of needed solar energy (from current slot onward) required to allow selling. If available solar is below `needed_kwh × this_value`, selling is skipped entirely. Configurable as `pv_sell_solar_margin`. | `0.95` |
-| **Min sell price for PV sell** | Additional sell-price floor (€/kWh) for PV sell slots. Selling also always requires the sell price to exceed the **stored value** of the slot's kWh — the cheapest future discharge buy price discounted by round-trip efficiency and `pv_sell_margin` (a stored kWh displaces a future grid buy). Configurable as `pv_sell_min_price_spread`. | `0.0` |
-| **PV sell margin** | Multiplier on the stored-value sell threshold. `1.0` sells whenever the export price clears the round-trip-discounted cheapest future buy; `1.05` requires a 5% premium over storage before exporting. Configurable as `pv_sell_margin`. | `1.0` |
-| **Solar forecast margin** | Fraction of discharge-slot surplus solar credited to the grid-charge balance (discharge-mode slots still absorb excess PV, but over-forecasts must never leave the plan grid-charge-starved). Configurable as `solar_forecast_margin`. | `0.85` |
+| **SoC floor safeguard** | When enabled, the optimizer forces a grid charge back to `soc_min + buffer` whenever the actual SoC drops below that floor (battery would otherwise miss the evening peak after a solar shortfall). | `true` |
+| **SoC recovery buffer** | Percentage of capacity reserved above `soc_min` as the dischargeable bottom edge. A planned run never ends below `soc_min + buffer`, so it never reaches the floor with no idle-drain headroom. | `5.0` |
+| **Optimizer re-run interval** | How often (minutes) the optimizer re-runs to refresh the schedule: 15, 30, 60, or 120. | `120` |
+
+> **Internal PV-sell tuning constants** (not UI-configurable — edit the `BatteryConfig` dataclass defaults in `optimizer.py` to change): `pv_sell_solar_margin` (default `0.95`, minimum fraction of needed solar energy required to allow selling), `pv_sell_min_price_spread` (default `0.0`, absolute sell-price floor in €/kWh — selling also requires the sell price to exceed the slot's stored value), `pv_sell_margin` (default `1.0`, multiplier on the stored-value sell threshold — `1.05` requires a 5% premium over storage before exporting), `solar_forecast_margin` (default `0.85`, fraction of discharge-slot surplus solar credited to the grid-charge balance).
 
 All parameters can be changed later via **Settings → Devices & Services → Battery Optimizer → Configure**.
 
@@ -196,11 +205,14 @@ allow 15 % in the morning (solar about to start), add a weekday rule
 discharge@15`. With SoC Guard enabled, the discharge floor rotates
 accordingly.
 
+![User schedule rules — default rule and two example user rules](schedule.png)
+
 **Dashboard:** the `sensor.battery_optimizer_user_schedule_chart` sensor
 exposes the user plan (summary state + `schedule[]` attribute with
-`source` per slot). Use the existing ApexCharts examples with this
-entity for a "User's Schedule" chart, and add the user as a third series
-to the Active Schedule chart (`source == 'user'`).
+`source` per slot, spanning today **and** tomorrow to align with the other
+schedule charts). See [Dashboard chart — User Schedule](#dashboard-chart--user-schedule)
+for a ready-made card, and add the user as an extra series to the
+Schedule Source chart (`source == 'user'`).
 
 ### SoC Guard
 
@@ -359,7 +371,7 @@ The sensor may include both today's and tomorrow's data in the same list — ent
 
 ## Sensors
 
-The integration creates 15 sensor entities:
+The integration creates 16 sensor entities:
 
 | Entity | Type | Description | Attributes |
 |---|---|---|---|
@@ -378,6 +390,7 @@ The integration creates 15 sensor entities:
 | **Emaldo Schedule** | diagnostic | Summary string (e.g. `79C 84D 29I`) with Emaldo's internal schedule in attributes. Shows what the battery's own AI planned *before* the optimizer overrides it. | `schedule` (list of 96–192 slots with `mode`, `state`, `buy`, `sell`, `solar`) |
 | **Auto Base Load** | diagnostic | The base load value (kW) currently used by the optimizer | — |
 | **Plan Accuracy** | diagnostic | Signed discharge error in kWh since last optimizer run (positive = more discharge than planned, negative = less) | `elapsed_slots`, `planned_discharge_kwh`, `planned_charge_kwh`, `planned_solar_kwh`, `actual_discharge_kwh`, `discharge_error_kwh`, `actual_charge_kwh`, `charge_error_kwh`, `actual_solar_kwh`, `solar_error_kwh`, `last_run`, `accuracy_history` (rolling summary, persisted to `battery_optimizer_accuracy.json`) |
+| **User Schedule** | diagnostic | Effective user rule overlay on the plan: slots a rule governs carry `source: user`, untouched slots carry `source: optimizer`. Full 48 h window (192 slots) so the chart aligns with the other schedule charts. | `schedule` (list of up to 192 slots with `source`, `soc_target`, `pv_sell`, `pv_source`) |
 
 ## Switches
 
@@ -406,6 +419,7 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
   {
     "slot": 0,
     "time": "00:00",
+    "t": "2026-08-18T00:00:00+03:00",
     "day": 0,
     "action": "idle",
     "state": "Idle",
@@ -416,11 +430,13 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
     "solar": 0.0,
     "soc": 20.0,
     "profit": 0.0,
+    "export_kwh": 0.0,
     "pv_sell": false
   },
   {
     "slot": 22,
     "time": "05:30",
+    "t": "2026-08-19T05:30:00+03:00",
     "day": 1,
     "action": "idle",
     "state": "Idle",
@@ -431,11 +447,13 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
     "solar": 0.844,
     "soc": 70.3,
     "profit": 0.0,
+    "export_kwh": 0.0,
     "pv_sell": true
   },
   {
     "slot": 32,
     "time": "08:00",
+    "t": "2026-08-18T08:00:00+03:00",
     "day": 0,
     "action": "charge",
     "state": "Charge",
@@ -446,6 +464,7 @@ The `schedule` attribute on the Schedule Chart sensor contains the plan for toda
     "solar": 2.5,
     "soc": 45.0,
     "profit": -0.0132,
+    "export_kwh": 0.0,
     "pv_sell": false
   },
   ...
@@ -981,10 +1000,11 @@ Compare this chart side-by-side with the "Optimized Schedule" chart to see where
 
 #### Dashboard chart — Schedule Source
 
-Shows which slots are governed by the device's internal AI plan versus the optimizer's overrides, read from the live device schedule (`sensor.power_store_schedule_chart`). Each slot's `source` field is either `internal` (device AI plan, pre-override) or `override` (pushed by the optimizer).
+Shows which slots are governed by the device's internal AI plan, the optimizer's overrides, and user schedule rules. The first two series read the live device schedule (`sensor.power_store_schedule_chart`): each slot's `source` field is either `internal` (device AI plan, pre-override) or `override` (pushed by the optimizer). The user rule layer reads `sensor.battery_optimizer_user_schedule_chart` (`source: 'user'`) and stacks on top. `yaxis.max` is `2.2` because an optimizer override slot with an active user rule stacks to full height.
 
 - **Gray** = device AI plan slot (source: `internal`)
 - **Blue** = optimizer override slot (source: `override`)
+- **Orange** = user schedule rule slot (source: `user`, from `battery_optimizer_user_schedule_chart`)
 
 ```yaml
 type: custom:apexcharts-card
@@ -1011,7 +1031,7 @@ apex_config:
   yaxis:
     - show: false
       min: 0
-      max: 1.1
+      max: 2.2
 series:
   - entity: sensor.power_store_schedule_chart
     name: Internal
@@ -1041,11 +1061,112 @@ series:
         new Date(s.t).getTime(),
         s.source === 'override' ? 1 : null
       ]);
+  - entity: sensor.battery_optimizer_user_schedule_chart
+    name: User Rule
+    type: column
+    color: "#f39c12"
+    opacity: 1.0
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'user' ? 1 : null
+      ]);
 ```
+
+#### Dashboard chart — User Schedule
+
+Shows the slots governed by persistent user schedule rules, read from
+`sensor.battery_optimizer_user_schedule_chart`. Each slot's `source`
+field is `user` where a rule applies and `optimizer` elsewhere; this
+chart draws only the `user` slots, colored by the rule's action. The
+sensor spans 48 h (today + tomorrow) so the bars align with the other
+schedule charts.
+
+- **Green** = charge rule (e.g. `charge@80`)
+- **Red** = discharge rule (e.g. `discharge@40`)
+- **Orange** = idle rule
+
+```yaml
+type: custom:apexcharts-card
+header:
+  title: User Schedule
+  show: true
+  show_states: false
+graph_span: 48h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+  color: red
+apex_config:
+  chart:
+    height: 150px
+    stacked: true
+  plotOptions:
+    bar:
+      columnWidth: "100%"
+  legend:
+    show: true
+  yaxis:
+    - show: false
+      min: 0
+      max: 1.1
+series:
+  - entity: sensor.battery_optimizer_user_schedule_chart
+    name: Charge
+    type: column
+    color: "#2ecc71"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'user' && s.state === 'Charge' ? 1 : null
+      ]);
+  - entity: sensor.battery_optimizer_user_schedule_chart
+    name: Discharge
+    type: column
+    color: "#e74c3c"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'user' && s.state === 'Discharge' ? 1 : null
+      ]);
+  - entity: sensor.battery_optimizer_user_schedule_chart
+    name: Idle
+    type: column
+    color: "#f39c12"
+    opacity: 1.0
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'user' && s.state === 'Idle' ? 1 : null
+      ]);
+```
+
+Compare this chart side-by-side with the "Schedule Source" chart to see
+where user rules override the optimizer plan.
 
 #### Dashboard chart — Active Schedule (AI vs Optimizer)
 
-Shows what the device will actually execute — the live device schedule combining the internal AI plan with the optimizer's overrides. Each slot is colored by **mode** (charge/discharge/idle) and shaded by **source**: muted bars are device AI plan slots, vivid bars are optimizer override slots. `yaxis.max` is `2.2` because a slot where both sources are active stacks to full height.
+Shows what the device will actually execute — the live device schedule combining the internal AI plan with the optimizer's overrides. Each slot is colored by **mode** (charge/discharge/idle) and shaded by **source**: muted bars are device AI plan slots, vivid bars are optimizer override slots, and an orange top layer marks slots governed by a user schedule rule. `yaxis.max` is `3.2` because an optimizer override slot with an active user rule stacks to full height.
 
 - **Green** = charge
 - **Red** = discharge
@@ -1053,6 +1174,7 @@ Shows what the device will actually execute — the live device schedule combini
 - Muted (≈50% opacity) = device AI plan (source: `internal`)
 - Vivid (full opacity) = optimizer override (source: `override`)
 - Full-height bar = both sources active in the slot; half-height = one source only
+- **Orange** = user schedule rule slot (source: `user`, from `sensor.battery_optimizer_user_schedule`)
 
 ```yaml
 type: custom:apexcharts-card
@@ -1079,7 +1201,7 @@ apex_config:
   yaxis:
     - show: false
       min: 0
-      max: 2.2
+      max: 3.2
 series:
   - entity: sensor.power_store_schedule_chart
     name: AI Charge
@@ -1165,7 +1287,21 @@ series:
         new Date(s.t).getTime(),
         s.source === 'override' && s.state === 'Idle' ? 1 : null
       ]);
+  - entity: sensor.battery_optimizer_user_schedule
+    name: User Rule
+    type: column
+    color: "#f39c12"
+    opacity: 1.0
+    stroke_width: 0
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const schedule = entity.attributes.schedule || [];
+      return schedule.map(s => [new Date(s.t).getTime(), s.source === 'user' ? 1 : 0]);
 ```
+
+> **Entity name:** this example uses `sensor.battery_optimizer_user_schedule`. After deploying a component build that registers the renamed sensor, swap to `sensor.battery_optimizer_user_schedule_chart` in this series (and in the "User Schedule" / "Schedule Source" examples).
 
 ---
 
@@ -1195,16 +1331,23 @@ The Emaldo integration is not loaded or its services haven't registered yet. The
 ```
 battery_optimizer/
 ├── __init__.py          # HA entry setup, platform forwarding (sensor + button + switch)
-├── config_flow.py       # UI config + options flow
+├── brand/               # Logos + icons (HACS branding)
+├── button.py            # Run Optimizer + Clear Schedule buttons
+├── config_flow.py       # UI config + options flow + user schedule rule subentries
 ├── const.py             # All constants, defaults, slot encoding
 ├── coordinator.py       # Data gathering, trigger management, Emaldo push, PV strategy
 ├── manifest.json        # Integration metadata
 ├── optimizer.py         # Greedy solver — core optimization algorithm + PV sell planner
-├── sensor.py            # 15 sensor entities
+├── rules.py             # User schedule rule models, validation, precedence resolution
+├── runtime_state.py     # Persisted runtime state (rule sources, PV sources, winners)
+├── sensor.py            # 16 sensor entities
 ├── services.py          # run_optimizer + clear_schedule services
 ├── services.yaml        # Service descriptions for UI
+├── solar_actual.py      # Actual solar reading (Emaldo-internal vs external counter)
+├── solar_scale.py       # Solar forecast auto-tune (EWMA scaling from accuracy history)
 ├── switch.py            # PvStrategySwitch + EmaldoControlEnableSwitch — PV sell strategy + Emaldo control toggles
-└── strings.json         # Translation strings
+├── strings.json         # Translation strings
+└── translations/        # Localized strings (da, en, fi, nb, sv)
 ```
 
 ## Support

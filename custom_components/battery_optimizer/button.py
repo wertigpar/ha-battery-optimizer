@@ -27,7 +27,7 @@ async def async_setup_entry(
     async_add_entities([
         RunOptimizerButton(coordinator, entry),
         ClearScheduleButton(coordinator, entry),
-    ])
+    ], config_subentry_id=coordinator._device_subentry_id())
 
 
 class RunOptimizerButton(CoordinatorEntity[BatteryOptimizerCoordinator], ButtonEntity):

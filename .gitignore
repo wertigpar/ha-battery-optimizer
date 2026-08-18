@@ -1,43 +1,32 @@
-# Python
+# Whitelist — only integration code and root release files are tracked.
+# Everything else in the repo is ignored unless explicitly allowed below.
+
+# Ignore everything at the repo root (folders and files)
+/*
+
+# ── Allowed: root release files ────────────────────────────────────────
+!/.gitignore
+!/*.md
+!/LICENSE
+!/hacs.json
+!/dashboard.png
+!/schedule.png
+
+
+# ── Allowed: CI workflows ──────────────────────────────────────────────
+!/.github/
+!/.github/**
+
+# ── Allowed: integration code ──────────────────────────────────────────
+!/custom_components/
+!/custom_components/**
+
+# ── Junk guards inside allowed folders ─────────────────────────────────
 __pycache__/
 *.py[cod]
 *.egg-info/
 *.egg
-dist/
-build/
-*.whl
-
-# Environment
-.env
-.envrc
-
-# OS
+*Zone.Identifier
 .DS_Store
 Thumbs.db
 Desktop.ini
-*Zone.Identifier
-
-# Logs
-*.log
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# HA
-*.storage
-
-# Project
-graphify-out/
-
-# Tests
-tests/
-
-# Docs
-docs/
-
-# HACS
-*.hacs_downloaded

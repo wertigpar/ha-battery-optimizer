@@ -33,7 +33,7 @@ async def async_setup_entry(
     async_add_entities([
         PvStrategySwitch(coordinator, entry),
         EmaldoControlEnableSwitch(coordinator, entry),
-    ])
+    ], config_subentry_id=coordinator._device_subentry_id())
 
 
 class PvStrategySwitch(

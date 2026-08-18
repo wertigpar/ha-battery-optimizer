@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## v0.3.0
 
 ### Added
 
@@ -9,7 +9,13 @@
   the battery's internal AI, and manual charge/idle/discharge actions,
   with per-rule PV sell behavior. Precedence: date > weekday > default;
   same-level overlaps rejected. New `battery_optimizer_user_schedule_chart`
-  diagnostic sensor exposes the user plan for dashboards.
+  diagnostic sensor exposes the user plan for dashboards. The sensor now
+  spans 48 h (today + tomorrow) so the User Schedule chart overlays the
+  other schedule charts on the same time axis.
+- **Localization** — the config, options and schedule-rule subentry flows
+  plus all entity names (sensors, buttons, switches) are localized in
+  English, Danish, Finnish, Norwegian Bokmål and Swedish
+  (`strings.json` + `translations/*.json`).
 
 ## v0.2.4
 

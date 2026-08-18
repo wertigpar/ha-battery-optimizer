@@ -131,7 +131,7 @@
     "rule": {
       "entry_type": "Aikataulu",
       "abort": {
-        "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+        "reconfigure_successful": "Uudelleenmääritys onnistui"
       },
       "initiate_flow": {
         "user": "Lisää uusi aikataulu"
@@ -140,15 +140,21 @@
         "user": {
           "title": "Aikataulusääntö",
           "menu_options": {
-            "charge": "Lataa tavoite-SoC:hon",
-            "idle": "Lepotila",
-            "discharge": "Pura alaraja-SoC:hon",
-            "original": "Alkuperäinen aikataulu (akun tekoäly)",
-            "optimizer": "Optimoijan aikataulu"
+            "weekday": "Arkipäiväsäännöt",
+            "date": "Päivämääräsäännöt",
+            "default": "Oletussääntö"
           }
         },
         "reconfigure": {
           "title": "Muokkaa aikataulusääntöä",
+          "menu_options": {
+            "weekday": "Arkipäiväsäännöt",
+            "date": "Päivämääräsäännöt",
+            "default": "Oletussääntö"
+          }
+        },
+        "action": {
+          "title": "Toiminto",
           "menu_options": {
             "charge": "Lataa tavoite-SoC:hon",
             "idle": "Lepotila",

@@ -131,7 +131,7 @@
     "rule": {
       "entry_type": "Schema",
       "abort": {
-        "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+        "reconfigure_successful": "Omkonfigurationen lyckades"
       },
       "initiate_flow": {
         "user": "Lägg till nytt schema"
@@ -140,15 +140,21 @@
         "user": {
           "title": "Schemaregel",
           "menu_options": {
-            "charge": "Ladda till mål-SoC",
-            "idle": "Inaktiv",
-            "discharge": "Urladda till golv-SoC",
-            "original": "Ursprungligt schema (batteri-AI)",
-            "optimizer": "Optimizerschema"
+            "weekday": "Vardagsregler",
+            "date": "Datumregler",
+            "default": "Standardregel"
           }
         },
         "reconfigure": {
           "title": "Redigera schemaregel",
+          "menu_options": {
+            "weekday": "Vardagsregler",
+            "date": "Datumregler",
+            "default": "Standardregel"
+          }
+        },
+        "action": {
+          "title": "Åtgärd",
           "menu_options": {
             "charge": "Ladda till mål-SoC",
             "idle": "Inaktiv",

@@ -204,11 +204,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register services (idempotent — only registers once)
     async_register_services(hass)
 
-    # Forward to sensor platform
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Listen for options updates
-    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+    # Resolve the Emaldo device BEFORE platforms forward.  When resolved
+    # synchronously, ensure the device container subentry exists first, so
+    # every platform passes config_subentry_id to async_add_entities and
+    # the device-registry v3 (2026.8+) single-owner binding is honored.
+    # When it does NOT resolve synchronously, defer to homeassistant_started
+    # (which reloads the entry — the else-branch then creates the subentry
+    # before platforms forward).
+    unsub_ha_started: Callable[[], None] | None = None
 
     # After HA fully starts, resolve Emaldo device and reload to link entities.
     # Battery Optimizer may set up before Emaldo stores its data in hass.data,
@@ -216,7 +219,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # HA is fully started (all integrations loaded), resolves the link, and
     # triggers a clean entry reload so entities get their device association.
     # Tracks the one-time listener; cleared once homeassistant_started fires.
-    unsub_ha_started: Callable[[], None] | None = None
+    # Defs MUST precede the listener registration: Python binds `def` names
+    # to the enclosing function scope, so a reference before the def raises
+    # UnboundLocalError.
 
     async def _on_home_assistant_started(_event) -> None:
         nonlocal unsub_ha_started
@@ -229,8 +234,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             # Deliberately NO _ensure_device_subentry here.  The reload re-runs
             # async_setup_entry, whose else-branch (device now resolved) calls
-            # _ensure_device_subentry AFTER platforms are forwarded and the
-            # update listener is registered.  Calling it before the reload
+            # _ensure_device_subentry BEFORE platforms forward, so every
+            # platform resolves the subentry id.  Calling it here instead
             # would create the device subentry while the listener from the
             # FIRST setup is live, firing _async_options_updated -> run_optimizer
             # mid-startup on a half-set-up entry.
@@ -249,6 +254,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(_unload_ha_started)
     else:
         await _ensure_device_subentry(hass, entry, coordinator)
+
+    # Forward to platforms
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Listen for options updates
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     _LOGGER.info("Battery Optimizer set up successfully")
     return True

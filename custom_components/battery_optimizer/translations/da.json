@@ -131,7 +131,7 @@
     "rule": {
       "entry_type": "Tidsplan",
       "abort": {
-        "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+        "reconfigure_successful": "Genkonfigurationen var gennemført"
       },
       "initiate_flow": {
         "user": "Tilføj ny tidsplan"
@@ -140,15 +140,21 @@
         "user": {
           "title": "Tidsplanregel",
           "menu_options": {
-            "charge": "Oplad til mål-SoC",
-            "idle": "Inaktiv",
-            "discharge": "Aflad til gulv-SoC",
-            "original": "Oprindelig tidsplan (batteri-AI)",
-            "optimizer": "Optimizer-tidsplan"
+            "weekday": "Ugedagsregler",
+            "date": "Datoregler",
+            "default": "Standardregel"
           }
         },
         "reconfigure": {
           "title": "Rediger tidsplanregel",
+          "menu_options": {
+            "weekday": "Ugedagsregler",
+            "date": "Datoregler",
+            "default": "Standardregel"
+          }
+        },
+        "action": {
+          "title": "Handling",
           "menu_options": {
             "charge": "Oplad til mål-SoC",
             "idle": "Inaktiv",

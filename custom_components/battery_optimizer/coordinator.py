@@ -31,6 +31,7 @@ from .const import (
     SLOT_NO_OVERRIDE,
     SLOT_IDLE,
     SUBENTRY_TYPE_RULE,
+    SUBENTRY_TYPE_DEVICE,
     SLOTS_PER_DAY,
     MIDNIGHT_CHECKPOINT,
     CONF_SPOT_SENSOR,
@@ -157,6 +158,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_sources: list[str] | None = None
         self._last_user_winners: list[SlotWinner] | None = None
         self._last_pv_sources: list[str] | None = None
+        self._last_sources_tomorrow: list[str] | None = None
+        self._last_user_winners_tomorrow: list[SlotWinner] | None = None
+        self._last_pv_sources_tomorrow: list[str] | None = None
         self._activated_time: str | None = None
         # SoC Guard state
         self._unsub_guard: CALLBACK_TYPE | None = None
@@ -1366,6 +1370,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ) / 100.0,
                 day=(today_date + timedelta(days=1)),
                 store_last=False,
+                store_last_tomorrow=True,
             )
             _LOGGER.info(
                 "Tomorrow optimization: savings=%.4f€, C=%d D=%d I=%d",
@@ -1396,6 +1401,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         })
 
         return result
+
+    def _device_subentry_id(self) -> str | None:
+        """Return the 'device' container subentry id for this entry, if any."""
+        for sub in self._entry.subentries.values():
+            if sub.subentry_type == SUBENTRY_TYPE_DEVICE:
+                return sub.subentry_id
+        return None
 
     def _read_user_rules(self) -> list[UserRule]:
         """Read schedule rules from config subentries."""
@@ -1432,6 +1444,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         initial_soc_kwh: float,
         day: date,
         store_last: bool = True,
+        store_last_tomorrow: bool = False,
     ) -> None:
         """Apply user rules to a result in place: bytes, PV, actions, SoC.
 
@@ -1449,6 +1462,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._last_user_winners = winners
             self._last_sources = sources
             self._last_pv_sources = pv_sources
+        if store_last_tomorrow:
+            self._last_user_winners_tomorrow = winners
+            self._last_sources_tomorrow = sources
+            self._last_pv_sources_tomorrow = pv_sources
 
         n_charge = n_discharge = n_idle = 0
         charge_targets: dict[int, int] = {}
@@ -1498,6 +1515,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def last_pv_sources(self) -> list[str] | None:
         """Per-slot PV sources ('user' where a rule set PV, else 'optimizer')."""
         return self._last_pv_sources
+
+    @property
+    def last_sources_tomorrow(self) -> list[str] | None:
+        """Per-slot sources for tomorrow's plan."""
+        return self._last_sources_tomorrow
+
+    @property
+    def last_user_winners_tomorrow(self) -> list[SlotWinner] | None:
+        """Winning rule decisions for tomorrow's plan."""
+        return self._last_user_winners_tomorrow
+
+    @property
+    def last_pv_sources_tomorrow(self) -> list[str] | None:
+        """Per-slot PV sources for tomorrow's plan."""
+        return self._last_pv_sources_tomorrow
 
     @property
     def last_user_winners(self) -> list[SlotWinner] | None:

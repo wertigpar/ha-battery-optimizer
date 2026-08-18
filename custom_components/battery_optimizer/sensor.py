@@ -60,7 +60,7 @@ async def async_setup_entry(
         UserScheduleChartSensor(coordinator, entry),
         AutoBaseLoadSensor(coordinator, entry),
         PlanAccuracySensor(coordinator, entry),
-    ])
+    ], config_subentry_id=coordinator._device_subentry_id())
 
 
 class _BaseOptimizerSensor(CoordinatorEntity[BatteryOptimizerCoordinator], SensorEntity):
@@ -444,9 +444,10 @@ class EmaldoScheduleChartSensor(_BaseOptimizerSensor):
 class UserScheduleChartSensor(_BaseOptimizerSensor):
     """Exposes the user's schedule rules as a dashboard chart.
 
-    Shows only the slots the user explicitly rules; untouched slots are
-    'optimizer'-sourced and absent from the summary (but present in the
-    schedule[] attribute with source='optimizer').
+    Emits the full 48 h plan (today + tomorrow, 192 slots) so the chart
+    overlays the other schedule charts on the same time axis. Slots a user
+    rule governs carry source='user'; untouched slots carry source='optimizer'
+    (drawn as zero bars by the dashboard generators, absent from the summary).
     """
 
     _unrecorded_attributes = frozenset({"schedule"})
@@ -467,10 +468,10 @@ class UserScheduleChartSensor(_BaseOptimizerSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        if self.coordinator.last_sources is None or self._result is None:
+        if self._result is None:
             return {}
         result = self._result
-        sources = self.coordinator.last_sources
+        sources = self.coordinator.last_sources or ["optimizer"] * len(result.slots)
         winners = self.coordinator.last_user_winners or []
         pv = result.thirdparty_pv_slots
         pvs = self.coordinator.last_pv_sources or []
@@ -496,6 +497,36 @@ class UserScheduleChartSensor(_BaseOptimizerSensor):
                 "pv_sell": (not pv[idx]) if idx < len(pv) else False,
                 "pv_source": pvs[idx] if idx < len(pvs) else "optimizer",
             })
+
+        tomorrow = self.coordinator.last_result_tomorrow
+        if tomorrow is not None:
+            tom_sources = (
+                self.coordinator.last_sources_tomorrow
+                or ["optimizer"] * len(tomorrow.slots)
+            )
+            tom_winners = self.coordinator.last_user_winners_tomorrow or []
+            tom_pv = tomorrow.thirdparty_pv_slots
+            tom_pvs = self.coordinator.last_pv_sources_tomorrow or []
+            for sp in tomorrow.slots:
+                idx = sp.index
+                h, m = (idx * 15) // 60, (idx * 15) % 60
+                state, target_soc = ScheduleChartSensor._slot_state_and_target(sp)
+                w = tom_winners[idx] if idx < len(tom_winners) else None
+                slot_dt = today_midnight + timedelta(days=1, minutes=idx * 15)
+                slots_data.append({
+                    "slot": idx,
+                    "time": f"{h:02d}:{m:02d}",
+                    "t": slot_dt.isoformat(),
+                    "day": 1,
+                    "action": sp.action,
+                    "state": state,
+                    "target_soc": target_soc,
+                    "source": tom_sources[idx] if idx < len(tom_sources) else "optimizer",
+                    "soc_target": w.soc_target if w else None,
+                    "pv_sell": (not tom_pv[idx]) if idx < len(tom_pv) else False,
+                    "pv_source": tom_pvs[idx] if idx < len(tom_pvs) else "optimizer",
+                })
+
         return {"schedule": slots_data}
 
 
