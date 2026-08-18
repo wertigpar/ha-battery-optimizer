@@ -138,11 +138,30 @@
       },
       "step": {
         "user": {
-          "title": "Schedule rule"
+          "title": "Schedule rule",
+          "menu_options": {
+            "charge": "Charge to target SoC",
+            "idle": "Idle",
+            "discharge": "Discharge to floor SoC",
+            "original": "Original schedule (battery AI)",
+            "optimizer": "Optimizer schedule"
+          }
         },
         "reconfigure": {
-          "title": "Edit schedule rule"
-        }
+          "title": "Edit schedule rule",
+          "menu_options": {
+            "charge": "Charge to target SoC",
+            "idle": "Idle",
+            "discharge": "Discharge to floor SoC",
+            "original": "Original schedule (battery AI)",
+            "optimizer": "Optimizer schedule"
+          }
+        },
+        "detail_charge": { "title": "Charge rule" },
+        "detail_idle": { "title": "Idle rule" },
+        "detail_discharge": { "title": "Discharge rule" },
+        "detail_original": { "title": "Original schedule rule" },
+        "detail_optimizer": { "title": "Optimizer schedule rule" }
       }
     }
   }

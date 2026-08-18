@@ -87,17 +87,17 @@ async def _ensure_default_rule(hass: HomeAssistant, entry: ConfigEntry) -> None:
     )
 
 
-async def _bind_device_to_default_subentry(
+async def _place_device_top_level(
     hass: HomeAssistant,
     entry: ConfigEntry,
     coordinator: BatteryOptimizerCoordinator,
 ) -> None:
-    """Name the virtual device and bind it to the default rule subentry.
+    """Name the virtual device at the top level (parallel to schedules).
 
     Idempotent: ``async_get_or_create`` reuses the device matching
     ``identifiers`` and only writes when something actually changes
-    (name, subentry binding).  A user-renamed device keeps its custom
-    name via ``name_by_user``.
+    (name).  A user-renamed device keeps its custom name via
+    ``name_by_user``.
     """
     if coordinator._emaldo_device_id is None:
         return
@@ -115,14 +115,23 @@ async def _bind_device_to_default_subentry(
     from homeassistant.helpers import device_registry as dr
 
     dev_reg = dr.async_get(hass)
-    dev_reg.async_get_or_create(
+    device = dev_reg.async_get_or_create(
         config_entry_id=entry.entry_id,
-        config_subentry_id=default_sub.subentry_id,
         identifiers={(DOMAIN, coordinator._emaldo_device_id)},
         name="Battery Optimizer Configuration",
         manufacturer="Emaldo",
         model="Optimized Battery",
     )
+    # Unbind from the default subentry — the optimizer device sits at the
+    # top level, parallel to the schedule subentries (fixes installs that
+    # bound it in an earlier version).
+    bound = device.config_entries_subentries.get(entry.entry_id, set())
+    if default_sub.subentry_id in bound:
+        dev_reg.async_update_device(
+            device.id,
+            remove_config_subentry_id=default_sub.subentry_id,
+            remove_config_entry_id=entry.entry_id,
+        )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -162,7 +171,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.info(
                 "Battery Optimizer: Emaldo device resolved after startup — reloading"
             )
-            await _bind_device_to_default_subentry(hass, entry, coordinator)
+            await _place_device_top_level(hass, entry, coordinator)
             await hass.config_entries.async_reload(entry.entry_id)
 
     def _unload_ha_started() -> None:
@@ -177,7 +186,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         entry.async_on_unload(_unload_ha_started)
     else:
-        await _bind_device_to_default_subentry(hass, entry, coordinator)
+        await _place_device_top_level(hass, entry, coordinator)
 
     _LOGGER.info("Battery Optimizer set up successfully")
     return True

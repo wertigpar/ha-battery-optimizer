@@ -8,6 +8,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import (
+    SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
@@ -100,7 +101,6 @@ from .rules import (
     LEVEL_WEEKDAY,
     LEVEL_DATE,
     LEVEL_DEFAULT,
-    ACTIONS,
     PV_BEHAVIORS,
 )
 
@@ -303,7 +303,7 @@ def _build_schema(
     )
 
 
-def _rule_schema(defaults: dict | None = None) -> vol.Schema:
+def _rule_schema(defaults: dict | None = None, *, action: str | None = None) -> vol.Schema:
     d = defaults or {}
     weekday_options = [
         {"label": "Mon", "value": "0"}, {"label": "Tue", "value": "1"},
@@ -312,6 +312,13 @@ def _rule_schema(defaults: dict | None = None) -> vol.Schema:
         {"label": "Sun", "value": "6"},
     ]
     days_default = [str(x) for x in d.get("days", [0])]
+    soc_target_field: dict = {}
+    if action in ("charge", "discharge"):
+        soc_target_field = {
+            vol.Optional(
+                "soc_target", default=d.get("soc_target")
+            ): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=1, max=100))),
+        }
     return vol.Schema(
         {
             vol.Optional("label", default=d.get("label", "")): str,
@@ -331,12 +338,7 @@ def _rule_schema(defaults: dict | None = None) -> vol.Schema:
             ): vol.Any(None, str),
             vol.Required("start_time", default=d.get("start_time", "07:00")): str,
             vol.Required("end_time", default=d.get("end_time", "17:00")): str,
-            vol.Required(
-                "action", default=d.get("action", "charge")
-            ): vol.In(ACTIONS),
-            vol.Optional(
-                "soc_target", default=d.get("soc_target")
-            ): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=1, max=100))),
+            **soc_target_field,
             vol.Required(
                 "pv_sell", default=d.get("pv_sell", "inherit")
             ): vol.In(PV_BEHAVIORS),
@@ -347,46 +349,96 @@ def _rule_schema(defaults: dict | None = None) -> vol.Schema:
 class RuleSubentryFlow(ConfigSubentryFlow):
     """Create or edit a schedule rule subentry."""
 
-    async def _shared_show_form(self, defaults: dict | None, errors: dict | None):
-        return self.async_show_form(
-            step_id=self.init_step or "user",
-            data_schema=_rule_schema(defaults),
-            errors=errors or {},
-        )
+    ACTION_MENU = {
+        "charge": "Charge to target SoC",
+        "idle": "Idle",
+        "discharge": "Discharge to floor SoC",
+        "original": "Original schedule (battery AI)",
+        "optimizer": "Optimizer schedule",
+    }
 
-    async def async_step_user(
-        self, user_input: dict | None = None
-    ) -> ConfigFlowResult:
-        return await self._process(user_input)
+    # menu keys -> step methods
+    async def async_step_user(self, user_input=None) -> ConfigFlowResult:
+        """Create flow: choose the action type first."""
+        return await self._menu_or_route(user_input)
 
-    async def async_step_reconfigure(
-        self, user_input: dict | None = None
-    ) -> ConfigFlowResult:
-        subentry = self._get_reconfigure_subentry()
+    async def async_step_reconfigure(self, user_input=None) -> ConfigFlowResult:
+        """Edit flow: choose (or confirm) the action type."""
+        return await self._menu_or_route(user_input)
+
+    async def _menu_or_route(self, user_input) -> ConfigFlowResult:
         if user_input is None:
-            return await self._shared_show_form(
-                defaults=dict(subentry.data), errors=None
+            return self.async_show_menu(
+                step_id=self.init_step or "user",
+                menu_options=self.ACTION_MENU,
             )
-        return await self._process(user_input, editing=subentry)
+        # user picked an action from the menu — route to the action step
+        action = user_input["next_step_id"]
+        step = getattr(self, f"async_step_{action}")
+        return await step(None)
 
-    async def _process(
-        self,
-        user_input: dict | None,
-        editing: ConfigSubentry | None = None,
+    async def async_step_charge(self, user_input=None):
+        return await self._detail_step("charge", user_input)
+
+    async def async_step_idle(self, user_input=None):
+        return await self._detail_step("idle", user_input)
+
+    async def async_step_discharge(self, user_input=None):
+        return await self._detail_step("discharge", user_input)
+
+    async def async_step_original(self, user_input=None):
+        return await self._detail_step("original", user_input)
+
+    async def async_step_optimizer(self, user_input=None):
+        return await self._detail_step("optimizer", user_input)
+
+    # The detail form's step_id is ``detail_<action>``; on submit the
+    # framework routes back to ``async_step_detail_<action>``, so each
+    # needs a forwarding handler that funnels into the action step.
+    async def async_step_detail_charge(self, user_input=None):
+        return await self.async_step_charge(user_input)
+
+    async def async_step_detail_idle(self, user_input=None):
+        return await self.async_step_idle(user_input)
+
+    async def async_step_detail_discharge(self, user_input=None):
+        return await self.async_step_discharge(user_input)
+
+    async def async_step_detail_original(self, user_input=None):
+        return await self.async_step_original(user_input)
+
+    async def async_step_detail_optimizer(self, user_input=None):
+        return await self.async_step_optimizer(user_input)
+
+    async def _detail_step(
+        self, action: str, user_input: dict | None
     ) -> ConfigFlowResult:
+        # The framework invokes every step method with a single positional
+        # argument (data_entry_flow._async_handle_step), and routes menu
+        # picks straight to ``async_step_<menu_key>`` — so the edit/create
+        # distinction must come from the flow source, not a call-site kwarg.
+        reconfigure = self.source == SOURCE_RECONFIGURE
+        editing = self._get_reconfigure_subentry() if reconfigure else None
+        defaults = dict(editing.data) if editing is not None else {}
         if user_input is None:
-            return await self._shared_show_form(defaults=None, errors=None)
+            return self.async_show_form(
+                step_id=f"detail_{action}",
+                data_schema=_rule_schema(defaults, action=action),
+                errors={},
+            )
 
         user_input = dict(user_input)
         raw_days = user_input.get("days")
         if raw_days is not None:
             user_input["days"] = [int(x) for x in raw_days]
-        rule = rule_from_data(user_input)
+        rule = rule_from_data({**user_input, "action": action})
         siblings = self._same_level_siblings(rule.level, editing)
         errors = rule_errors(rule, siblings)
         if errors:
-            return await self._shared_show_form(
-                defaults=user_input, errors={"base": "; ".join(errors)}
+            return self.async_show_form(
+                step_id=f"detail_{action}",
+                data_schema=_rule_schema(user_input, action=action),
+                errors={"base": "; ".join(errors)},
             )
 
         data = {
