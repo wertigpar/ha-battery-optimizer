@@ -19,7 +19,7 @@
           "soc_min": "Min SoC (%)",
           "soc_max": "Max SoC (%)",
           "base_load_kw": "Base household load estimate (kW)",
-          "battery_wear_cost": "Battery wear cost (per kWh cycled, e.g. 0.03 = 3 cents/kWh)",
+          "battery_wear_cost": "Battery wear cost (per kWh cycled, e.g. 0.03)",
           "idle_power_kw": "Battery unit idle power consumption (kW)",
           "enable_soc_safeguard": "SoC floor safeguard — keep-alive charging at the cheapest slots so idle drain never pulls SoC below Min SoC",
           "soc_recovery_buffer_pct": "SoC recovery buffer (%) — keep-alive charge target = Min SoC + buffer (default 5)",
@@ -64,7 +64,7 @@
           "soc_min": "Min SoC (%)",
           "soc_max": "Max SoC (%)",
           "base_load_kw": "Base household load (kW)",
-          "battery_wear_cost": "Battery wear cost (per kWh, e.g. 0.03 = 3 cents/kWh)",
+          "battery_wear_cost": "Battery wear cost (per kWh, e.g. 0.03)",
           "idle_power_kw": "Battery unit idle power (kW)",
           "enable_soc_safeguard": "SoC floor safeguard (keep-alive charging)",
           "soc_recovery_buffer_pct": "SoC recovery buffer (%, keep-alive target = Min SoC + buffer)",
@@ -216,6 +216,15 @@
         "user": "Add device"
       },
       "step": {}
+    }
+  },
+  "selector": {
+    "idle_strategy": {
+      "options": {
+        "full_control": "Full control",
+        "solar_guard": "Solar guard",
+        "smart_override": "Smart override"
+      }
     }
   }
 }

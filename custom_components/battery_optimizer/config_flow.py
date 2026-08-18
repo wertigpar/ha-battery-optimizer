@@ -248,8 +248,15 @@ def _build_schema(
             vol.Required(
                 CONF_IDLE_STRATEGY,
                 default=d.get(CONF_IDLE_STRATEGY, DEFAULT_IDLE_STRATEGY),
-            ): vol.In(
-                [IDLE_FULL_CONTROL, IDLE_SOLAR_GUARD, IDLE_SMART_OVERRIDE]
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        IDLE_FULL_CONTROL,
+                        IDLE_SOLAR_GUARD,
+                        IDLE_SMART_OVERRIDE,
+                    ],
+                    translation_key="idle_strategy",
+                )
             ),
             vol.Required(
                 CONF_SOC_GUARD_INTERVAL,

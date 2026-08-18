@@ -93,7 +93,6 @@ class _BaseOptimizerSensor(CoordinatorEntity[BatteryOptimizerCoordinator], Senso
 class OptimizerStatusSensor(_BaseOptimizerSensor):
     """Shows the current optimizer status: idle, active, error."""
 
-    _attr_name = "Optimizer Status"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "status")
@@ -128,7 +127,6 @@ class LastRunSensor(_BaseOptimizerSensor):
     """Timestamp of the last optimization run."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_name = "Last Optimization"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "last_run")
@@ -142,7 +140,6 @@ class LastRunSensor(_BaseOptimizerSensor):
 class CurrentActionSensor(_BaseOptimizerSensor):
     """Current slot action: charge, discharge, idle, etc."""
 
-    _attr_name = "Current Slot Action"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "current_action")
@@ -192,7 +189,6 @@ class EstimatedSavingsSensor(_BaseOptimizerSensor):
     """
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_name = "Rest of Day Estimated Savings"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "estimated_savings")
@@ -220,7 +216,6 @@ class BaselineCostSensor(_BaseOptimizerSensor):
     """Rest-of-day estimated cost without any battery (pure grid purchase)."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_name = "Rest of Day Baseline Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "baseline_cost")
@@ -238,7 +233,6 @@ class EmaldoPlanCostSensor(_BaseOptimizerSensor):
     """Rest-of-day estimated cost following Emaldo's internal AI schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_name = "Rest of Day Emaldo Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "emaldo_plan_cost")
@@ -262,7 +256,6 @@ class OptimizerPlanCostSensor(_BaseOptimizerSensor):
     """Rest-of-day estimated cost following the optimizer's schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_name = "Rest of Day Optimizer Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "optimizer_plan_cost")
@@ -287,7 +280,6 @@ class TomorrowEstimatedSavingsSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated savings/profit from optimized schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_name = "Tomorrow Estimated Savings"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "tomorrow_estimated_savings")
@@ -305,7 +297,6 @@ class TomorrowBaselineCostSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated cost without any battery (pure grid purchase)."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_name = "Tomorrow Baseline Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "tomorrow_baseline_cost")
@@ -323,7 +314,6 @@ class TomorrowEmaldoPlanCostSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated cost following Emaldo's internal AI schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_name = "Tomorrow Emaldo Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "tomorrow_emaldo_plan_cost")
@@ -347,7 +337,6 @@ class TomorrowOptimizerPlanCostSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated cost following the optimizer's schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_name = "Tomorrow Optimizer Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "tomorrow_optimizer_plan_cost")
@@ -376,7 +365,6 @@ class EmaldoScheduleChartSensor(_BaseOptimizerSensor):
     """
 
     _unrecorded_attributes = frozenset({"schedule"})
-    _attr_name = "Emaldo Schedule"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, entry) -> None:
@@ -451,7 +439,6 @@ class UserScheduleChartSensor(_BaseOptimizerSensor):
     """
 
     _unrecorded_attributes = frozenset({"schedule"})
-    _attr_name = "User Schedule"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, entry) -> None:
@@ -537,7 +524,6 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
     """
 
     _unrecorded_attributes = frozenset({"schedule", "soc_history"})
-    _attr_name = "Schedule Chart"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, entry) -> None:
@@ -649,7 +635,6 @@ class AutoBaseLoadSensor(_BaseOptimizerSensor):
     """
 
     _attr_native_unit_of_measurement = "kW"
-    _attr_name = "Auto Base Load"
     _attr_icon = "mdi:home-lightning-bolt-outline"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 3
@@ -672,7 +657,6 @@ class PlanAccuracySensor(_BaseOptimizerSensor):
     """
 
     _attr_native_unit_of_measurement = "kWh"
-    _attr_name = "Plan Accuracy"
     _attr_icon = "mdi:chart-bell-curve-cumulative"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 3

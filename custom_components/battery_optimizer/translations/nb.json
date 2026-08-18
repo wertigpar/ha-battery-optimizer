@@ -19,7 +19,7 @@
           "soc_min": "Min. SoC (%)",
           "soc_max": "Maks. SoC (%)",
           "base_load_kw": "Estimert grunnlast (kW)",
-          "battery_wear_cost": "Batterislitasjekostnad (per kWh syklet, f.eks. 0,03 = 3 cent/kWh)",
+          "battery_wear_cost": "Batterislitasjekostnad (per kWh syklet, f.eks. 0,03)",
           "idle_power_kw": "Batterienhetens tomgangsforbruk (kW)",
           "enable_soc_safeguard": "SoC-gulvbeskyttelse — vedlikeholdslading i de billigste periodene slik at tomgang aldri trekker SoC under min. SoC",
           "soc_recovery_buffer_pct": "SoC-gjenopprettingsbuffer (%) — vedlikeholdsmål = min. SoC + buffer (standard 5)",
@@ -64,7 +64,7 @@
           "soc_min": "Min. SoC (%)",
           "soc_max": "Maks. SoC (%)",
           "base_load_kw": "Husholdningens grunnlast (kW)",
-          "battery_wear_cost": "Batterislitasjekostnad (per kWh, f.eks. 0,03 = 3 cent/kWh)",
+          "battery_wear_cost": "Batterislitasjekostnad (per kWh, f.eks. 0,03)",
           "idle_power_kw": "Batterienhetens tomgangseffekt (kW)",
           "enable_soc_safeguard": "SoC-gulvbeskyttelse (vedlikeholdslading)",
           "soc_recovery_buffer_pct": "SoC-gjenopprettingsbuffer (%, vedlikeholdsmål = min. SoC + buffer)",
@@ -216,6 +216,15 @@
         "user": "Legg til enhet"
       },
       "step": {}
+    }
+  },
+  "selector": {
+    "idle_strategy": {
+      "options": {
+        "full_control": "Full kontroll",
+        "solar_guard": "Solbeskyttelse",
+        "smart_override": "Smart overstyring"
+      }
     }
   }
 }

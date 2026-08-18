@@ -19,7 +19,7 @@
           "soc_min": "Minimi SoC (%)",
           "soc_max": "Maksimi SoC (%)",
           "base_load_kw": "Arvioitu peruskuorma (kW)",
-          "battery_wear_cost": "Akun kulumiskustannus (per sykletty kWh, esim. 0,03 = 3 senttiä/kWh)",
+          "battery_wear_cost": "Akun kulumiskustannus (per sykletty kWh, esim. 0,03)",
           "idle_power_kw": "Akun tyhjäkäynnin tehonkulutus (kW)",
           "enable_soc_safeguard": "SoC-alarajasuoja — ylläpitolataus halvimmilla tunneilla, jotta tyhjäkäynti ei koskaan pudota SoC:ta alle Min SoC:n",
           "soc_recovery_buffer_pct": "SoC-palautuspuskuri (%) — ylläpidon lataustavoite = Min SoC + puskuri (oletus 5)",
@@ -64,7 +64,7 @@
           "soc_min": "Minimi SoC (%)",
           "soc_max": "Maksimi SoC (%)",
           "base_load_kw": "Kotitalouden peruskuorma (kW)",
-          "battery_wear_cost": "Akun kulumiskustannus (per kWh, esim. 0,03 = 3 senttiä/kWh)",
+          "battery_wear_cost": "Akun kulumiskustannus (per kWh, esim. 0,03)",
           "idle_power_kw": "Akun tyhjäkäyntiteho (kW)",
           "enable_soc_safeguard": "SoC-alarajasuoja (ylläpitolataus)",
           "soc_recovery_buffer_pct": "SoC-palautuspuskuri (%, ylläpidon tavoite = Min SoC + puskuri)",
@@ -216,6 +216,15 @@
         "user": "Lisää laite"
       },
       "step": {}
+    }
+  },
+  "selector": {
+    "idle_strategy": {
+      "options": {
+        "full_control": "Täysi ohjaus",
+        "solar_guard": "Aurinkosuoja",
+        "smart_override": "Älykäs ohitus"
+      }
     }
   }
 }
