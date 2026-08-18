@@ -1,5 +1,16 @@
 # Changes
 
+## Unreleased
+
+### Added
+
+- **User Schedule Layer** — persistent schedule rules (config
+  subentries) that select, per time window, between the optimizer plan,
+  the battery's internal AI, and manual charge/idle/discharge actions,
+  with per-rule PV sell behavior. Precedence: date > weekday > default;
+  same-level overlaps rejected. New `battery_optimizer_user_schedule_chart`
+  diagnostic sensor exposes the user plan for dashboards.
+
 ## v0.2.4
 
 ### Added

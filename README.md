@@ -158,6 +158,50 @@ When the optimizer decides a slot should be "idle" (no charge/discharge), the st
 
 > **Background:** The Emaldo battery has an internal AI that makes its own charge/discharge decisions. When the optimizer sends `SLOT_NO_OVERRIDE` (0x80), the internal AI is free to act — which can lead to unwanted overnight grid charging that fills the battery before solar production arrives. The `full_control` strategy prevents this by explicitly forcing the battery idle for slots the optimizer doesn't need.
 
+### User Schedule Layer
+
+Users can define persistent schedule rules that override the optimizer
+for specific time windows. Rules are managed via **Settings → Devices &
+Services → Battery Optimizer → subentries** (Add / edit / delete). No
+YAML, no helpers.
+
+**Rule levels (precedence, strongest first):**
+
+| Level | Example | Notes |
+|---|---|---|
+| **Specific date** | `18.8.2026 19:45 – 19.8.2026 01:15` | May cross midnight and span multiple days; middle days covered fully |
+| **Weekday** | `Mon–Fri 07:00–17:00` | Single-day only — no midnight crossing (make two rules) |
+| **Default** | every day, all day | Always present, editable, effectively non-deletable; initial action = `optimizer` |
+
+Same-level overlapping rules are rejected at creation. Date rules always
+beat weekday rules, which beat the default rule.
+
+**Actions:**
+
+| Action | Battery behavior | Emaldo byte |
+|--------|------------------|-------------|
+| `charge@N%` | Charge from grid to N % | `N` |
+| `idle` | No grid draw; absorb solar surplus | `0` |
+| `discharge@N%` | Discharge when load > solar; absorb solar otherwise | `256−N` |
+| `original` | Follow the battery's internal AI | `128` |
+| `optimizer` | Use the optimizer's plan for the slot | *(computed)* |
+
+**PV behavior** (per rule, effective when the PV Sell Strategy switch is
+ON): `inherit` (follow the optimizer's PV plan), `sell` (export solar to
+grid), `charge` (solar charges the battery).
+
+**SoC floor example:** to never discharge below 40 % in the evening but
+allow 15 % in the morning (solar about to start), add a weekday rule
+`17:00–23:00 → discharge@40` and a weekday rule `06:00–09:00 →
+discharge@15`. With SoC Guard enabled, the discharge floor rotates
+accordingly.
+
+**Dashboard:** the `sensor.battery_optimizer_user_schedule_chart` sensor
+exposes the user plan (summary state + `schedule[]` attribute with
+`source` per slot). Use the existing ApexCharts examples with this
+entity for a "User's Schedule" chart, and add the user as a third series
+to the Active Schedule chart (`source == 'user'`).
+
 ### SoC Guard
 
 The Emaldo battery uses a single global "Battery Range" setting (high/low markers) that applies to **all** discharge slots simultaneously. This means per-slot discharge thresholds (e.g. "discharge to 75% at 17:00, then to 60% at 19:00") cannot be achieved through the slot values alone — the firmware treats `high_marker` as a global discharge floor.

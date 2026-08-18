@@ -41,6 +41,20 @@ The optimizer produces a 96-slot (15-minute) schedule per day. When tomorrow's p
 6. **Simulate SoC** through all 96 slots and build the Emaldo byte schedule. Per slot: charge adds `charge_kw × slot_duration × η_c`; keep-alive charge adds only the deficit up to the floor target; discharge subtracts `delivered_kwh / η_d` **capped at the floor marker** (the discharge byte stops at `soc_min`) plus `idle_drain` (a discharge action on a solar-surplus slot instead absorbs the surplus — adds `solar_kwh`, subtracts idle drain once, never twice); idle subtracts `idle_drain`. The trajectory is clamped at the physical 0 %, not at `soc_min`. After the idle loop, the grid-charge balance also credits surplus absorption on **discharge-assigned** surplus slots (the Emaldo firmware charges from excess solar even in discharge mode), scaled by `solar_forecast_margin` (default 0.85) and capped by the remaining headroom — conservative, so an over-forecast never leaves the plan grid-charge-starved.
 7. **Plan PV sell slots** (when `enable_pv_strategy=True`) — `_plan_pv_sell_slots()` finds a single cutover slot T ≤ noon via iterated true-need simulation (floor recovery first, then up to 6 sim-and-rescan passes), validates it with a final starvation guard, and marks solar slots before T as sell-to-grid only where `sell_price` beats the stored value of that kWh — the cheapest future discharge buy discounted by round-trip efficiency and `pv_sell_margin` (economic gate; direct PV export incurs no wear cost). Solar from T onward is kept for uninterrupted battery charging. Then `_correct_soc_for_pv_sells()` does a forward SoC correction pass. Both today and tomorrow plans go through this step.
 
+## User Schedule Layer (rules-as-mask)
+
+User-configured rules (config subentries) select, per 15-min slot, which
+of three sources governs the battery: optimizer plan (default), the
+battery's internal AI (byte 128), or a manual action (charge@N / idle /
+discharge@N). Precedence: date > weekday > default, structural. Same-level
+overlap is blocked at creation. After `optimize()` produces the plan, the
+coordinator expands the rules per day (`expand_day`), masks the 96-byte
+array and the PV plan (`mask_plan`), and re-simulates the SoC trajectory
+so tomorrow's start SoC, the SoC guard floors, plan accuracy and the
+dashboard forecast all reflect the masked plan. The SoC guard marker
+additionally honours user `discharge@N` floors in its look-ahead window.
+The optimizer itself is untouched.
+
 ## Price Calculation
 
 Effective buy and sell prices (€/kWh) are derived from raw Nordpool spot prices by `compute_prices()`:
