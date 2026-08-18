@@ -27,7 +27,6 @@ from homeassistant.helpers.selector import (
 from .const import (
     DOMAIN,
     SUBENTRY_TYPE_RULE,
-    DEFAULT_RULE_LABEL,
     CONF_SPOT_SENSOR,
     CONF_SOLCAST_TODAY,
     CONF_SOLCAST_TOMORROW,
@@ -100,6 +99,7 @@ from .rules import (
     rule_errors,
     rule_from_data,
     rule_summary,
+    default_rule_title,
     LEVEL_WEEKDAY,
     LEVEL_DATE,
     LEVEL_DEFAULT,
@@ -461,9 +461,10 @@ class RuleSubentryFlow(ConfigSubentryFlow):
             "pv_sell": rule.pv_sell,
             "label": rule.label,
         }
-        # default rule keeps its stable "Default Schedule" label
+        # default rule keeps its stable "Default Schedule" label, with the
+        # governing source appended (Optimizer / Original / manual action)
         if rule.level == LEVEL_DEFAULT:
-            title = DEFAULT_RULE_LABEL
+            title = default_rule_title(rule)
         elif rule.label:
             title = f"{rule.label}: {rule_summary(rule)}"
         else:

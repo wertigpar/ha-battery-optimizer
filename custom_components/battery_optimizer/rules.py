@@ -11,7 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from .const import SLOTS_PER_DAY, SLOT_NO_OVERRIDE, SLOT_IDLE
+from .const import (
+    SLOTS_PER_DAY,
+    SLOT_NO_OVERRIDE,
+    SLOT_IDLE,
+    DEFAULT_RULE_LABEL,
+)
 
 # ── Levels (strongest first — ladder walk order) ─────────────────────
 LEVEL_DATE = "date"
@@ -132,6 +137,20 @@ def rule_summary(rule: UserRule) -> str:
         days = _weekday_range_summary(rule.days)
 
     return f"{action} · {days} · {rule.start_time}–{rule.end_time}"
+
+
+def default_rule_title(rule: UserRule) -> str:
+    """Subentry title for the default rule, showing its action.
+
+    e.g. "Default Schedule (Optimizer)", "Default Schedule (Original)",
+    "Default Schedule (Charge to 90%)".  Keeps the stable label so the
+    default rule stays identifiable, while surfacing which source
+    (optimizer / battery AI / manual action) actually governs.
+    """
+    summary = rule_summary(rule)
+    if summary == "Optimizer":
+        return f"{DEFAULT_RULE_LABEL} (Optimizer)"
+    return f"{DEFAULT_RULE_LABEL} ({summary})"
 
 
 def _parse_hhmm(value: str) -> tuple[int, int] | None:

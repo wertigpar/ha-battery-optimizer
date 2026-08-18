@@ -23,7 +23,12 @@ from .const import (
     DEVICE_SUBENTRY_UNIQUE_ID,
 )
 from .coordinator import BatteryOptimizerCoordinator
-from .rules import LEVEL_DEFAULT, ACTION_OPTIMIZER
+from .rules import (
+    LEVEL_DEFAULT,
+    ACTION_OPTIMIZER,
+    rule_from_data,
+    default_rule_title,
+)
 from .services import async_register_services, async_unregister_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,8 +41,8 @@ async def _ensure_default_rule(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     Called on every setup — recreates it even if the user deleted it, so
     the default rule is effectively non-deletable.  Also migrates an
-    existing default rule whose title predates the rename to
-    ``DEFAULT_RULE_LABEL``.
+    existing default rule whose title predates the action-suffix rename
+    (``DEFAULT_RULE_LABEL (Optimizer)`` etc.).
     """
     existing = [
         sub
@@ -49,43 +54,45 @@ async def _ensure_default_rule(hass: HomeAssistant, entry: ConfigEntry) -> None:
         None,
     )
     if default is not None:
-        # Migrate pre-rename installs: title AND the stored data label
-        # (the flow derives a subentry's title from rule.label on edit, so
-        # a stale label would revert the row title to "Default").
-        needs_label = dict(default.data).get("label") != DEFAULT_RULE_LABEL
-        if default.title != DEFAULT_RULE_LABEL or needs_label:
+        data = dict(default.data)
+        rule = rule_from_data(data)
+        expected_title = default_rule_title(rule)
+        # Keep the stored label in sync too (the flow derives a subentry's
+        # title from rule.label on edit, so a stale label would revert).
+        needs_label = data.get("label") != DEFAULT_RULE_LABEL
+        if default.title != expected_title or needs_label:
             _LOGGER.info(
                 "Battery Optimizer: renamed default rule subentry '%s' -> '%s'",
                 default.title,
-                DEFAULT_RULE_LABEL,
+                expected_title,
             )
-            data = dict(default.data)
             if needs_label:
                 data["label"] = DEFAULT_RULE_LABEL
             hass.config_entries.async_update_subentry(
-                entry, default, title=DEFAULT_RULE_LABEL, data=data
+                entry, default, title=expected_title, data=data
             )
         return
     from homeassistant.config_entries import ConfigSubentry
 
+    default_data = {
+        "level": LEVEL_DEFAULT,
+        "days": [],
+        "start_date": None,
+        "end_date": None,
+        "start_time": "00:00",
+        "end_time": "24:00",
+        "action": ACTION_OPTIMIZER,
+        "soc_target": None,
+        "pv_sell": "inherit",
+        "label": DEFAULT_RULE_LABEL,
+    }
     hass.config_entries.async_add_subentry(
         entry,
         ConfigSubentry(
             subentry_type=SUBENTRY_TYPE_RULE,
-            title=DEFAULT_RULE_LABEL,
+            title=default_rule_title(rule_from_data(default_data)),
             unique_id="default_rule",
-            data={
-                "level": LEVEL_DEFAULT,
-                "days": [],
-                "start_date": None,
-                "end_date": None,
-                "start_time": "00:00",
-                "end_time": "24:00",
-                "action": ACTION_OPTIMIZER,
-                "soc_target": None,
-                "pv_sell": "inherit",
-                "label": DEFAULT_RULE_LABEL,
-            },
+            data=default_data,
         ),
     )
 
