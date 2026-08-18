@@ -18,6 +18,10 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+)
 
 from .const import (
     DOMAIN,
@@ -301,6 +305,13 @@ def _build_schema(
 
 def _rule_schema(defaults: dict | None = None) -> vol.Schema:
     d = defaults or {}
+    weekday_options = [
+        {"label": "Mon", "value": "0"}, {"label": "Tue", "value": "1"},
+        {"label": "Wed", "value": "2"}, {"label": "Thu", "value": "3"},
+        {"label": "Fri", "value": "4"}, {"label": "Sat", "value": "5"},
+        {"label": "Sun", "value": "6"},
+    ]
+    days_default = [str(x) for x in d.get("days", [0])]
     return vol.Schema(
         {
             vol.Optional("label", default=d.get("label", "")): str,
@@ -308,22 +319,24 @@ def _rule_schema(defaults: dict | None = None) -> vol.Schema:
                 "level", default=d.get("level", LEVEL_WEEKDAY)
             ): vol.In([LEVEL_WEEKDAY, LEVEL_DATE, LEVEL_DEFAULT]),
             vol.Optional(
-                "days", default=d.get("days", [0])
-            ): vol.All(cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))]),
+                "days", default=days_default
+            ): SelectSelector(
+                SelectSelectorConfig(options=weekday_options, multiple=True)
+            ),
             vol.Optional(
-                "start_date", default=d.get("start_date", "")
-            ): vol.Any(str, None),
+                "start_date", default=d.get("start_date") or None
+            ): vol.Any(None, str),
             vol.Optional(
-                "end_date", default=d.get("end_date", "")
-            ): vol.Any(str, None),
+                "end_date", default=d.get("end_date") or None
+            ): vol.Any(None, str),
             vol.Required("start_time", default=d.get("start_time", "07:00")): str,
             vol.Required("end_time", default=d.get("end_time", "17:00")): str,
             vol.Required(
                 "action", default=d.get("action", "charge")
             ): vol.In(ACTIONS),
             vol.Optional(
-                "soc_target", default=d.get("soc_target", 90)
-            ): vol.Any(vol.All(vol.Coerce(int), vol.Range(min=1, max=100)), None),
+                "soc_target", default=d.get("soc_target")
+            ): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=1, max=100))),
             vol.Required(
                 "pv_sell", default=d.get("pv_sell", "inherit")
             ): vol.In(PV_BEHAVIORS),
@@ -364,6 +377,10 @@ class RuleSubentryFlow(ConfigSubentryFlow):
         if user_input is None:
             return await self._shared_show_form(defaults=None, errors=None)
 
+        user_input = dict(user_input)
+        raw_days = user_input.get("days")
+        if raw_days is not None:
+            user_input["days"] = [int(x) for x in raw_days]
         rule = rule_from_data(user_input)
         siblings = self._same_level_siblings(rule.level, editing)
         errors = rule_errors(rule, siblings)
