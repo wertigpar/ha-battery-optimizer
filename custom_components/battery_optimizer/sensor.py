@@ -18,7 +18,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SLOTS_PER_DAY, SLOT_DURATION_HOURS
+from .const import (
+    DOMAIN,
+    SLOTS_PER_DAY,
+    SLOT_DURATION_HOURS,
+    currency_for_timezone,
+)
 from .coordinator import BatteryOptimizerCoordinator, _current_slot_index
 from .optimizer import (
     OptimizationResult,
@@ -73,6 +78,7 @@ class _BaseOptimizerSensor(CoordinatorEntity[BatteryOptimizerCoordinator], Senso
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_translation_key = key
         self._key = key
+        self._currency = currency_for_timezone(coordinator.hass.config.time_zone)
 
     @property
     def device_info(self):
@@ -186,11 +192,11 @@ class EstimatedSavingsSensor(_BaseOptimizerSensor):
     """
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "€"
     _attr_name = "Rest of Day Estimated Savings"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "estimated_savings")
+        self._attr_native_unit_of_measurement = self._currency
         self._attr_icon = "mdi:currency-eur"
 
     @property
@@ -214,11 +220,11 @@ class BaselineCostSensor(_BaseOptimizerSensor):
     """Rest-of-day estimated cost without any battery (pure grid purchase)."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "€"
     _attr_name = "Rest of Day Baseline Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "baseline_cost")
+        self._attr_native_unit_of_measurement = self._currency
         self._attr_icon = "mdi:cash-remove"
 
     @property
@@ -232,11 +238,11 @@ class EmaldoPlanCostSensor(_BaseOptimizerSensor):
     """Rest-of-day estimated cost following Emaldo's internal AI schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "€"
     _attr_name = "Rest of Day Emaldo Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "emaldo_plan_cost")
+        self._attr_native_unit_of_measurement = self._currency
         self._attr_icon = "mdi:robot"
 
     @property
@@ -256,11 +262,11 @@ class OptimizerPlanCostSensor(_BaseOptimizerSensor):
     """Rest-of-day estimated cost following the optimizer's schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "€"
     _attr_name = "Rest of Day Optimizer Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "optimizer_plan_cost")
+        self._attr_native_unit_of_measurement = self._currency
         self._attr_icon = "mdi:battery-arrow-up"
 
     @property
@@ -281,11 +287,11 @@ class TomorrowEstimatedSavingsSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated savings/profit from optimized schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "€"
     _attr_name = "Tomorrow Estimated Savings"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "tomorrow_estimated_savings")
+        self._attr_native_unit_of_measurement = self._currency
         self._attr_icon = "mdi:currency-eur"
 
     @property
@@ -299,11 +305,11 @@ class TomorrowBaselineCostSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated cost without any battery (pure grid purchase)."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "€"
     _attr_name = "Tomorrow Baseline Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "tomorrow_baseline_cost")
+        self._attr_native_unit_of_measurement = self._currency
         self._attr_icon = "mdi:cash-remove"
 
     @property
@@ -317,11 +323,11 @@ class TomorrowEmaldoPlanCostSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated cost following Emaldo's internal AI schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "€"
     _attr_name = "Tomorrow Emaldo Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "tomorrow_emaldo_plan_cost")
+        self._attr_native_unit_of_measurement = self._currency
         self._attr_icon = "mdi:robot"
 
     @property
@@ -341,11 +347,11 @@ class TomorrowOptimizerPlanCostSensor(_TomorrowBaseOptimizerSensor):
     """Tomorrow estimated cost following the optimizer's schedule."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "€"
     _attr_name = "Tomorrow Optimizer Cost"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "tomorrow_optimizer_plan_cost")
+        self._attr_native_unit_of_measurement = self._currency
         self._attr_icon = "mdi:battery-arrow-up"
 
     @property

@@ -586,7 +586,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Detect unit — convert snt/kWh (cents) → €/kWh
         unit = str(state.attributes.get("unit_of_measurement", "")).lower()
-        is_cents = "snt" in unit or "cent" in unit or "c/kwh" in unit
+        is_cents = (
+            "snt" in unit or "cent" in unit or "c/kwh" in unit
+            or "öre" in unit or "øre" in unit
+        )
 
         today_date = dt_util.now().date()
         tomorrow_date = today_date + timedelta(days=1)

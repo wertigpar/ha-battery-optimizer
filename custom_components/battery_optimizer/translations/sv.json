@@ -1,0 +1,168 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Battery Optimizer",
+        "description": "Konfigurera datakällor och batteriparametrar.",
+        "data": {
+          "emaldo_entry_id": "Emaldo-batterienhet",
+          "price_source": "Datakälla för priser (emaldo = Emaldo internt, sensor = extern sensor)",
+          "spot_price_sensor": "Nordpool spotprissensor (endast när källan är 'sensor')",
+          "solcast_today_sensor": "Solcast dagsprognossensor",
+          "transfer_fee_buy": "Nätöverföringsavgift (per kWh)",
+          "sales_commission": "Säljprovision vid försäljning till nätet (per kWh)",
+          "battery_capacity_kwh": "Batterikapacitet (kWh)",
+          "max_charge_kw": "Max laddningseffekt (kW)",
+          "max_discharge_kw": "Max urladdningseffekt (kW)",
+          "charge_efficiency": "Laddningseffektivitet (0–1)",
+          "discharge_efficiency": "Urladdningseffektivitet (0–1)",
+          "soc_min": "Minsta SoC (%)",
+          "soc_max": "Högsta SoC (%)",
+          "base_load_kw": "Uppskattad baskraft (kW)",
+          "battery_wear_cost": "Batterislitagekostnad (per kWh cyklad, t.ex. 0,03 = 3 cent/kWh)",
+          "idle_power_kw": "Batterienhetens tomgångsförbrukning (kW)",
+          "enable_soc_safeguard": "SoC-golvskydd — underhållsladdning under de billigaste tidsperioderna så att tomgången aldrig drar SoC under min SoC",
+          "soc_recovery_buffer_pct": "SoC-återställningsbuffert (%) — underhållsladdningsmål = min SoC + buffert (standard 5)",
+          "idle_strategy": "Strategi för tomgångsperioder (full_control = åsidosätt alla tomgångsperioder; solar_guard = åsidosätt endast tomgång före sol; smart_override = åsidosätt endast när den interna AI:n planerar laddning före sol)",
+          "soc_guard_interval": "Uppdateringsintervall för SoC-skydd i minuter (0 = avaktiverad, 15/30/60/120). Justerar aktivt urladdningsgränsen för att förhindra snabbare urladdning än planerat.",
+          "optimizer_interval": "Intervall för optimizerens omberäkning i minuter (15/30/60/120). Hur ofta optimeraren beräknar om schemat.",
+          "auto_base_load": "Automatisk injustering av baskraft från historik (använder sensorn för hushållets effekt)",
+          "load_energy_sensor": "Sensor för hushållets effekt (W) för automatisk baskraft (t.ex. sensor.emhass_combined_power)",
+          "enable_pv_strategy": "Aktivera PV-försäljningsstrategi (sälj solenergi till nätet under perioder med höga priser i stället för att ladda batteriet)",
+          "solar_sell_min_forecast_kwh": "Min Solcast-prognos för att aktivera PV-försäljningsstrategin (kWh, standard 10 — hoppa över molniga dagar)",
+          "solar_forecast_mode": "Solprognosläge för laddningsplanering (p10 = pessimistisk/väderberoende, p50 = median/optimistisk)",
+          "solar_forecast_scale": "Skalning av solprognosen (0 = automatisk injustering från noggrannhetshistorik; 0,8 skalar ned prognosen med 20 %)"
+        }
+      }
+    },
+    "error": {
+      "sensor_not_found": "En eller flera konfigurerade sensorer hittades inte.",
+      "invalid_params": "Ogiltiga parametrar."
+    },
+    "abort": {
+      "already_configured": "Battery Optimizer är redan konfigurerat."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Battery Optimizer-inställningar",
+        "data": {
+          "emaldo_entry_id": "Emaldo-batterienhet",
+          "price_source": "Datakälla för priser (emaldo = Emaldo internt, sensor = extern sensor)",
+          "spot_price_sensor": "Nordpool spotprissensor (endast när källan är 'sensor')",
+          "solcast_today_sensor": "Solcast dagsprognossensor",
+          "solcast_tomorrow_sensor": "Solcast morgondagens prognossensor",
+          "vat_multiplier": "Momsmultiplikator",
+          "transfer_fee_buy": "Nätöverföringsavgift (per kWh)",
+          "sales_commission": "Säljprovision vid försäljning till nätet (per kWh)",
+          "battery_capacity_kwh": "Batterikapacitet (kWh)",
+          "max_charge_kw": "Max laddningseffekt (kW)",
+          "max_discharge_kw": "Max urladdningseffekt (kW)",
+          "charge_efficiency": "Laddningseffektivitet (0–1)",
+          "discharge_efficiency": "Urladdningseffektivitet (0–1)",
+          "soc_min": "Minsta SoC (%)",
+          "soc_max": "Högsta SoC (%)",
+          "base_load_kw": "Hushållets baskraft (kW)",
+          "battery_wear_cost": "Batterislitagekostnad (per kWh, t.ex. 0,03 = 3 cent/kWh)",
+          "idle_power_kw": "Batterienhetens tomgångseffekt (kW)",
+          "enable_soc_safeguard": "SoC-golvskydd (underhållsladdning)",
+          "soc_recovery_buffer_pct": "SoC-återställningsbuffert (%, underhållsladdningsmål = min SoC + buffert)",
+          "idle_strategy": "Strategi för tomgångsperioder (full_control / solar_guard / smart_override)",
+          "soc_guard_interval": "SoC-skyddsintervall (0=av, 15/30/60/120 min)",
+          "optimizer_interval": "Optimizeromberäkningsintervall (15/30/60/120 min)",
+          "auto_base_load": "Automatisk injustering av baskraft från historik",
+          "load_energy_sensor": "Sensor för hushållets effekt (W, för automatisk baskraft)",
+          "enable_pv_strategy": "Aktivera PV-försäljningsstrategi",
+          "solar_sell_min_forecast_kwh": "Min solprognos för PV-försäljningsstrategin (kWh)",
+          "solar_forecast_mode": "Solprognosläge (p10 = konservativ, p50 = optimistisk)",
+          "solar_forecast_scale": "Skalning av solprognosen (0 = automatisk eller manuell 0,3–1,2)",
+          "solar_actual_sensor": "Mätare för faktisk solenergi (ackumulerad, Wh eller kWh). Tom = Emaldos interna uppskattning"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "run_optimizer": { "name": "Kör optimizer" },
+      "clear_schedule": { "name": "Rensa schema" }
+    },
+    "sensor": {
+      "status": { "name": "Optimizerstatus" },
+      "last_run": { "name": "Senaste optimering" },
+      "current_action": { "name": "Åtgärd för aktuell tidsperiod" },
+      "estimated_savings": { "name": "Beräknad besparing för resten av dagen" },
+      "baseline_cost": { "name": "Grundkostnad för resten av dagen" },
+      "emaldo_plan_cost": { "name": "Emaldokostnad för resten av dagen" },
+      "optimizer_plan_cost": { "name": "Optimizerkostnad för resten av dagen" },
+      "tomorrow_estimated_savings": { "name": "Beräknad besparing i morgon" },
+      "tomorrow_baseline_cost": { "name": "Grundkostnad i morgon" },
+      "tomorrow_emaldo_plan_cost": { "name": "Emaldokostnad i morgon" },
+      "tomorrow_optimizer_plan_cost": { "name": "Optimizerkostnad i morgon" },
+      "emaldo_schedule_chart": { "name": "Emaldoschema" },
+      "schedule_chart": { "name": "Schemadiagram" },
+      "auto_base_load": { "name": "Automatisk baskraft" },
+      "plan_accuracy": { "name": "Planeringsnoggrannhet" },
+      "user_schedule_chart": { "name": "Användarschema" }
+    },
+    "switch": {
+      "pv_strategy": { "name": "PV-försäljningsstrategi" },
+      "emaldo_control_enable": { "name": "Emaldostyrning" }
+    }
+  },
+  "subentry": {
+    "rule": {
+      "title": "Schemaregel",
+      "data": {
+        "label": "Etikett",
+        "level": "Gäller för",
+        "days": "Vardagar",
+        "start_date": "Startdatum",
+        "end_date": "Slutdatum",
+        "start_time": "Starttid",
+        "end_time": "Sluttid",
+        "action": "Åtgärd",
+        "soc_target": "SoC-mål (%)",
+        "pv_sell": "PV-beteende"
+      }
+    }
+  },
+  "config_subentries": {
+    "rule": {
+      "entry_type": "Schema",
+      "abort": {
+        "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+      },
+      "initiate_flow": {
+        "user": "Lägg till nytt schema"
+      },
+      "step": {
+        "user": {
+          "title": "Schemaregel",
+          "menu_options": {
+            "charge": "Ladda till mål-SoC",
+            "idle": "Inaktiv",
+            "discharge": "Urladda till golv-SoC",
+            "original": "Ursprungligt schema (batteri-AI)",
+            "optimizer": "Optimizerschema"
+          }
+        },
+        "reconfigure": {
+          "title": "Redigera schemaregel",
+          "menu_options": {
+            "charge": "Ladda till mål-SoC",
+            "idle": "Inaktiv",
+            "discharge": "Urladda till golv-SoC",
+            "original": "Ursprungligt schema (batteri-AI)",
+            "optimizer": "Optimizerschema"
+          }
+        },
+        "detail_charge": { "title": "Laddningsregel" },
+        "detail_idle": { "title": "Inaktiv regel" },
+        "detail_discharge": { "title": "Urladdningsregel" },
+        "detail_original": { "title": "Regel för ursprungligt schema" },
+        "detail_optimizer": { "title": "Optimizerschemaregel" }
+      }
+    }
+  }
+}

@@ -1,0 +1,168 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Battery Optimizer",
+        "description": "Määritä tietolähteet ja akun parametrit.",
+        "data": {
+          "emaldo_entry_id": "Emaldo-akkulaite",
+          "price_source": "Hintatietolähde (emaldo = Emaldon sisäinen, sensor = ulkoinen anturi)",
+          "spot_price_sensor": "Nordpoolin spot-hintasensori (vain kun lähteenä on 'sensor')",
+          "solcast_today_sensor": "Solcastin tämän päivän ennustesensori",
+          "transfer_fee_buy": "Verkonsiirtomaksu (per kWh)",
+          "sales_commission": "Myyntipalkkio verkkoon syötöstä (per kWh)",
+          "battery_capacity_kwh": "Akun kapasiteetti (kWh)",
+          "max_charge_kw": "Maks. latausteho (kW)",
+          "max_discharge_kw": "Maks. purkuteho (kW)",
+          "charge_efficiency": "Latauksen hyötysuhde (0–1)",
+          "discharge_efficiency": "Purkauksen hyötysuhde (0–1)",
+          "soc_min": "Minimi SoC (%)",
+          "soc_max": "Maksimi SoC (%)",
+          "base_load_kw": "Arvioitu peruskuorma (kW)",
+          "battery_wear_cost": "Akun kulumiskustannus (per sykletty kWh, esim. 0,03 = 3 senttiä/kWh)",
+          "idle_power_kw": "Akun tyhjäkäynnin tehonkulutus (kW)",
+          "enable_soc_safeguard": "SoC-alarajasuoja — ylläpitolataus halvimmilla tunneilla, jotta tyhjäkäynti ei koskaan pudota SoC:ta alle Min SoC:n",
+          "soc_recovery_buffer_pct": "SoC-palautuspuskuri (%) — ylläpidon lataustavoite = Min SoC + puskuri (oletus 5)",
+          "idle_strategy": "Tyhjäkäyntituntien strategia (full_control = ohita kaikki tyhjäkäyntitunnit; solar_guard = ohita tyhjäkäynti vain ennen aurinkoa; smart_override = ohita vain kun sisäinen AI suunnittelee latausta ennen aurinkoa)",
+          "soc_guard_interval": "SoC-suojan päivitysväli minuutteina (0 = pois käytöstä, 15/30/60/120). Säätää aktiivisesti purkurajaa estääkseen suunniteltua nopeamman purkamisen.",
+          "optimizer_interval": "Optimoijan uudelleenajon väli minuutteina (15/30/60/120). Kuinka usein optimoija laskee aikataulun uudelleen.",
+          "auto_base_load": "Automaattinen peruskuorman hienosäätö historiasta (käyttää kotitalouden kuormatehoanturia)",
+          "load_energy_sensor": "Kotitalouden kuormatehoanturi (W) automaattista peruskuormaa varten (esim. sensor.emhass_combined_power)",
+          "enable_pv_strategy": "Ota PV-myyntistrategia käyttöön (myy aurinkosähkö verkkoon korkean hinnan tunneilla akun lataamisen sijaan)",
+          "solar_sell_min_forecast_kwh": "Min. Solcast-ennuste PV-myyntistrategian käynnistämiseen (kWh, oletus 10 — ohita pilvisinä päivinä)",
+          "solar_forecast_mode": "Aurinkoennusteen tila lataussuunnittelua varten (p10 = pessimistinen/sään huomioiva, p50 = mediaani/optimistinen)",
+          "solar_forecast_scale": "Aurinkoennusteen skaalaus (0 = automaattinen hienosäätö tarkkuushistoriasta; 0,8 skaalaa ennusteen 20 % pienemmäksi)"
+        }
+      }
+    },
+    "error": {
+      "sensor_not_found": "Yhtä tai useampaa määritettyä anturia ei löytynyt.",
+      "invalid_params": "Virheelliset parametrit."
+    },
+    "abort": {
+      "already_configured": "Battery Optimizer on jo määritetty."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Battery Optimizerin asetukset",
+        "data": {
+          "emaldo_entry_id": "Emaldo-akkulaite",
+          "price_source": "Hintatietolähde (emaldo = Emaldon sisäinen, sensor = ulkoinen anturi)",
+          "spot_price_sensor": "Nordpoolin spot-hintasensori (vain kun lähteenä on 'sensor')",
+          "solcast_today_sensor": "Solcastin tämän päivän ennustesensori",
+          "solcast_tomorrow_sensor": "Solcastin huomisen ennustesensori",
+          "vat_multiplier": "ALV-kerroin",
+          "transfer_fee_buy": "Verkonsiirtomaksu (per kWh)",
+          "sales_commission": "Myyntipalkkio verkkoon syötöstä (per kWh)",
+          "battery_capacity_kwh": "Akun kapasiteetti (kWh)",
+          "max_charge_kw": "Maks. latausteho (kW)",
+          "max_discharge_kw": "Maks. purkuteho (kW)",
+          "charge_efficiency": "Latauksen hyötysuhde (0–1)",
+          "discharge_efficiency": "Purkauksen hyötysuhde (0–1)",
+          "soc_min": "Minimi SoC (%)",
+          "soc_max": "Maksimi SoC (%)",
+          "base_load_kw": "Kotitalouden peruskuorma (kW)",
+          "battery_wear_cost": "Akun kulumiskustannus (per kWh, esim. 0,03 = 3 senttiä/kWh)",
+          "idle_power_kw": "Akun tyhjäkäyntiteho (kW)",
+          "enable_soc_safeguard": "SoC-alarajasuoja (ylläpitolataus)",
+          "soc_recovery_buffer_pct": "SoC-palautuspuskuri (%, ylläpidon tavoite = Min SoC + puskuri)",
+          "idle_strategy": "Tyhjäkäyntituntien strategia (full_control / solar_guard / smart_override)",
+          "soc_guard_interval": "SoC-suojaväli (0=pois, 15/30/60/120 min)",
+          "optimizer_interval": "Optimoijan uudelleenajoväli (15/30/60/120 min)",
+          "auto_base_load": "Automaattinen peruskuorman hienosäätö historiasta",
+          "load_energy_sensor": "Kotitalouden kuormatehoanturi (W, automaattista peruskuormaa varten)",
+          "enable_pv_strategy": "Ota PV-myyntistrategia käyttöön",
+          "solar_sell_min_forecast_kwh": "Min. aurinkoennuste PV-myyntistrategialle (kWh)",
+          "solar_forecast_mode": "Aurinkoennusteen tila (p10 = konservatiivinen, p50 = optimistinen)",
+          "solar_forecast_scale": "Aurinkoennusteen skaalaus (0 = automaattinen tai manuaalinen 0,3–1,2)",
+          "solar_actual_sensor": "Todellisen aurinkoenergian mittari (kumulatiivinen, Wh tai kWh). Tyhjä = Emaldon sisäinen arvio"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "run_optimizer": { "name": "Aja optimoija" },
+      "clear_schedule": { "name": "Tyhjennä aikataulu" }
+    },
+    "sensor": {
+      "status": { "name": "Optimoijan tila" },
+      "last_run": { "name": "Viimeisin optimointi" },
+      "current_action": { "name": "Nykyisen aikavälin toiminto" },
+      "estimated_savings": { "name": "Arvioitu säästö päivän loppuun" },
+      "baseline_cost": { "name": "Peruskustannus päivän loppuun" },
+      "emaldo_plan_cost": { "name": "Emaldo-kustannus päivän loppuun" },
+      "optimizer_plan_cost": { "name": "Optimoijan kustannus päivän loppuun" },
+      "tomorrow_estimated_savings": { "name": "Huominen arvioitu säästö" },
+      "tomorrow_baseline_cost": { "name": "Huominen peruskustannus" },
+      "tomorrow_emaldo_plan_cost": { "name": "Huominen Emaldo-kustannus" },
+      "tomorrow_optimizer_plan_cost": { "name": "Huominen optimoijan kustannus" },
+      "emaldo_schedule_chart": { "name": "Emaldo-aikataulu" },
+      "schedule_chart": { "name": "Aikataulukaavio" },
+      "auto_base_load": { "name": "Automaattinen peruskuorma" },
+      "plan_accuracy": { "name": "Suunnitelman tarkkuus" },
+      "user_schedule_chart": { "name": "Käyttäjän aikataulu" }
+    },
+    "switch": {
+      "pv_strategy": { "name": "PV-myyntistrategia" },
+      "emaldo_control_enable": { "name": "Emaldo-ohjaus" }
+    }
+  },
+  "subentry": {
+    "rule": {
+      "title": "Aikataulusääntö",
+      "data": {
+        "label": "Nimike",
+        "level": "Koskee",
+        "days": "Viikonpäivät",
+        "start_date": "Aloituspäivä",
+        "end_date": "Lopetuspäivä",
+        "start_time": "Aloitusaika",
+        "end_time": "Lopetusaika",
+        "action": "Toiminto",
+        "soc_target": "SoC-tavoite (%)",
+        "pv_sell": "PV-käyttäytyminen"
+      }
+    }
+  },
+  "config_subentries": {
+    "rule": {
+      "entry_type": "Aikataulu",
+      "abort": {
+        "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+      },
+      "initiate_flow": {
+        "user": "Lisää uusi aikataulu"
+      },
+      "step": {
+        "user": {
+          "title": "Aikataulusääntö",
+          "menu_options": {
+            "charge": "Lataa tavoite-SoC:hon",
+            "idle": "Lepotila",
+            "discharge": "Pura alaraja-SoC:hon",
+            "original": "Alkuperäinen aikataulu (akun tekoäly)",
+            "optimizer": "Optimoijan aikataulu"
+          }
+        },
+        "reconfigure": {
+          "title": "Muokkaa aikataulusääntöä",
+          "menu_options": {
+            "charge": "Lataa tavoite-SoC:hon",
+            "idle": "Lepotila",
+            "discharge": "Pura alaraja-SoC:hon",
+            "original": "Alkuperäinen aikataulu (akun tekoäly)",
+            "optimizer": "Optimoijan aikataulu"
+          }
+        },
+        "detail_charge": { "title": "Lataussääntö" },
+        "detail_idle": { "title": "Lepotilan sääntö" },
+        "detail_discharge": { "title": "Purkaussääntö" },
+        "detail_original": { "title": "Alkuperäisen aikataulun sääntö" },
+        "detail_optimizer": { "title": "Optimoijan aikataulusääntö" }
+      }
+    }
+  }
+}

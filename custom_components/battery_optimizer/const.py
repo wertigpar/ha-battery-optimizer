@@ -128,3 +128,19 @@ MIDNIGHT_CHECKPOINT = (0, 1)
 # ── Config subentries ────────────────────────────────────────────────
 SUBENTRY_TYPE_RULE = "rule"
 DEFAULT_RULE_LABEL = "Default Schedule"
+
+# ── Currency (Nord Pool region, mirrors emaldo price_unit_for_timezone) ─
+_TZ_CURRENCY = {
+    "Europe/Stockholm": "SEK",
+    "Europe/Oslo": "NOK",
+    "Europe/Copenhagen": "DKK",
+}
+
+
+def currency_for_timezone(tz_name: str) -> str:
+    """ISO 4217 currency code for a Nord Pool timezone.
+
+    Returns SEK/NOK/DKK for the Scandinavian timezones, EUR otherwise
+    (Finland and the rest of the Nord Pool area trade in euro).
+    """
+    return _TZ_CURRENCY.get(tz_name, "EUR")
