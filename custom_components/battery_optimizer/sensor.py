@@ -25,6 +25,7 @@ from .optimizer import (
     emaldo_plan_cost_breakdown,
     optimizer_plan_cost_breakdown,
 )
+from .rules import sources_summary
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ async def async_setup_entry(
         TomorrowOptimizerPlanCostSensor(coordinator, entry),
         EmaldoScheduleChartSensor(coordinator, entry),
         ScheduleChartSensor(coordinator, entry),
+        UserScheduleChartSensor(coordinator, entry),
         AutoBaseLoadSensor(coordinator, entry),
         PlanAccuracySensor(coordinator, entry),
     ])
@@ -430,6 +432,62 @@ class EmaldoScheduleChartSensor(_BaseOptimizerSensor):
                 "solar": round(op.solar_kw, 3) if op else 0.0,
             })
 
+        return {"schedule": slots_data}
+
+
+class UserScheduleChartSensor(_BaseOptimizerSensor):
+    """Exposes the user's schedule rules as a dashboard chart.
+
+    Shows only the slots the user explicitly rules; untouched slots are
+    'optimizer'-sourced and absent from the summary (but present in the
+    schedule[] attribute with source='optimizer').
+    """
+
+    _unrecorded_attributes = frozenset({"schedule"})
+    _attr_name = "User Schedule"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "user_schedule_chart")
+        self._attr_icon = "mdi:calendar-clock"
+
+    @property
+    def native_value(self) -> str:
+        if self.coordinator.last_sources is None:
+            return "no_schedule"
+        result = self._result
+        bytes_ = result.slot_values if result is not None else []
+        return sources_summary(self.coordinator.last_sources, bytes_)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.last_sources is None or self._result is None:
+            return {}
+        result = self._result
+        sources = self.coordinator.last_sources
+        winners = self.coordinator.last_user_winners or []
+        pv = result.thirdparty_pv_slots
+        now_ha = dt_util.now()
+        today_midnight = now_ha.replace(hour=0, minute=0, second=0, microsecond=0)
+        slots_data = []
+        for sp in result.slots:
+            idx = sp.index
+            h, m = (idx * 15) // 60, (idx * 15) % 60
+            state, target_soc = ScheduleChartSensor._slot_state_and_target(sp)
+            w = winners[idx] if idx < len(winners) else None
+            slot_dt = today_midnight + timedelta(minutes=idx * 15)
+            slots_data.append({
+                "slot": idx,
+                "time": f"{h:02d}:{m:02d}",
+                "t": slot_dt.isoformat(),
+                "day": 0,
+                "action": sp.action,
+                "state": state,
+                "target_soc": target_soc,
+                "source": sources[idx] if idx < len(sources) else "optimizer",
+                "soc_target": w.soc_target if w else None,
+                "pv_sell": pv[idx] if idx < len(pv) else True,
+            })
         return {"schedule": slots_data}
 
 
