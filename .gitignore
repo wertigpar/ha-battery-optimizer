@@ -9,8 +9,8 @@
 !/*.md
 !/LICENSE
 !/hacs.json
-!/dashboard.png
-!/schedule.png
+!/images/
+!/images/**
 
 
 # ── Allowed: CI workflows ──────────────────────────────────────────────

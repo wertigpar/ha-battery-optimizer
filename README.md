@@ -7,7 +7,7 @@
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=wertigpar&repository=ha-battery-optimizer&category=integration)
 
-![Example Home Assistant dashboard for Battery Optimizer](dashboard.png)
+![Example Home Assistant dashboard for Battery Optimizer](images/dashboard.png)
 
 A Home Assistant custom integration that optimizes Emaldo battery charge/discharge schedules based on electricity spot prices, solar PV forecasts, and battery state. It generates a 96-slot (15-minute resolution) daily schedule and pushes it to a battery system via a rolling 24-hour E2E override window. Integration is mainly built to work together with Emaldo Home Assistant custom component.
 
@@ -205,7 +205,7 @@ allow 15 % in the morning (solar about to start), add a weekday rule
 discharge@15`. With SoC Guard enabled, the discharge floor rotates
 accordingly.
 
-![User schedule rules — default rule and two example user rules](schedule.png)
+![User schedule rules — default rule and two example user rules](images/schedule.png)
 
 **Dashboard:** the `sensor.battery_optimizer_user_schedule_chart` sensor
 exposes the user plan (summary state + `schedule[]` attribute with
@@ -328,6 +328,16 @@ buy_saved > buy_charged / (η_charge × η_discharge) + wear_cost
 
 where `wear_cost` is configured directly as **Battery wear cost** (default 0.03 €/kWh = 3 snt/kWh).
 
+**Cost breakdown in sensor attributes:** every plan-cost and baseline-cost
+sensor exposes the components of its state value as attributes — the import
+side split into `_energy` (spot × VAT), `_transfer`, `_tax` and
+`_commission`, the export side into `_export_energy` and `_export_commission`
+(no export tax, no export transfer; VAT is zero when the spot price is
+negative). The attribute sum matches the state value exactly. Example —
+`sensor.battery_optimizer_tomorrow_baseline_cost`:
+
+![Cost sensor attributes — subcosts in sensor attributes](images/cost_attributes.png)
+
 ### Idle Power Drain
 
 The battery unit draws constant power (default 0.1 kW = 100 W) regardless of mode.
@@ -379,13 +389,13 @@ The integration creates 16 sensor entities:
 | **Last Optimization** | sensor | Timestamp of the last optimizer run | — |
 | **Current Slot Action** | sensor | What the battery is doing right now: `charge`, `discharge`, `idle`, `none`, `unknown` | `slot_index`, `slot_value`, `buy_price`, `sell_price`, `solar_kw`, `soc_after` |
 | **Rest of Day Estimated Savings** | monetary | Estimated profit/savings for the rest of today (€), **net of battery wear** (`total_profit − wear_cost_total`) | `gross_savings`, `wear_cost`, `cycled_kwh` |
-| **Rest of Day Baseline Cost** | monetary | Estimated cost for rest of today without any battery — pure grid purchase (€) | — |
-| **Rest of Day Emaldo Cost** | monetary | Estimated cost for rest of today following the Emaldo device's own AI schedule (€), netted for its own cycles | `emaldo_grid_cost`, `emaldo_wear_cost`, `emaldo_cycled_kwh` |
-| **Rest of Day Optimizer Cost** | monetary | Estimated cost for rest of today following the optimizer's plan (€). Equals `baseline_cost − net_profit` (`grid_cost + wear_cost`) | `grid_cost`, `wear_cost`, `cycled_kwh` |
+| **Rest of Day Baseline Cost** | monetary | Estimated cost for rest of today without any battery — pure grid purchase (€). Always positive (full base-load import minus surplus-solar export revenue) | `import_cost`, `export_revenue`, `import_kwh`, `export_kwh`, `import_energy`, `import_transfer`, `import_tax`, `import_commission`, `export_energy`, `export_commission`, `remaining_slots` |
+| **Rest of Day Emaldo Cost** | monetary | Estimated cost for rest of today following the Emaldo device's own AI schedule (€), netted for its own cycles | `emaldo_grid_cost`, `emaldo_wear_cost`, `emaldo_cycled_kwh`, `emaldo_import_kwh`, `emaldo_export_kwh`, `emaldo_energy`, `emaldo_transfer`, `emaldo_tax`, `emaldo_commission`, `emaldo_export_energy`, `emaldo_export_commission` |
+| **Rest of Day Optimizer Cost** | monetary | Estimated cost for rest of today following the optimizer's plan (€). Equals `baseline_cost − net_profit` (`grid_cost + wear_cost`) | `grid_cost`, `wear_cost`, `cycled_kwh`, `grid_import_kwh`, `grid_export_kwh`, `grid_energy`, `grid_transfer`, `grid_tax`, `grid_commission`, `grid_export_energy`, `grid_export_commission` |
 | **Tomorrow Estimated Savings** | monetary | Estimated profit/savings for tomorrow's schedule (€), net of battery wear | — |
-| **Tomorrow Baseline Cost** | monetary | Estimated cost for tomorrow without any battery — pure grid purchase (€) | — |
-| **Tomorrow Emaldo Cost** | monetary | Estimated cost for tomorrow following the Emaldo device's own AI schedule (€), netted for its own cycles | `emaldo_grid_cost`, `emaldo_wear_cost`, `emaldo_cycled_kwh` |
-| **Tomorrow Optimizer Cost** | monetary | Estimated cost for tomorrow following the optimizer's plan (€). Equals `baseline_cost − net_profit` (`grid_cost + wear_cost`) | `grid_cost`, `wear_cost`, `cycled_kwh` |
+| **Tomorrow Baseline Cost** | monetary | Estimated cost for tomorrow without any battery — pure grid purchase (€). Always positive (full base-load import minus surplus-solar export revenue) | `import_cost`, `export_revenue`, `import_kwh`, `export_kwh`, `import_energy`, `import_transfer`, `import_tax`, `import_commission`, `export_energy`, `export_commission`, `remaining_slots` |
+| **Tomorrow Emaldo Cost** | monetary | Estimated cost for tomorrow following the Emaldo device's own AI schedule (€), netted for its own cycles | `emaldo_grid_cost`, `emaldo_wear_cost`, `emaldo_cycled_kwh`, `emaldo_import_kwh`, `emaldo_export_kwh`, `emaldo_energy`, `emaldo_transfer`, `emaldo_tax`, `emaldo_commission`, `emaldo_export_energy`, `emaldo_export_commission` |
+| **Tomorrow Optimizer Cost** | monetary | Estimated cost for tomorrow following the optimizer's plan (€). Equals `baseline_cost − net_profit` (`grid_cost + wear_cost`) | `grid_cost`, `wear_cost`, `cycled_kwh`, `grid_import_kwh`, `grid_export_kwh`, `grid_energy`, `grid_transfer`, `grid_tax`, `grid_commission`, `grid_export_energy`, `grid_export_commission` |
 | **Schedule Chart** | diagnostic | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `baseline_cost`, `activated_time`, `soc_guard_marker`, `soc_history` |
 | **Emaldo Schedule** | diagnostic | Summary string (e.g. `79C 84D 29I`) with Emaldo's internal schedule in attributes. Shows what the battery's own AI planned *before* the optimizer overrides it. | `schedule` (list of 96–192 slots with `mode`, `state`, `buy`, `sell`, `solar`) |
 | **Auto Base Load** | diagnostic | The base load value (kW) currently used by the optimizer | — |

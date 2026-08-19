@@ -321,12 +321,7 @@ def _rule_schema(
 ) -> vol.Schema:
     d = defaults or {}
     level = level or d.get("level", LEVEL_WEEKDAY)
-    weekday_options = [
-        {"label": "Mon", "value": "0"}, {"label": "Tue", "value": "1"},
-        {"label": "Wed", "value": "2"}, {"label": "Thu", "value": "3"},
-        {"label": "Fri", "value": "4"}, {"label": "Sat", "value": "5"},
-        {"label": "Sun", "value": "6"},
-    ]
+    weekday_options = ["0", "1", "2", "3", "4", "5", "6"]
     days_default = [str(x) for x in d.get("days", [0])]
     soc_target_field: dict = {}
     if action in ("charge", "discharge"):
@@ -342,7 +337,9 @@ def _rule_schema(
     }
     if level == LEVEL_WEEKDAY:
         fields[vol.Optional("days", default=days_default)] = SelectSelector(
-            SelectSelectorConfig(options=weekday_options, multiple=True)
+            SelectSelectorConfig(
+                options=weekday_options, multiple=True, translation_key="weekday"
+            )
         )
     elif level == LEVEL_DATE:
         fields[
@@ -356,7 +353,11 @@ def _rule_schema(
     fields.update(soc_target_field)
     fields[
         vol.Required("pv_sell", default=d.get("pv_sell", "inherit"))
-    ] = vol.In(PV_BEHAVIORS)
+    ] = SelectSelector(
+        SelectSelectorConfig(
+            options=list(PV_BEHAVIORS), translation_key="pv_sell"
+        )
+    )
     return vol.Schema(fields)
 
 

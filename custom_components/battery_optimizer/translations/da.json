@@ -225,6 +225,24 @@
         "solar_guard": "Solbeskyttelse",
         "smart_override": "Smart tilsidesættelse"
       }
+    },
+    "pv_sell": {
+      "options": {
+        "inherit": "Arv standard",
+        "sell": "Sælg til nettet",
+        "charge": "Oplad til batteri"
+      }
+    },
+    "weekday": {
+      "options": {
+        "0": "Mandag",
+        "1": "Tirsdag",
+        "2": "Onsdag",
+        "3": "Torsdag",
+        "4": "Fredag",
+        "5": "Lørdag",
+        "6": "Søndag"
+      }
     }
   }
 }

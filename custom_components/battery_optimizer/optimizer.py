@@ -140,6 +140,37 @@ class OptimizationResult:
     cycled_kwh: float = 0.0        # battery-internal kWh discharged this plan
     wear_cost_total: float = 0.0   # € of wear from those cycles
     net_profit: float = 0.0        # total_profit minus wear_cost_total
+    # Cost decomposition (F1 breakdown attributes).
+    remaining_slots: int = 0
+    # Baseline (no battery): grid import = full base load, export = solar surplus.
+    baseline_import_kwh: float = 0.0
+    baseline_export_kwh: float = 0.0
+    baseline_import_cost: float = 0.0      # gross grid purchase cost (€)
+    baseline_export_revenue: float = 0.0   # net export revenue (€)
+    baseline_import_energy: float = 0.0
+    baseline_import_transfer: float = 0.0
+    baseline_import_tax: float = 0.0
+    baseline_import_commission: float = 0.0
+    baseline_export_energy: float = 0.0
+    baseline_export_commission: float = 0.0
+    # Optimizer plan grid decomposition.
+    grid_import_kwh: float = 0.0
+    grid_export_kwh: float = 0.0
+    grid_energy: float = 0.0
+    grid_transfer: float = 0.0
+    grid_tax: float = 0.0
+    grid_commission: float = 0.0
+    grid_export_energy: float = 0.0
+    grid_export_commission: float = 0.0
+    # Emaldo plan grid decomposition.
+    emaldo_import_kwh: float = 0.0
+    emaldo_export_kwh: float = 0.0
+    emaldo_import_energy: float = 0.0
+    emaldo_import_transfer: float = 0.0
+    emaldo_import_tax: float = 0.0
+    emaldo_import_commission: float = 0.0
+    emaldo_export_energy: float = 0.0
+    emaldo_export_commission: float = 0.0
 
     @property
     def slot_values(self) -> list[int]:
@@ -158,6 +189,14 @@ def optimizer_plan_cost_breakdown(result: OptimizationResult) -> dict[str, float
         "grid_cost": round(result.baseline_cost - result.total_profit, 4),
         "wear_cost": round(result.wear_cost_total, 4),
         "cycled_kwh": round(result.cycled_kwh, 3),
+        "grid_import_kwh": round(result.grid_import_kwh, 3),
+        "grid_export_kwh": round(result.grid_export_kwh, 3),
+        "grid_energy": round(result.grid_energy, 4),
+        "grid_transfer": round(result.grid_transfer, 4),
+        "grid_tax": round(result.grid_tax, 4),
+        "grid_commission": round(result.grid_commission, 4),
+        "grid_export_energy": round(result.grid_export_energy, 4),
+        "grid_export_commission": round(result.grid_export_commission, 4),
     }
 
 
@@ -171,7 +210,61 @@ def emaldo_plan_cost_breakdown(result: OptimizationResult) -> dict[str, float]:
         "emaldo_grid_cost": round(result.emaldo_grid_cost, 4),
         "emaldo_wear_cost": round(result.emaldo_wear_total, 4),
         "emaldo_cycled_kwh": round(result.emaldo_cycled_kwh, 3),
+        "emaldo_import_kwh": round(result.emaldo_import_kwh, 3),
+        "emaldo_export_kwh": round(result.emaldo_export_kwh, 3),
+        "emaldo_energy": round(result.emaldo_import_energy, 4),
+        "emaldo_transfer": round(result.emaldo_import_transfer, 4),
+        "emaldo_tax": round(result.emaldo_import_tax, 4),
+        "emaldo_commission": round(result.emaldo_import_commission, 4),
+        "emaldo_export_energy": round(result.emaldo_export_energy, 4),
+        "emaldo_export_commission": round(result.emaldo_export_commission, 4),
     }
+
+
+def baseline_cost_breakdown(result: OptimizationResult) -> dict[str, float]:
+    """Subcosts forming the baseline cost (no-battery scenario).
+
+    baseline_import_cost - baseline_export_revenue == the sensor state value.
+    Import cost = energy + transfer + tax + commission; export revenue =
+    export energy minus commission.  Money attrs 4 dp, kWh 3 dp.
+    """
+    return {
+        "import_cost": round(result.baseline_import_cost, 4),
+        "export_revenue": round(result.baseline_export_revenue, 4),
+        "import_kwh": round(result.baseline_import_kwh, 3),
+        "export_kwh": round(result.baseline_export_kwh, 3),
+        "import_energy": round(result.baseline_import_energy, 4),
+        "import_transfer": round(result.baseline_import_transfer, 4),
+        "import_tax": round(result.baseline_import_tax, 4),
+        "import_commission": round(result.baseline_import_commission, 4),
+        "export_energy": round(result.baseline_export_energy, 4),
+        "export_commission": round(result.baseline_export_commission, 4),
+        "remaining_slots": result.remaining_slots,
+    }
+
+
+def _decompose_buy(price: float, cfg: BatteryConfig) -> tuple[float, float, float, float]:
+    """Decompose buy_price into (energy, transfer, tax, commission) per kWh.
+
+    Finnish household pricing: buy = spot × VAT + transfer + commission.
+    Import tax (VAT on energy) is zero when the energy price is negative.
+    Sum of components == buy_price.
+    """
+    spot = (price - cfg.transfer_fee_buy - cfg.sales_commission) / cfg.vat_multiplier
+    transfer = cfg.transfer_fee_buy
+    tax = max(0.0, spot) * (cfg.vat_multiplier - 1.0)
+    energy = price - transfer - tax - cfg.sales_commission
+    return (energy, transfer, tax, cfg.sales_commission)
+
+
+def _decompose_sell(price: float, cfg: BatteryConfig) -> tuple[float, float, float]:
+    """Decompose sell_price into (energy, tax, commission) per kWh.
+
+    No export tax for Finnish household customers; sell = spot − commission.
+    Export revenue = energy − commission.
+    """
+    spot = price + cfg.sales_commission
+    return (spot, 0.0, cfg.sales_commission)
 
 
 def compute_prices(
@@ -1080,6 +1173,12 @@ def optimize(
         net = cfg.base_load_kw - solar_15min[s]
         net_loads.append(net)
 
+    # Per-slot fee decomposition (F1 breakdown attributes).  Buy prices
+    # decompose into (energy, transfer, tax, commission); sell prices into
+    # (energy, tax=0, commission).  Precomputed once per run.
+    buy_decomp = [_decompose_buy(p, cfg) for p in buy_prices]
+    sell_decomp = [_decompose_sell(p, cfg) for p in sell_prices]
+
     # Step 2: For each plannable slot, compute the "spread" —
     # profit of buying at this slot's buy price and selling at the
     # best discharge slot's sell price, or vice versa.
@@ -1499,6 +1598,13 @@ def optimize(
     baseline_cost = 0.0
     n_charge = n_discharge = n_idle = 0
     cycled_kwh = 0.0  # battery-internal kWh discharged (F1 wear accounting)
+    # F1 breakdown accumulators.
+    baseline_import_kwh = baseline_export_kwh = 0.0
+    bl_import_energy = bl_import_transfer = bl_import_tax = bl_import_commission = 0.0
+    bl_export_energy = bl_export_commission = 0.0
+    grid_import_kwh = grid_export_kwh = 0.0
+    g_import_energy = g_import_transfer = g_import_tax = g_import_commission = 0.0
+    g_export_energy = g_export_commission = 0.0
 
     for s in range(n):
         action = "none"
@@ -1605,21 +1711,48 @@ def optimize(
                     actual_grid_kwh = max(net_loads[s], 0) * SLOT_DURATION_HOURS
                     n_idle += 1
 
-        # --- Baseline: cost without battery (grid import at buy price, export at sell price) ---
+        # --- Baseline: cost without battery ---
+        # No battery: grid imports the FULL base load at buy price; solar
+        # surplus above base load is exported at sell price.  Always
+        # positive on net (import cost dominates), unlike the old net-load
+        # formula which turned negative on sunny days.
         # Skip past slots to match actual_cost / emaldo_cost which also skip them.
         bp = buy_prices[s] if s < len(buy_prices) else 0.0
         sp = sell_prices[s] if s < len(sell_prices) else 0.0
         if s >= start_slot:
-            baseline_import = max(net_loads[s], 0) * SLOT_DURATION_HOURS
-            baseline_export = max(-net_loads[s], 0) * SLOT_DURATION_HOURS
+            baseline_import = cfg.base_load_kw * SLOT_DURATION_HOURS
+            baseline_export = max(solar_15min[s] - cfg.base_load_kw, 0.0) * SLOT_DURATION_HOURS
             baseline_slot = bp * baseline_import - sp * baseline_export
             baseline_cost += baseline_slot
+            # Decomposed baseline subcosts.
+            b_ie, b_it, b_itx, b_ic = buy_decomp[s]
+            b_ee, b_etx, b_ec = sell_decomp[s]
+            baseline_import_kwh += baseline_import
+            baseline_export_kwh += baseline_export
+            bl_import_energy += b_ie * baseline_import
+            bl_import_transfer += b_it * baseline_import
+            bl_import_tax += b_itx * baseline_import
+            bl_import_commission += b_ic * baseline_import
+            bl_export_energy += b_ee * baseline_export
+            bl_export_commission += b_ec * baseline_export
         else:
             baseline_slot = 0.0
 
         # --- Actual: grid cost with battery (charge cost minus sell revenue) ---
         actual_slot = bp * actual_grid_kwh - sp * export_kwh
         actual_cost += actual_slot
+        # Decomposed optimizer subcosts (0 for past slots — accumulators
+        # start at 0.0 each iteration).
+        g_ie, g_it, g_itx, g_ic = buy_decomp[s]
+        g_ee, g_etx, g_ec = sell_decomp[s]
+        grid_import_kwh += actual_grid_kwh
+        grid_export_kwh += export_kwh
+        g_import_energy += g_ie * actual_grid_kwh
+        g_import_transfer += g_it * actual_grid_kwh
+        g_import_tax += g_itx * actual_grid_kwh
+        g_import_commission += g_ic * actual_grid_kwh
+        g_export_energy += g_ee * export_kwh
+        g_export_commission += g_ec * export_kwh
 
         # Per-slot profit = savings this slot (positive = saved, negative = spent)
         profit = baseline_slot - actual_slot
@@ -1640,6 +1773,9 @@ def optimize(
     # --- Emaldo plan cost: simulate battery following the Emaldo AI modes ---
     emaldo_cost = 0.0
     e_cycled = 0.0  # battery-internal kWh discharged under the Emaldo plan
+    e_import_total_kwh = e_export_total_kwh = 0.0
+    e_import_energy = e_import_transfer = e_import_tax = e_import_commission = 0.0
+    e_export_energy = e_export_commission = 0.0
     if emaldo_modes is not None:
         e_soc = current_soc_kwh
         for s in range(n):
@@ -1675,10 +1811,23 @@ def optimize(
                 # Grid covers load portion the battery couldn't deliver
                 e_grid_kwh += max(0.0, e_load_kwh - e_bat_draw * cfg.discharge_efficiency)
             else:
-                # Idle — grid covers load if no solar surplus
+                # Idle — grid imports FULL base load (battery not used);
+                # solar surplus above base load is exported.
                 e_soc = max(e_soc - idle_drain, 0.0)
-                e_grid_kwh = max(net_loads[s], 0) * SLOT_DURATION_HOURS
+                e_grid_kwh = cfg.base_load_kw * SLOT_DURATION_HOURS
+                e_export_kwh = max(solar_15min[s] - cfg.base_load_kw, 0.0) * SLOT_DURATION_HOURS
             emaldo_cost += e_bp * e_grid_kwh - e_sp * e_export_kwh
+            # Decomposed emaldo subcosts.
+            e_ie, e_it, e_itx, e_ic = buy_decomp[s]
+            e_ee, e_etx, e_ec = sell_decomp[s]
+            e_import_total_kwh += e_grid_kwh
+            e_export_total_kwh += e_export_kwh
+            e_import_energy += e_ie * e_grid_kwh
+            e_import_transfer += e_it * e_grid_kwh
+            e_import_tax += e_itx * e_grid_kwh
+            e_import_commission += e_ic * e_grid_kwh
+            e_export_energy += e_ee * e_export_kwh
+            e_export_commission += e_ec * e_export_kwh
 
     # F1: battery wear is a real cost of every discharge kWh.  Report net
     # savings (gross minus wear) so the headline number is honest; the
@@ -1692,6 +1841,12 @@ def optimize(
     emaldo_wear_total = cfg.wear_cost_per_kwh * e_cycled
     emaldo_grid_cost = emaldo_cost  # pre-wear grid cost (net of export revenue)
     emaldo_cost -= emaldo_wear_total  # unchanged net semantics
+
+    # Baseline gross import cost and net export revenue (F1 breakdown).
+    baseline_import_cost = (
+        bl_import_energy + bl_import_transfer + bl_import_tax + bl_import_commission
+    )
+    baseline_export_revenue = bl_export_energy - bl_export_commission
 
     result = OptimizationResult(
         slots=result_slots,
@@ -1709,6 +1864,33 @@ def optimize(
         cycled_kwh=cycled_kwh,
         wear_cost_total=wear_total,
         net_profit=gross_profit - wear_total,
+        remaining_slots=n - start_slot,
+        baseline_import_kwh=baseline_import_kwh,
+        baseline_export_kwh=baseline_export_kwh,
+        baseline_import_cost=baseline_import_cost,
+        baseline_export_revenue=baseline_export_revenue,
+        baseline_import_energy=bl_import_energy,
+        baseline_import_transfer=bl_import_transfer,
+        baseline_import_tax=bl_import_tax,
+        baseline_import_commission=bl_import_commission,
+        baseline_export_energy=bl_export_energy,
+        baseline_export_commission=bl_export_commission,
+        grid_import_kwh=grid_import_kwh,
+        grid_export_kwh=grid_export_kwh,
+        grid_energy=g_import_energy,
+        grid_transfer=g_import_transfer,
+        grid_tax=g_import_tax,
+        grid_commission=g_import_commission,
+        grid_export_energy=g_export_energy,
+        grid_export_commission=g_export_commission,
+        emaldo_import_kwh=e_import_total_kwh,
+        emaldo_export_kwh=e_export_total_kwh,
+        emaldo_import_energy=e_import_energy,
+        emaldo_import_transfer=e_import_transfer,
+        emaldo_import_tax=e_import_tax,
+        emaldo_import_commission=e_import_commission,
+        emaldo_export_energy=e_export_energy,
+        emaldo_export_commission=e_export_commission,
     )
 
     if enable_pv_strategy:

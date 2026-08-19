@@ -27,6 +27,7 @@ from .const import (
 from .coordinator import BatteryOptimizerCoordinator, _current_slot_index
 from .optimizer import (
     OptimizationResult,
+    baseline_cost_breakdown,
     emaldo_plan_cost_breakdown,
     optimizer_plan_cost_breakdown,
 )
@@ -228,6 +229,12 @@ class BaselineCostSensor(_BaseOptimizerSensor):
             return None
         return round(self._result.baseline_cost, 4)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None:
+            return {}
+        return baseline_cost_breakdown(self._result)
+
 
 class EmaldoPlanCostSensor(_BaseOptimizerSensor):
     """Rest-of-day estimated cost following Emaldo's internal AI schedule."""
@@ -308,6 +315,12 @@ class TomorrowBaselineCostSensor(_TomorrowBaseOptimizerSensor):
         if self._result is None:
             return None
         return round(self._result.baseline_cost, 4)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None:
+            return {}
+        return baseline_cost_breakdown(self._result)
 
 
 class TomorrowEmaldoPlanCostSensor(_TomorrowBaseOptimizerSensor):

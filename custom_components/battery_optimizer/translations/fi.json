@@ -225,6 +225,24 @@
         "solar_guard": "Aurinkosuoja",
         "smart_override": "Älykäs ohitus"
       }
+    },
+    "pv_sell": {
+      "options": {
+        "inherit": "Peri oletusasetus",
+        "sell": "Myy verkkoon",
+        "charge": "Lataa akkuun"
+      }
+    },
+    "weekday": {
+      "options": {
+        "0": "Maanantai",
+        "1": "Tiistai",
+        "2": "Keskiviikko",
+        "3": "Torstai",
+        "4": "Perjantai",
+        "5": "Lauantai",
+        "6": "Sunnuntai"
+      }
     }
   }
 }

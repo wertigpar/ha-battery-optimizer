@@ -225,6 +225,24 @@
         "solar_guard": "Solar guard",
         "smart_override": "Smart override"
       }
+    },
+    "pv_sell": {
+      "options": {
+        "inherit": "Inherit from default",
+        "sell": "Sell to grid",
+        "charge": "Charge to battery"
+      }
+    },
+    "weekday": {
+      "options": {
+        "0": "Monday",
+        "1": "Tuesday",
+        "2": "Wednesday",
+        "3": "Thursday",
+        "4": "Friday",
+        "5": "Saturday",
+        "6": "Sunday"
+      }
     }
   }
 }

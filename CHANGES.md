@@ -1,5 +1,42 @@
 # Changes
 
+## v0.3.1
+
+### Fixed
+
+- **Baseline cost understated/negative on sunny days** — the no-battery
+  baseline was computed from the net load (`max(base_load − solar, 0)`), so
+  on solar-surplus days it counted little or no grid import and could go
+  negative (export revenue exceeding the tiny import cost). The baseline now
+  represents the true no-battery cost: the grid imports the **full base load**
+  at the buy price in every slot (`base_load_kw × slot_duration`) and solar
+  surplus above base load is exported at the sell price. Always positive on
+  net; savings (`baseline − actual`) now reflect genuine avoided purchases.
+  The Emaldo idle benchmark used the same net-load formula and is corrected
+  identically (idle = full base-load import + surplus export).
+
+### Changed
+
+- **Full fee decomposition on the cost sensors** — all four plan-cost
+  sensors and both baseline-cost sensors now expose the components of their
+  state value as attributes, in addition to the existing `grid_cost` /
+  `wear_cost` / `cycled_kwh` (optimizer) and `emaldo_grid_cost` /
+  `emaldo_wear_cost` / `emaldo_cycled_kwh` (Emaldo) keys. The Finnish
+  household price model is decomposed per kWh: buy = spot × VAT + transfer +
+  commission, sell = spot − commission; import VAT is zero when the spot
+  price is negative (no export tax, no export transfer). Import kWh split
+  into `_energy`, `_transfer`, `_tax`, `_commission`; exports into
+  `_export_energy`, `_export_commission`. The decomposition sum matches the
+  state value (component sums equal `baseline_cost`,
+  `baseline_cost − net_profit`, and `emaldo_cost` respectively).
+  State values are unchanged — purely additive.
+- **Translatable selector options in the rule subentry flow** — the PV-sell
+  dropdown (`inherit` / `sell` / `charge`) and the weekday multi-select
+  previously showed raw option values (English strings). Both now use
+  `SelectSelector` with a `translation_key`, so the labels resolve through
+  the locale files (`selector.pv_sell.options`, `selector.weekday.options`)
+  in English, Danish, Finnish, Norwegian Bokmål and Swedish.
+
 ## v0.3.0
 
 ### Added

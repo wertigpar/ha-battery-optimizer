@@ -70,6 +70,15 @@ Effective buy and sell prices (€/kWh) are derived from raw Nordpool spot price
 
 **Per-slot profit estimate** (discharge): `profit = (buy_price − wear_cost_per_kwh) × discharge_kwh`, where `discharge_kwh` is energy delivered to the house. `wear_cost_per_kwh` is configured in € per delivered kWh, so no efficiency division is applied to the profit formula itself — only to the SoC/budget energy balance.
 
+**Cost decomposition** — every plan-cost sensor exposes the components of its state value as attributes (`optimizer_plan_cost_breakdown()`, `emaldo_plan_cost_breakdown()`, `baseline_cost_breakdown()` in optimizer.py). The effective prices are decomposed per kWh back into their economic parts, matching the Finnish household model:
+
+- **Import**: `energy` (spot × VAT), `transfer` (flat grid fee), `tax` (VAT on energy only), `commission` (sales margin). Sum = buy price.
+- **Export**: `energy` (spot) and `commission` (sales margin). No export tax, no export transfer. Net revenue = energy − commission.
+- **Import tax is zero when the spot price is negative** (same clamp as `compute_prices()`) — the subsidy passes through without amplification, and no VAT is charged on a negative energy price.
+- Decomposition is derived from the already-computed buy/sell prices (`_decompose_buy`/`_decompose_sell`), so it needs no new config and is exact by construction: component sums equal the sensor state value (rounding 4 dp money / 3 dp kWh).
+
+**Baseline definition** (no-battery comparison): the baseline is the cost of buying the **full base load** from the grid in every slot (`base_load_kw × slot_duration` at the buy price) minus the revenue from exporting **solar surplus above base load** at the sell price. It deliberately does not net solar against load — without a battery, the household consumes the full base load from the grid regardless of solar, and only surplus generation is exported. This keeps the baseline positive on sunny days (a stored kWh displaces a future grid buy, so the baseline must reflect what the grid would have sold) and makes `savings = baseline − actual` a genuine measure of avoided purchases. The Emaldo benchmark applies the same definition to its idle slots.
+
 ## Emaldo Slot Encoding & Battery Behaviour
 
 | Byte Value | Meaning | Grid Draw | Solar Charge |
