@@ -99,6 +99,18 @@ SOLAR_SCALE_WARMUP_RECORDS = 5       # min valid records before auto-tune engage
 SOLAR_SCALE_MIN_ELAPSED_SLOTS = 8    # min accuracy window (slots) for a valid record
 SOLAR_SCALE_MIN_PLANNED_KWH = 0.1    # min planned solar (kWh) for a valid record
 
+# ── Solar regime (durable no-refill discharge gate) ─────────────────
+# One EWMA update per day over the scaled-forecast solar fraction of the
+# usable band (all values relative to the user's own capacity — generic).
+# Engaged = stored kWh must beat the cheapest known future recharge to be
+# discharged (Case A floor), i.e. the battery cannot refill from solar for
+# days/weeks (winter, snow).  Transient cloudy days never engage: τ≈10 days
+# plus a 3-day debounce absorbs them.
+SOLAR_REGIME_EWMA_ALPHA = 0.1      # per day; τ ≈ 10 days
+SOLAR_REGIME_ENGAGE = 0.25         # EWMA below this → low-regime counting
+SOLAR_REGIME_DISENGAGE = 0.40      # EWMA above this → normal-regime counting
+SOLAR_REGIME_DEBOUNCE_DAYS = 3     # consecutive days on one side before flip
+
 # ── Optimizer run interval ────────────────────────────────────────────
 DEFAULT_OPTIMIZER_INTERVAL = 120   # minutes
 OPTIMIZER_INTERVALS = [15, 30, 60, 120]

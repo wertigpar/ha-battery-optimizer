@@ -84,30 +84,76 @@
   },
   "entity": {
     "button": {
-      "run_optimizer": { "name": "Kør optimizer" },
-      "clear_schedule": { "name": "Ryd tidsplan" }
+      "run_optimizer": {
+        "name": "Kør optimizer"
+      },
+      "clear_schedule": {
+        "name": "Ryd tidsplan"
+      }
     },
     "sensor": {
-      "status": { "name": "Optimizer-status" },
-      "last_run": { "name": "Sidste optimering" },
-      "current_action": { "name": "Handling i nuværende tidsrum" },
-      "estimated_savings": { "name": "Estimeret besparelse for resten af dagen" },
-      "baseline_cost": { "name": "Grundomkostning for resten af dagen" },
-      "emaldo_plan_cost": { "name": "Emaldo-omkostning for resten af dagen" },
-      "optimizer_plan_cost": { "name": "Optimizer-omkostning for resten af dagen" },
-      "tomorrow_estimated_savings": { "name": "Estimeret besparelse i morgen" },
-      "tomorrow_baseline_cost": { "name": "Grundomkostning i morgen" },
-      "tomorrow_emaldo_plan_cost": { "name": "Emaldo-omkostning i morgen" },
-      "tomorrow_optimizer_plan_cost": { "name": "Optimizer-omkostning i morgen" },
-      "emaldo_schedule_chart": { "name": "Emaldo-tidsplan" },
-      "schedule_chart": { "name": "Tidsplandiagram" },
-      "auto_base_load": { "name": "Automatisk grundlast" },
-      "plan_accuracy": { "name": "Planlægningsnøjagtighed" },
-      "user_schedule_chart": { "name": "Brugertidsplan" }
+      "status": {
+        "name": "Optimizer-status"
+      },
+      "last_run": {
+        "name": "Sidste optimering"
+      },
+      "current_action": {
+        "name": "Handling i nuværende tidsrum"
+      },
+      "estimated_savings": {
+        "name": "Estimeret besparelse for resten af dagen"
+      },
+      "baseline_cost": {
+        "name": "Grundomkostning for resten af dagen"
+      },
+      "emaldo_plan_cost": {
+        "name": "Emaldo-omkostning for resten af dagen"
+      },
+      "optimizer_plan_cost": {
+        "name": "Optimizer-omkostning for resten af dagen"
+      },
+      "tomorrow_estimated_savings": {
+        "name": "Estimeret besparelse i morgen"
+      },
+      "tomorrow_baseline_cost": {
+        "name": "Grundomkostning i morgen"
+      },
+      "tomorrow_emaldo_plan_cost": {
+        "name": "Emaldo-omkostning i morgen"
+      },
+      "tomorrow_optimizer_plan_cost": {
+        "name": "Optimizer-omkostning i morgen"
+      },
+      "emaldo_schedule_chart": {
+        "name": "Emaldo-tidsplan"
+      },
+      "schedule_chart": {
+        "name": "Tidsplandiagram"
+      },
+      "auto_base_load": {
+        "name": "Automatisk grundlast"
+      },
+      "plan_accuracy": {
+        "name": "Planlægningsnøjagtighed"
+      },
+      "user_schedule_chart": {
+        "name": "Brugertidsplan"
+      },
+      "solar_regime": {
+        "name": "Solar Regime"
+      },
+      "solar_balance": {
+        "name": "Solar Balance"
+      }
     },
     "switch": {
-      "pv_strategy": { "name": "PV-salgsstrategi" },
-      "emaldo_control_enable": { "name": "Emaldo-styring" }
+      "pv_strategy": {
+        "name": "PV-salgsstrategi"
+      },
+      "emaldo_control_enable": {
+        "name": "Emaldo-styring"
+      }
     }
   },
   "config_subentries": {

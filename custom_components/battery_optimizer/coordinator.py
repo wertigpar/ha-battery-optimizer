@@ -33,6 +33,7 @@ from .const import (
     SUBENTRY_TYPE_RULE,
     SUBENTRY_TYPE_DEVICE,
     SLOTS_PER_DAY,
+    SLOT_DURATION_HOURS,
     MIDNIGHT_CHECKPOINT,
     CONF_SPOT_SENSOR,
     CONF_SOLCAST_TODAY,
@@ -107,6 +108,9 @@ from .rules import (
     SlotWinner,
 )
 from .solar_scale import resolve_solar_scale
+from .solar_regime import default_state as solar_regime_default_state
+from .solar_regime import deserialize as solar_regime_deserialize
+from .solar_regime import update_regime
 from .solar_actual import counter_delta_kwh, normalize_to_kwh, resolve_solar_source
 from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
 
@@ -198,6 +202,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # actually produced the slots being measured.
         self._solar_scale: float = 1.0
         self._last_result_solar_scale: float = 1.0
+        # Durable solar regime — persisted EWMA over daily scaled-forecast
+        # solar fraction of the usable band; engaged flag gates the Case A
+        # discharge floor (see solar_regime.py).  Loaded lazily per run.
+        self._solar_regime_state_path = self.hass.config.path(
+            "battery_optimizer_solar_regime.json"
+        )
+        self._solar_regime_state: dict | None = None
+        self._solar_regime: dict | None = None
+        self._solar_regime_fraction: float | None = None
+        self._solar_regime_band_kwh: float | None = None
         # PV sell strategy
         self._pv_strategy_enabled: bool = self.config.get(
             CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY
@@ -729,6 +743,52 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._accuracy_history is None:
             self._accuracy_history = self._load_accuracy_history()
         return resolve_solar_scale(configured, self._accuracy_history)
+
+    def _load_solar_regime_state(self) -> dict:
+        """Load persisted solar-regime state; cold-start defaults on garbage."""
+        try:
+            with open(self._solar_regime_state_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            data = None
+        return solar_regime_deserialize(data)
+
+    def _save_solar_regime_state(self, state: dict) -> None:
+        """Write the solar-regime state to its JSON sidecar file."""
+        try:
+            with open(self._solar_regime_state_path, "w", encoding="utf-8") as fh:
+                json.dump(state, fh)
+        except OSError:
+            _LOGGER.warning(
+                "Could not write solar regime state to %s",
+                self._solar_regime_state_path,
+            )
+
+    def _resolve_solar_regime(self, forecast_kwh: float, cfg) -> dict:
+        """One-per-day solar-regime EWMA step; engaged flag for the gate.
+
+        Runs inside an executor (sync file I/O when the sidecar state has not
+        been loaded yet).  ``forecast_kwh`` is the day's total scaled solar
+        forecast; the fraction is relative to the user's own usable band
+        ``(soc_max - soc_min) * capacity``.  The update is date-guarded: the
+        same-date call returns the input object unchanged and no write
+        happens (no intra-day oscillation).
+        """
+        if self._solar_regime_state is None:
+            self._solar_regime_state = self._load_solar_regime_state()
+        band_kwh = cfg.capacity_kwh * (cfg.soc_max - cfg.soc_min) / 100.0
+        self._solar_regime_band_kwh = band_kwh
+        self._solar_regime_fraction = (
+            forecast_kwh / band_kwh if band_kwh > 0.0 else None
+        )
+        state = update_regime(
+            self._solar_regime_state, forecast_kwh, band_kwh,
+            str(dt_util.now().date()),
+        )
+        if state is not self._solar_regime_state:
+            self._solar_regime_state = state
+            self._save_solar_regime_state(state)
+        return state
 
     def _resolve_emaldo_entity(self, key: str, domain: str = "sensor") -> str | None:
         """Resolve an Emaldo entity_id from the entity registry.
@@ -1292,8 +1352,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 new_accuracy.get("actual_solar_kwh", "N/A"),
             )
 
+        # Durable solar regime — once-per-day EWMA over the scaled-forecast
+        # solar fraction; engaged → Case A discharge must beat the cheapest
+        # known future recharge (executor: sync file I/O on first load).
+        self._solar_regime = await self.hass.async_add_executor_job(
+            self._resolve_solar_regime, sum(solar) * SLOT_DURATION_HOURS, cfg
+        )
+
         # Run optimizer — prices_today is already 96 x 15-min in €/kWh
         buy_prices, sell_prices = compute_prices(prices_today, cfg)
+        # Tomorrow's prices (published ~13:00 CET, sensor-triggered re-run)
+        # must be ready BEFORE today's plan: when the no-refill regime is
+        # engaged, today's discharge floor is min(remaining today, tomorrow).
+        buy_tom = None
+        sell_tom = None
+        if prices_tomorrow is not None:
+            buy_tom, sell_tom = compute_prices(prices_tomorrow, cfg)
         emaldo_modes = self._read_emaldo_internal_modes()
         result = optimize(
             buy_prices,
@@ -1304,6 +1378,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             initial_soc_pct=soc,
             enable_pv_strategy=self._pv_strategy_enabled,
             emaldo_modes=emaldo_modes,
+            solar_regime_engaged=bool(
+                self._solar_regime and self._solar_regime["engaged"]
+            ),
+            future_min_buy=min(buy_tom) if buy_tom else None,
         )
         result.reason = reason
 
@@ -1350,7 +1428,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if prices_tomorrow is not None:
             solar_tomorrow = self._get_solcast_forecast("tomorrow")
             end_soc = result.slots[-1].soc_after if result.slots else None
-            buy_tom, sell_tom = compute_prices(prices_tomorrow, cfg)
             result_tomorrow = optimize(
                 buy_tom,
                 sell_tom,
@@ -1360,6 +1437,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 initial_soc_pct=end_soc,
                 enable_pv_strategy=self._pv_strategy_enabled,
                 emaldo_modes=emaldo_modes,
+                solar_regime_engaged=bool(
+                    self._solar_regime and self._solar_regime["engaged"]
+                ),
             )
             self._last_result_tomorrow = result_tomorrow
             self._apply_user_mask(

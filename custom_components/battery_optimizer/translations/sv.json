@@ -84,30 +84,76 @@
   },
   "entity": {
     "button": {
-      "run_optimizer": { "name": "Kör optimizer" },
-      "clear_schedule": { "name": "Rensa schema" }
+      "run_optimizer": {
+        "name": "Kör optimizer"
+      },
+      "clear_schedule": {
+        "name": "Rensa schema"
+      }
     },
     "sensor": {
-      "status": { "name": "Optimizerstatus" },
-      "last_run": { "name": "Senaste optimering" },
-      "current_action": { "name": "Åtgärd för aktuell tidsperiod" },
-      "estimated_savings": { "name": "Beräknad besparing för resten av dagen" },
-      "baseline_cost": { "name": "Grundkostnad för resten av dagen" },
-      "emaldo_plan_cost": { "name": "Emaldokostnad för resten av dagen" },
-      "optimizer_plan_cost": { "name": "Optimizerkostnad för resten av dagen" },
-      "tomorrow_estimated_savings": { "name": "Beräknad besparing i morgon" },
-      "tomorrow_baseline_cost": { "name": "Grundkostnad i morgon" },
-      "tomorrow_emaldo_plan_cost": { "name": "Emaldokostnad i morgon" },
-      "tomorrow_optimizer_plan_cost": { "name": "Optimizerkostnad i morgon" },
-      "emaldo_schedule_chart": { "name": "Emaldoschema" },
-      "schedule_chart": { "name": "Schemadiagram" },
-      "auto_base_load": { "name": "Automatisk baskraft" },
-      "plan_accuracy": { "name": "Planeringsnoggrannhet" },
-      "user_schedule_chart": { "name": "Användarschema" }
+      "status": {
+        "name": "Optimizerstatus"
+      },
+      "last_run": {
+        "name": "Senaste optimering"
+      },
+      "current_action": {
+        "name": "Åtgärd för aktuell tidsperiod"
+      },
+      "estimated_savings": {
+        "name": "Beräknad besparing för resten av dagen"
+      },
+      "baseline_cost": {
+        "name": "Grundkostnad för resten av dagen"
+      },
+      "emaldo_plan_cost": {
+        "name": "Emaldokostnad för resten av dagen"
+      },
+      "optimizer_plan_cost": {
+        "name": "Optimizerkostnad för resten av dagen"
+      },
+      "tomorrow_estimated_savings": {
+        "name": "Beräknad besparing i morgon"
+      },
+      "tomorrow_baseline_cost": {
+        "name": "Grundkostnad i morgon"
+      },
+      "tomorrow_emaldo_plan_cost": {
+        "name": "Emaldokostnad i morgon"
+      },
+      "tomorrow_optimizer_plan_cost": {
+        "name": "Optimizerkostnad i morgon"
+      },
+      "emaldo_schedule_chart": {
+        "name": "Emaldoschema"
+      },
+      "schedule_chart": {
+        "name": "Schemadiagram"
+      },
+      "auto_base_load": {
+        "name": "Automatisk baskraft"
+      },
+      "plan_accuracy": {
+        "name": "Planeringsnoggrannhet"
+      },
+      "user_schedule_chart": {
+        "name": "Användarschema"
+      },
+      "solar_regime": {
+        "name": "Solar Regime"
+      },
+      "solar_balance": {
+        "name": "Solar Balance"
+      }
     },
     "switch": {
-      "pv_strategy": { "name": "PV-försäljningsstrategi" },
-      "emaldo_control_enable": { "name": "Emaldostyrning" }
+      "pv_strategy": {
+        "name": "PV-försäljningsstrategi"
+      },
+      "emaldo_control_enable": {
+        "name": "Emaldostyrning"
+      }
     }
   },
   "config_subentries": {

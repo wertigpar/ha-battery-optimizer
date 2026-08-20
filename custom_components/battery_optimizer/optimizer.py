@@ -999,6 +999,25 @@ _EDGE_EPSILON_EUR = 0.005   # plateau match tolerance (€) — profit noise flo
 _EDGE_MARGIN_PP = 5.0       # edge never below floor target + margin (pp)
 _NIGHT_DRAIN_MIN_PP = 1.0   # minimum excess to trigger a night drain (pp)
 
+# Night-reserve bias — COMBINED-mode tuning constant.
+#
+# The combined discharge pool is consumed buy-desc across ALL profitable
+# slots, so the cheapest pre-solar night slots starve while the battery
+# parks above the plateau edge and exports surplus solar in the afternoon.
+# The reservation (see discharge allocation below) sets aside a share of the
+# initial stored energy for pre-solar night slots, scaled by how much of the
+# usable band solar refills (refill_fraction / 0.95).
+#
+# Tuning: 0.0 = disabled (legacy combined behavior); 1.0 = full reservation
+# (all initial energy to the night pool).  Higher drains deeper overnight:
+# more cheap-night savings, lower daytime min SoC, forced afternoon export
+# postponed or eliminated.  Live partial-solar day (refill 0.8175):
+#   0.0 -> baseline (6 night slots, min 52.4 %, export at 17:00)
+#   0.6 -> +0.46 EUR/day, 20 night slots, min 27.7 %, no forced export  <- default
+#   0.8 -> +0.61 EUR/day, 24 night slots, min 20.7 % (0.7 pp above floor)
+#   0.889+ -> plateau (+0.61 EUR/day, min ~21 %) — no further gain.
+_NIGHT_RESERVE_BIAS = 0.6
+
 
 def _probe_result(
     buy_prices: list[float],
@@ -1009,16 +1028,19 @@ def _probe_result(
     initial_soc_pct: float,
     enable_pv_strategy: bool,
     emaldo_modes: list[int] | None,
+    case_a_floor: float,
 ) -> OptimizationResult:
     """One full optimize() run with the night drain disabled (a "probe").
 
     _probe=True prevents recursion — probes never re-probe (depth <= 2).
+    ``case_a_floor`` is the main run's Case A discharge floor — the probe must
+    measure the same profit curve the real plan will use.
     """
     return optimize(
         buy_prices, sell_prices, solar_15min, cfg,
         start_slot=start_slot, initial_soc_pct=initial_soc_pct,
         enable_pv_strategy=enable_pv_strategy, emaldo_modes=emaldo_modes,
-        enable_night_drain=False, _probe=True,
+        enable_night_drain=False, _probe=True, case_a_floor=case_a_floor,
     )
 
 
@@ -1032,6 +1054,7 @@ def _find_plateau_edge(
     p0_profit: float,
     enable_pv_strategy: bool,
     emaldo_modes: list[int] | None,
+    case_a_floor: float,
 ) -> float:
     """Lowest start SoC whose day profit still matches P0 (within eps).
 
@@ -1050,6 +1073,7 @@ def _find_plateau_edge(
         profit = _probe_result(
             buy_prices, sell_prices, solar_15min, cfg,
             start_slot, mid_pct, enable_pv_strategy, emaldo_modes,
+            case_a_floor,
         ).total_profit
         if profit >= p0_profit - _EDGE_EPSILON_EUR:
             hi_pct = mid_pct
@@ -1069,6 +1093,7 @@ def _build_night_drain_plan(
     excess_kwh: float,
     enable_pv_strategy: bool,
     emaldo_modes: list[int] | None,
+    case_a_floor: float,
 ) -> dict[int, str] | None:
     """Merged plan = edge-optimal day plan + overnight discharge of excess.
 
@@ -1085,6 +1110,7 @@ def _build_night_drain_plan(
     edge_result = _probe_result(
         buy_prices, sell_prices, solar_15min, cfg,
         start_slot, edge_pct, enable_pv_strategy, emaldo_modes,
+        case_a_floor,
     )
     plan: dict[int, str] = {
         sp.index: sp.action for sp in edge_result.slots if sp.action != "none"
@@ -1094,7 +1120,7 @@ def _build_night_drain_plan(
         s for s in range(start_slot, min(first_solar_slot, SLOTS_PER_DAY))
         if plan.get(s) in (None, "idle")
         and net_loads[s] > 0
-        and buy_prices[s] > wear_cost
+        and buy_prices[s] > case_a_floor
     ]
     window.sort(key=lambda s: buy_prices[s], reverse=True)
     remaining = excess_kwh
@@ -1126,6 +1152,9 @@ def optimize(
     emaldo_modes: list[int] | None = None,
     enable_night_drain: bool = True,
     _probe: bool = False,
+    solar_regime_engaged: bool = False,
+    future_min_buy: float | None = None,
+    case_a_floor: float | None = None,
 ) -> OptimizationResult:
     """Run greedy optimization over 96 slots.
 
@@ -1290,7 +1319,25 @@ def optimize(
     # floor.  Compare peak SoC (from floor) against the band top, NOT the
     # post-reserve usable kWh - the old form subtracted the discharge reserve
     # from the left side only, making the gate impossible (needs > capacity).
-    solar_full_recharge = peak_soc_from_min_kwh >= soc_min_kwh + (soc_max_kwh - soc_min_kwh) * 0.95
+    refill_fraction = max(0.0, (peak_soc_from_min_kwh - soc_min_kwh) / (soc_max_kwh - soc_min_kwh))
+    solar_full_recharge = refill_fraction >= 0.95
+
+    # Night reserve (COMBINED mode only — SPLIT mode below already gives the
+    # pre-solar slots their own pool, so the reservation is a no-op there):
+    # set aside a bias-scaled share of the initial stored energy for the
+    # pre-solar night slots.  The combined greedy pool allocates buy-desc
+    # across every profitable slot, so the cheapest overnight avoidances
+    # starve while the battery sits above the plateau edge and exports
+    # surplus solar in the afternoon.  Reserving the night share first fixes
+    # that (see the allocation section).  Scaled by refill_fraction so a
+    # near-full-recharge day reserves nearly the whole bias share while a
+    # winter day with tiny solar reserves almost nothing (no solar means no
+    # daytime refill to absorb the deeper drain — the plateau probe handles
+    # that case).
+    night_reserve_kwh = (
+        initial_usable_kwh * min(1.0, _NIGHT_RESERVE_BIAS * refill_fraction / 0.95)
+        if refill_fraction > 0 else 0.0
+    )
 
     # Find profitable discharge and charge slots.
     #
@@ -1307,9 +1354,31 @@ def optimize(
     # solar − idle drain) is positive.  Battery charges from solar excess in
     # idle and discharge states, so SoC being below soc_min at optimisation
     # time does not preclude profitable evening discharge.
+    #
+    # Durable no-refill regime (solar_regime.py engaged): stored kWh can only
+    # be replaced by a future GRID purchase, so each kWh discharged must beat
+    # the cheapest known future recharge through the round-trip (η²) plus
+    # wear.  cheapest_future = min(remaining today, tomorrow when known).
+    # When today's solar can still fully refill the battery
+    # (solar_full_recharge) or the regime is off, the plain wear floor
+    # applies — free solar refill makes stored energy worth burning at any
+    # price above wear.  The computed floor is threaded into the night-drain
+    # probes so the plateau measurement matches the real plan.
+    if case_a_floor is None:
+        if solar_regime_engaged and not solar_full_recharge:
+            today_remaining = buy_prices[start_slot:] or buy_prices
+            today_min = min(today_remaining)
+            if future_min_buy is not None:
+                cheapest_future = min(today_min, future_min_buy)
+            else:
+                cheapest_future = today_min
+            case_a_floor = cheapest_future / cfg.round_trip_factor + wear_cost
+        else:
+            case_a_floor = wear_cost
+
     if total_discharge_budget > 0 and discharge_candidates:
         for s in discharge_candidates:
-            if buy_prices[s] > wear_cost:
+            if buy_prices[s] > case_a_floor:
                 profitable_discharge.append(s)
 
     # Case B: round-trip charge/discharge pairs — buy cheap grid energy,
@@ -1374,11 +1443,13 @@ def optimize(
                 buy_prices, sell_prices, solar_15min, cfg,
                 start_slot, initial_soc_pct,
                 enable_pv_strategy, emaldo_modes,
+                case_a_floor,
             ).total_profit
             edge_pct = _find_plateau_edge(
                 buy_prices, sell_prices, solar_15min, cfg,
                 start_slot, initial_soc_pct, p0_profit,
                 enable_pv_strategy, emaldo_modes,
+                case_a_floor,
             )
             if edge_pct < initial_soc_pct:
                 excess_kwh = (
@@ -1388,6 +1459,7 @@ def optimize(
                     buy_prices, sell_prices, solar_15min, cfg,
                     start_slot, first_solar_slot, edge_pct,
                     excess_kwh, enable_pv_strategy, emaldo_modes,
+                    case_a_floor,
                 )
                 if night_drain_plan is not None:
                     # Phase 2 — the merged plan overrides the plain one.  Any
@@ -1448,12 +1520,59 @@ def optimize(
             else:
                 break
     else:
-        # Combined budget: no full solar recharge, no split needed.
+        # Night reservation (COMBINED mode): pre-allocate the reserved pool
+        # to pre-solar night slots, cheapest buy first.  Night slots are REAL
+        # grid-buy avoidances (load > 0 overnight), while many post-solar
+        # discharge slots are solar-surplus safety-nets whose effective
+        # value is far below their buy price.  Without the reservation the
+        # shared combined pool is consumed by the higher-priced day slots and
+        # cheap night slots starve — battery parks above the plateau edge and
+        # exports surplus solar in the afternoon.  The combined loop below
+        # skips slots assigned here and allocates the remaining budget
+        # buy-desc across the day as before (bias = 0 -> no reservation ->
+        # byte-identical legacy behavior).
+        if night_reserve_kwh > 0 and start_slot < first_solar_slot:
+            night_energy_available = night_reserve_kwh
+            # Cheapest night slots first (ascending buy) — they are the ones
+            # the combined pool starves; the expensive night slots the combined
+            # loop would pick anyway stay in the shared pool.
+            for s in sorted(
+                (s for s in profitable_discharge if s < first_solar_slot),
+                key=lambda s: (round(buy_prices[s], 4), -s),
+            ):
+                if s in plan_actions:
+                    continue
+                if net_loads[s] > 0:
+                    # Grid slot — discharge covers household load from battery
+                    load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+                else:
+                    # Solar surplus slot — reserve only what the firmware
+                    # would actually draw: full base load as the worst case
+                    # (no solar at all) matches the combined loop's estimate.
+                    load_kwh = cfg.base_load_kw * SLOT_DURATION_HOURS
+                if load_kwh <= 0:
+                    continue
+                battery_kwh = load_kwh / cfg.discharge_efficiency  # internal kWh drawn from cells
+                if night_energy_available >= battery_kwh:
+                    plan_actions[s] = "discharge"
+                    night_energy_available -= battery_kwh
+                else:
+                    break  # Reserve exhausted — remaining night slots stay unassigned
+
+        # Combined budget: no full solar recharge, no split needed.  The
+        # night reservation above committed its share of the initial pool;
+        # the over-commit correction below is the floor safety net — it
+        # drops the cheapest committed discharge slot when the true
+        # trajectory violates the floor target (reserved slots are the
+        # cheapest committed, so a correction trims the reservation tail
+        # first, same as the validated design).
         discharge_energy_available = total_discharge_budget
         if profitable_charge:
             discharge_energy_available += max(0.0, soc_max_kwh - peak_soc_kwh)
 
         for s in profitable_discharge:
+            if s in plan_actions:
+                continue  # Assigned by the night reservation above
             if net_loads[s] > 0:
                 # Grid slot — discharge covers household load from battery
                 load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
@@ -1550,17 +1669,28 @@ def optimize(
     floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
     _guard = 0
     while _guard < SLOTS_PER_DAY:
-        traj_a = _simulate_soc_trajectory(
-            plan_actions, net_loads, solar_15min, cfg,
-            start_slot=start_slot, initial_soc_kwh=current_soc_kwh,
-        )
-        if min(traj_a) >= floor_target_kwh:
-            break
         dis_slots_a = sorted(
             (s for s, a in plan_actions.items() if a == "discharge"),
             key=lambda s: (round(buy_prices[s], 4), -s),
         )
         if not dis_slots_a:
+            break
+        traj_a = _simulate_soc_trajectory(
+            plan_actions, net_loads, solar_15min, cfg,
+            start_slot=start_slot, initial_soc_kwh=current_soc_kwh,
+        )
+        # The floor check applies to the discharge-affected region only,
+        # from the first discharge slot onward.  A dip before that point is
+        # NOT caused by the plan's discharge — the battery can be parked
+        # at/below the floor target at plan time (e.g. soc_min in the
+        # morning), and solar refills it before the first discharge runs.
+        # Checking min() over the whole trajectory there makes the loop
+        # unable to ever satisfy the floor (the start dip is permanent, and
+        # dropping discharge does not raise it), so it drops EVERY discharge
+        # slot and empties the plan.  The trough of the discharge run is the
+        # over-commit this correction exists to trim.
+        first_dis = min(s for s, a in plan_actions.items() if a == "discharge")
+        if min(traj_a[first_dis:]) >= floor_target_kwh:
             break
         _drop = dis_slots_a[0]
         del plan_actions[_drop]

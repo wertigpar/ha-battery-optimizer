@@ -1,5 +1,96 @@
 # Changes
 
+## v0.3.2
+
+### Changed
+
+- **Night-pool reservation on COMBINED days (bias-based, safe default)** — on
+  no/partial-solar days the single discharge pool covers evening → morning →
+  night LAST, so the cheapest pre-solar night grid buys starve even when the
+  battery holds plenty of stored energy. A configurable reservation bias
+  (`_NIGHT_RESERVE_BIAS`, hardcoded default **0.6**, module constant in
+  `optimizer.py`) now reserves a slice of the initial battery pool for the
+  cheapest pre-solar night slots **before** the combined buy-desc pass runs:
+  `night_reserve_kwh = initial_usable × min(1, bias × refill_fraction / 0.95)`
+  scaled by how much solar refill actually happened (bias 1.0 + full refill
+  reserves the whole initial pool). Reserved slots are assigned cheapest-first
+  (ascending buy, latest slot on ties) — the exact slots the combined pool
+  starves — and the combined loop skips them and allocates the remaining
+  budget buy-desc as before. The over-commit correction (step 5a) remains the
+  floor safety net; reserved energy is not subtracted from the combined budget
+  (when the trajectory violates the floor, the correction trims the cheapest
+  committed slot — the reserved tail first — so the reservation is never
+  doubled into the budget).
+  Bias = 0 disables the reservation entirely (byte-identical legacy plan);
+  SPLIT-mode days (`refill_fraction ≥ 0.95`) are untouched. Live-day
+  verification: bias 0.6 → 2.8337 €/day, 20 night discharges, min SoC 27.7 %
+  (was 2.3743 / 6 / 52.4 %), battery no longer forced to 100 % by 16:00;
+  bias 0 → exact legacy baseline. A/B sweep: 0.6 → 2.8337, 0.8 → 2.9819,
+  plateau 2.9822, never violates the 20 % floor. Tuning for later: raise/lower
+  the single module constant; bias ≥ 1.0 restores full pre-reservation
+  behavior for aggressive day-priority.
+
+- **Durable no-refill solar regime raises the Case A discharge floor** — in
+  winter / snow-on-panels weeks the battery cannot be refilled by solar, so
+  each stored kWh discharged today must beat the cheapest KNOWN future grid
+  recharge through the round-trip: `floor = min(remaining today, tomorrow) /
+  round_trip_factor + wear`. The regime is a per-day EWMA (α 0.1) over the
+  scaled-forecast solar fraction of the user's usable band
+  `(soc_max − soc_min) × capacity`, persisted to
+  `battery_optimizer_solar_regime.json`; gate engages only after 3 consecutive
+  low days below 0.25 and disengages after 3 high days above 0.40 (hysteresis
+  dead-zone, once-per-day update, cold start OFF, seeded 1.0). Relative to the
+  user's own battery → generic across installs. `solar_full_recharge` (today's
+  fact) overrides the trend and restores the wear floor. Legacy path
+  (regime off) byte-identical; regime on blocks sub-round-trip discharge
+  (snow scenario: 13D 0.3233 → 0D, energy held at 44 % end SoC; cheap night
+  refill 0.01 still discharges the 0.12 peak). Files: `solar_regime.py`,
+  `optimizer.py` (Case A floor + probe threading), `coordinator.py` (state
+  load/save + tomorrow-price ordering for the gate).
+
+### Added
+
+- **Solar Balance sensor + 3rd-party PV production docs** —
+  `sensor.battery_optimizer_solar_balance` reports average daily solar
+  production (kWh, trailing 7 days) derived from the persisted accuracy
+  records (per-run external-counter deltas summed per calendar date;
+  `unknown` before 5 sampled days). Attributes: `daily_base_load_kwh`
+  (auto base load × 24), `self_sufficiency` (< 1 = net importer),
+  `battery_days` (usable band ÷ daily base load), `usable_band_kwh`,
+  `days_sampled`, `window_start`/`window_end`, `solar_source`. Display-only —
+  never gates planning (solar regime + Case B arbitrage stay decision makers).
+  README: new *Solar Production Sensor (3rd-party inverter)* section
+  documenting the cumulative-counter contract and which Solis sensors fit
+  (Total Energy best; Energy Today works via built-in `reset_crossed`
+  handling; Active Power not accepted). Files: `solar_balance.py` (pure),
+  `sensor.py`, `tests/test_solar_balance.py`, README.
+
+### Fixed
+
+- **Solar Regime sensor attributes never emitted** — `sensor.py` carried an
+  orphan duplicate `extra_state_attributes` inside `SolarRegimeSensor`
+  (second definition wins in Python), so the regime attributes
+  (`ewma`, `forecast_fraction`, `low_days`, `high_days`, thresholds…) were
+  dead and the `plan_accuracy` dict leaked onto the regime sensor instead.
+  Moved the property to `PlanAccuracySensor`; regime attributes now emit.
+
+- **Morning low-SoC plan emptied of ALL discharge (0C 0D 65I)** — when the
+  battery starts at/below the floor target (e.g. 15 % = `soc_min` at 07:45),
+  the discharge over-commit correction checked `min(traj_a)` over the WHOLE
+  96-slot trajectory against `floor_target_kwh`. The start dip (2.25 kWh <
+  3.0 kWh floor) is permanent — dropping discharge cannot raise it — so the
+  loop dropped every committed discharge slot and emitted an idle-only plan
+  despite profitable peak prices (slot 79 = 0.2869 €/kWh) and solar refill to
+  ~69.7 %. Live: 1.2789 €/day vs 2.3972 baseline. The floor check now applies
+  only to the discharge-affected region `min(traj_a[first_dis:])` (from the
+  first discharge slot onward); a pre-first-discharge dip is plan-time state
+  (battery parked at floor, solar refills it), not discharge over-commit.
+  Pre-solar overnight discharge with the battery at the floor is still trimmed
+  correctly (first_dis lands in the night). Start-above-floor days are
+  byte-identical. Verification: morning repro (start_slot 31, initial 15 %)
+  29 discharge slots, 1.7686 €/day (was 0D, 0.9363); legacy bias=0 baseline
+  unchanged (2.3743 / 6 / 52.4 %); RC6 case unchanged (2.8337 / 20 / 27.7 %).
+
 ## v0.3.1
 
 ### Fixed

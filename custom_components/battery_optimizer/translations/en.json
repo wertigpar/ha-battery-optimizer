@@ -103,6 +103,8 @@
       "schedule_chart": { "name": "Schedule Chart" },
       "auto_base_load": { "name": "Auto Base Load" },
       "plan_accuracy": { "name": "Plan Accuracy" },
+      "solar_regime": { "name": "Solar Regime" },
+      "solar_balance": { "name": "Solar Balance" },
       "user_schedule_chart": { "name": "User Schedule" }
     },
     "switch": {

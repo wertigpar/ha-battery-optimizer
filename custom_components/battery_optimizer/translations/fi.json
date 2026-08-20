@@ -84,30 +84,76 @@
   },
   "entity": {
     "button": {
-      "run_optimizer": { "name": "Aja optimoija" },
-      "clear_schedule": { "name": "Tyhjennä aikataulu" }
+      "run_optimizer": {
+        "name": "Aja optimoija"
+      },
+      "clear_schedule": {
+        "name": "Tyhjennä aikataulu"
+      }
     },
     "sensor": {
-      "status": { "name": "Optimoijan tila" },
-      "last_run": { "name": "Viimeisin optimointi" },
-      "current_action": { "name": "Nykyisen aikavälin toiminto" },
-      "estimated_savings": { "name": "Arvioitu säästö päivän loppuun" },
-      "baseline_cost": { "name": "Peruskustannus päivän loppuun" },
-      "emaldo_plan_cost": { "name": "Emaldo-kustannus päivän loppuun" },
-      "optimizer_plan_cost": { "name": "Optimoijan kustannus päivän loppuun" },
-      "tomorrow_estimated_savings": { "name": "Huominen arvioitu säästö" },
-      "tomorrow_baseline_cost": { "name": "Huominen peruskustannus" },
-      "tomorrow_emaldo_plan_cost": { "name": "Huominen Emaldo-kustannus" },
-      "tomorrow_optimizer_plan_cost": { "name": "Huominen optimoijan kustannus" },
-      "emaldo_schedule_chart": { "name": "Emaldo-aikataulu" },
-      "schedule_chart": { "name": "Aikataulukaavio" },
-      "auto_base_load": { "name": "Automaattinen peruskuorma" },
-      "plan_accuracy": { "name": "Suunnitelman tarkkuus" },
-      "user_schedule_chart": { "name": "Käyttäjän aikataulu" }
+      "status": {
+        "name": "Optimoijan tila"
+      },
+      "last_run": {
+        "name": "Viimeisin optimointi"
+      },
+      "current_action": {
+        "name": "Nykyisen aikavälin toiminto"
+      },
+      "estimated_savings": {
+        "name": "Arvioitu säästö päivän loppuun"
+      },
+      "baseline_cost": {
+        "name": "Peruskustannus päivän loppuun"
+      },
+      "emaldo_plan_cost": {
+        "name": "Emaldo-kustannus päivän loppuun"
+      },
+      "optimizer_plan_cost": {
+        "name": "Optimoijan kustannus päivän loppuun"
+      },
+      "tomorrow_estimated_savings": {
+        "name": "Huominen arvioitu säästö"
+      },
+      "tomorrow_baseline_cost": {
+        "name": "Huominen peruskustannus"
+      },
+      "tomorrow_emaldo_plan_cost": {
+        "name": "Huominen Emaldo-kustannus"
+      },
+      "tomorrow_optimizer_plan_cost": {
+        "name": "Huominen optimoijan kustannus"
+      },
+      "emaldo_schedule_chart": {
+        "name": "Emaldo-aikataulu"
+      },
+      "schedule_chart": {
+        "name": "Aikataulukaavio"
+      },
+      "auto_base_load": {
+        "name": "Automaattinen peruskuorma"
+      },
+      "plan_accuracy": {
+        "name": "Suunnitelman tarkkuus"
+      },
+      "user_schedule_chart": {
+        "name": "Käyttäjän aikataulu"
+      },
+      "solar_regime": {
+        "name": "Solar Regime"
+      },
+      "solar_balance": {
+        "name": "Solar Balance"
+      }
     },
     "switch": {
-      "pv_strategy": { "name": "PV-myyntistrategia" },
-      "emaldo_control_enable": { "name": "Emaldo-ohjaus" }
+      "pv_strategy": {
+        "name": "PV-myyntistrategia"
+      },
+      "emaldo_control_enable": {
+        "name": "Emaldo-ohjaus"
+      }
     }
   },
   "config_subentries": {

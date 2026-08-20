@@ -22,8 +22,12 @@ from .const import (
     DOMAIN,
     SLOTS_PER_DAY,
     SLOT_DURATION_HOURS,
+    SOLAR_REGIME_ENGAGE,
+    SOLAR_REGIME_DISENGAGE,
+    SOLAR_REGIME_DEBOUNCE_DAYS,
     currency_for_timezone,
 )
+from .solar_balance import solar_balance_report
 from .coordinator import BatteryOptimizerCoordinator, _current_slot_index
 from .optimizer import (
     OptimizationResult,
@@ -61,6 +65,8 @@ async def async_setup_entry(
         UserScheduleChartSensor(coordinator, entry),
         AutoBaseLoadSensor(coordinator, entry),
         PlanAccuracySensor(coordinator, entry),
+        SolarRegimeSensor(coordinator, entry),
+        SolarBalanceSensor(coordinator, entry),
     ], config_subentry_id=coordinator._device_subentry_id())
 
 
@@ -688,3 +694,103 @@ class PlanAccuracySensor(_BaseOptimizerSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return self.coordinator.plan_accuracy or {}
+
+
+class SolarRegimeSensor(_BaseOptimizerSensor):
+    """Durable no-refill regime: gate flag + EWMA trend for the discharge floor.
+
+    State = ``engaged`` / ``not_engaged`` (or ``unknown`` before the first
+    optimizer run).  Attributes expose the EWMA trend, today's raw
+    scaled-forecast fraction, the debounce counters and the tuning thresholds
+    — so the winter/snow discharge gate is explainable and its
+    engagement/disengagement is predictable (counters count down to the flip).
+    """
+
+    _attr_icon = "mdi:sun-snowflake"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "solar_regime")
+
+    @property
+    def native_value(self) -> str:
+        regime = self.coordinator._solar_regime
+        if regime is None:
+            return "unknown"
+        return "engaged" if regime.get("engaged") else "not_engaged"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        regime = self.coordinator._solar_regime
+        attrs: dict[str, Any] = {
+            "engage_threshold": SOLAR_REGIME_ENGAGE,
+            "disengage_threshold": SOLAR_REGIME_DISENGAGE,
+            "debounce_days": SOLAR_REGIME_DEBOUNCE_DAYS,
+        }
+        if regime is None:
+            return attrs
+        attrs["ewma"] = regime.get("ewma")
+        attrs["forecast_fraction"] = self.coordinator._solar_regime_fraction
+        attrs["low_days"] = regime.get("low_days")
+        attrs["high_days"] = regime.get("high_days")
+        attrs["last_updated"] = regime.get("date") or None
+        attrs["band_kwh"] = self.coordinator._solar_regime_band_kwh
+        return attrs
+
+
+class SolarBalanceSensor(_BaseOptimizerSensor):
+    """Self-sufficiency context: avg daily solar production vs base load.
+
+    State = average daily solar production (kWh) over the trailing 7 days,
+    derived from the persisted accuracy records (per-run external-counter
+    deltas summed per calendar date — display/context only, never gates
+    planning).  Unknown before ≥5 sampled days exist.  Attributes expose the
+    base-load comparison and the usable band, so dashboards can answer "is
+    the home a structural net importer/exporter and how long could a full
+    battery alone cover base load?".
+    """
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:solar-power"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "solar_balance")
+
+    @property
+    def native_value(self) -> float | None:
+        report = self._report
+        return report.get("avg_daily_solar_kwh") if report else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {"solar_source": None}
+        hist = self.coordinator._accuracy_history
+        if hist:
+            attrs["solar_source"] = hist[-1].get("solar_source")
+        report = self._report
+        if not report:
+            return attrs
+        attrs.update(report)
+        return attrs
+
+    @property
+    def _report(self) -> dict | None:
+        opts = self.coordinator.config_entry.options
+        band = None
+        try:
+            capacity = float(opts.get("battery_capacity_kwh") or 0.0)
+            soc_max = float(opts.get("soc_max") or 0.0)
+            soc_min = float(opts.get("soc_min") or 0.0)
+            if capacity > 0.0:
+                band = round(capacity * (soc_max - soc_min) / 100.0, 1)
+        except (TypeError, ValueError):
+            band = None
+        return solar_balance_report(
+            self.coordinator._accuracy_history,
+            self.coordinator.auto_base_load_value,
+            band,
+        )

@@ -45,13 +45,19 @@ buy price avoided (self-consumption), not the sell/export price.
 2. Rank non-solar slots by buy price (most expensive first for discharge).
 3. Discharge existing energy when `buy_price > wear_cost` (self-consumption saves money).
 4. Round-trip trades when the price spread covers efficiency losses + wear.
-5. **Plateau night drain**: on no/partial-solar days the discharge budget runs
-   evening → morning → night, so the cheapest night slots are starved even
-   though the day starts with dead stored energy (day profit is flat over a
-   range of starting SoCs). The optimizer probes the day profit vs starting
-   SoC to find the plateau edge, then discharges the excess above the edge
-   overnight to cover the night load instead of buying grid power — never
-   draining below the edge. Skipped when the plan starts after solar onset.
+5. **Night-pool reservation on COMBINED days**: on no/partial-solar days the
+   discharge budget runs evening → morning → night, so the cheapest night
+   slots are starved even though the battery holds stored energy. A
+   reservation bias (hardcoded default 0.6, module constant
+   `_NIGHT_RESERVE_BIAS` in `optimizer.py`) reserves a slice of the initial
+   battery pool — scaled by `bias × solar_refill_fraction / 0.95` — for the
+   cheapest pre-solar night slots **before** the main buy-desc pass runs
+   (cheapest first, so the starved slots are covered). The remaining budget
+   allocates buy-desc as before; the over-commit correction keeps the plan
+   above the floor. Bias 0 = legacy behavior (no reservation). On top of that,
+   **plateau night drain** still probes day profit vs starting SoC and drains
+   dead stored energy above the plateau edge overnight — never below the
+   edge. Skipped when the plan starts after solar onset.
 6. Grid charge only the deficit that solar + existing SoC cannot cover.
 7. **PV sell strategy** (optional): when enabled, computes a parallel `thirdparty_pv_slots[96]` plan. A single cutover time T (≤ noon by default) is chosen through an iterated simulation of the true battery need at the cutover (the plan-start SoC understates the gap caused by the sell window). Solar before T is sold to the grid (PV switch OFF) only where the sell price beats the **stored value** of that kWh — the cheapest future discharge buy price discounted by round-trip efficiency and `pv_sell_margin` (exporting only beats storing because a stored kWh displaces a future grid buy); solar from T onward charges the battery uninterrupted.
 
@@ -303,6 +309,91 @@ When `solar_actual_sensor` is set, `actual_solar_kwh` comes from that counter
 configured counter is unavailable when accuracy is computed, that record is
 skipped with a warning — tuning data never mixes sources.
 
+### Solar Production Sensor (3rd-party inverter)
+
+Home-assistant exposes third-party PV production as sensors (e.g. a Solis
+S5-GR3P inverter publishes *Active Power*, *Energy Today*, *Energy Yesterday*
+and *Total Energy*). The `solar_actual_sensor` option accepts any of them that
+is a **cumulative energy counter** — that is the contract.
+
+| Solis sensor | Type | Fits? |
+|---|---|---|
+| **Total Energy** | cumulative kWh, never resets | ✅ **Best** — zero lost records |
+| **Energy Today** | daily counter, resets 00:00 | ✅ Works — the midnight reset makes that day's first post-midnight accuracy record skipped (built-in `reset_crossed` handling, see below). Fine for the auto-tune (≥5 valid records required) |
+| Energy Yesterday | daily counter | ⚠️ Same reset behaviour, lags a day — no benefit over *Energy Today* |
+| Active Power | instantaneous W | ✗ Not energy — would need power-to-energy integration; not accepted |
+
+**Defaults.** When the option is empty the Emaldo-internal estimate is used:
+for Power Core users that is the device's own solar field; for Store users it
+is the balance-derived estimate (which is zero when the device model reports
+no solar). Configuring a cumulative counter upgrades plan-vs-actual accuracy
+and the solar-scale auto-tune to **measured truth** for any PV setup.
+
+**Reset handling.** A daily counter that drops across midnight (`Energy
+Today`) is detected by `counter_delta_kwh`: the post-reset fraction is
+returned best-effort with a `reset_crossed` flag and such records are
+excluded from the auto-tune so the tuning data never mixes reset spans with
+clean spans. A cumulative counter (`Total Energy`) never trips this.
+
+### Solar Regime
+
+The **Solar Regime** is a durable no-refill detector for the Case A discharge
+gate: it answers *"can the battery refill from solar in the coming days, or
+is every stored kWh going to be replaced by a future **grid** purchase?"*
+
+**Why it exists.** In winter months and during snow-on-panels weeks the solar
+forecast is correctly near zero. The default Case A rule discharges whenever
+`buy > wear_cost` — valid when free solar refill makes stored energy worth
+burning at any price above wear, but wrong when the kWh discharged today must
+be bought back from the grid tomorrow (through the round-trip, η² ≈ 0.81)
+*plus* wear. Without a gate, winter discharge at 0.08 €/kWh to refill at
+0.08–0.12 €/kWh is a guaranteed loss.
+
+**The signal.** Every optimizer run the day's total *scaled* solar forecast
+(auto-tuned by [Plan Accuracy](#plan-accuracy)) is expressed as a fraction of
+the user's own usable band `(soc_max − soc_min) × capacity` — relative, so it
+works for any battery size. A slow per-day **EWMA (α = 0.1, τ ≈ 10 days)**
+tracks the trend; a **hysteresis dead-zone (0.25 engage / 0.40 disengage)** and
+a **3-consecutive-day debounce** (both directions) guarantee a transient
+cloudy week never flips the gate — only a *durable* low-production regime
+(winter, snow lasting weeks) engages it.
+
+**The gate.** When engaged **and** today's solar cannot fully recharge the
+battery (`solar_full_recharge` overrides the trend — a sunny winter day is a
+fact, not a trend), each discharge slot must beat the cheapest known future
+recharge:
+
+```
+case_a_floor = min(remaining today, min(tomorrow)) / round_trip_factor + wear_cost
+```
+
+`min(tomorrow)` is only available once Nordpool publishes tomorrow's prices
+(~13:00 CET; the sensor-triggered re-run recomputes the plan). Before that the
+floor uses today's remaining minimum. With the regime off — or no tomorrow
+prices — the floor collapses to `wear_cost` (byte-identical legacy behavior).
+
+**State & tuning.** The regime is persisted once per day to
+`battery_optimizer_solar_regime.json` (HA config dir) — same-date updates are
+no-ops, so the gate cannot oscillate intra-day. Cold start is `engaged: false`
+with an EWMA seed of 1.0: the gate only turns on after a sustained low
+stretch, and full engagement latency (τ + debounce) is deliberately ~2–3
+weeks — the price of never oscillating. Tuning constants live in `const.py`:
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `SOLAR_REGIME_EWMA_ALPHA` | `0.1` | Per-day smoothing (τ ≈ 10 d) |
+| `SOLAR_REGIME_ENGAGE` | `0.25` | Below this → low day (3 to engage) |
+| `SOLAR_REGIME_DISENGAGE` | `0.40` | Above this → high day (3 to disengage) |
+| `SOLAR_REGIME_DEBOUNCE_DAYS` | `3` | Consecutive days required each way |
+
+**Observing it.** The **Solar Regime** sensor (e.g. `sensor.battery_optimizer_configuration_solar_regime` — the entity-ID prefix follows the device name, so it can vary by install)
+is `engaged` / `not_engaged` (or `unknown` before the first run) with the full
+trend as attributes: `ewma` (distance to the thresholds), `forecast_fraction`
+(today's raw fraction), `low_days` / `high_days` (debounce progress — a count
+of 2/3 means the gate flips tomorrow), `last_updated`, `band_kwh`, and the
+three tuning thresholds. Typical dashboard use: an "energy held for better
+prices" indicator, or a notification automation on the `engaged` state change.
+
 ### Price Model
 
 The optimizer applies fees to the raw spot price for each 15-minute slot:
@@ -381,7 +472,7 @@ The sensor may include both today's and tomorrow's data in the same list — ent
 
 ## Sensors
 
-The integration creates 16 sensor entities:
+The integration creates 18 sensor entities:
 
 | Entity | Type | Description | Attributes |
 |---|---|---|---|
@@ -400,6 +491,8 @@ The integration creates 16 sensor entities:
 | **Emaldo Schedule** | diagnostic | Summary string (e.g. `79C 84D 29I`) with Emaldo's internal schedule in attributes. Shows what the battery's own AI planned *before* the optimizer overrides it. | `schedule` (list of 96–192 slots with `mode`, `state`, `buy`, `sell`, `solar`) |
 | **Auto Base Load** | diagnostic | The base load value (kW) currently used by the optimizer | — |
 | **Plan Accuracy** | diagnostic | Signed discharge error in kWh since last optimizer run (positive = more discharge than planned, negative = less) | `elapsed_slots`, `planned_discharge_kwh`, `planned_charge_kwh`, `planned_solar_kwh`, `actual_discharge_kwh`, `discharge_error_kwh`, `actual_charge_kwh`, `charge_error_kwh`, `actual_solar_kwh`, `solar_error_kwh`, `last_run`, `accuracy_history` (rolling summary, persisted to `battery_optimizer_accuracy.json`) |
+| **Solar Regime** | diagnostic | Durable no-refill regime gate: `engaged`, `not_engaged`, or `unknown` (before the first run). Engaged = winter/snow regime active → discharge must beat the cheapest known future grid recharge (see [Solar Regime](#solar-regime)) | `ewma`, `forecast_fraction`, `low_days`, `high_days`, `last_updated`, `band_kwh`, `engage_threshold`, `disengage_threshold`, `debounce_days` |
+| **Solar Balance** | diagnostic | Average daily solar production (kWh) over the trailing 7 days from the accuracy records (`unknown` before 5 sampled days). Context for "is the home a net importer/exporter?" — display only, never gates planning | `daily_base_load_kwh`, `self_sufficiency` (<1 = net importer), `battery_days`, `usable_band_kwh`, `days_sampled`, `window_start`, `window_end`, `solar_source` |
 | **User Schedule** | diagnostic | Effective user rule overlay on the plan: slots a rule governs carry `source: user`, untouched slots carry `source: optimizer`. Full 48 h window (192 slots) so the chart aligns with the other schedule charts. | `schedule` (list of up to 192 slots with `source`, `soc_target`, `pv_sell`, `pv_source`) |
 
 ## Switches
@@ -1350,7 +1443,7 @@ battery_optimizer/
 ├── optimizer.py         # Greedy solver — core optimization algorithm + PV sell planner
 ├── rules.py             # User schedule rule models, validation, precedence resolution
 ├── runtime_state.py     # Persisted runtime state (rule sources, PV sources, winners)
-├── sensor.py            # 16 sensor entities
+├── sensor.py            # 18 sensor entities
 ├── services.py          # run_optimizer + clear_schedule services
 ├── services.yaml        # Service descriptions for UI
 ├── solar_actual.py      # Actual solar reading (Emaldo-internal vs external counter)
