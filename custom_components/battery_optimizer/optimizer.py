@@ -1901,6 +1901,22 @@ def optimize(
         ))
 
     # --- Emaldo plan cost: simulate battery following the Emaldo AI modes ---
+    # 3rd-party-PV handling matters here: with third-party PV enabled the
+    # device charges the battery from surplus solar in EVERY mode (universal
+    # self-consumption); with it disabled external solar is exported and the
+    # house draws the full base load from grid.  The PV sell/charge slots the
+    # optimizer itself plans are the effective switch schedule, so compute
+    # them first and feed the per-slot flag into the device simulation (this
+    # benchmark = "what the internal plan costs GIVEN our PV handling").
+    pv_flags: list[bool] = []
+    if enable_pv_strategy:
+        pv_flags = _plan_pv_sell_slots(
+            cfg, result_slots, solar_15min, buy_prices, sell_prices,
+            start_slot=start_slot,
+            initial_soc_kwh=current_soc_kwh,
+        )
+        _correct_soc_for_pv_sells(result_slots, pv_flags, solar_15min, cfg)
+
     emaldo_cost = 0.0
     e_cycled = 0.0  # battery-internal kWh discharged under the Emaldo plan
     e_import_total_kwh = e_export_total_kwh = 0.0
@@ -1908,6 +1924,7 @@ def optimize(
     e_export_energy = e_export_commission = 0.0
     if emaldo_modes is not None:
         e_soc = current_soc_kwh
+        rate_ac = cfg.max_charge_per_slot_kwh
         for s in range(n):
             if s < start_slot:
                 continue
@@ -1915,37 +1932,54 @@ def optimize(
                 break
             e_bp = buy_prices[s] if s < len(buy_prices) else 0.0
             e_sp = sell_prices[s] if s < len(sell_prices) else 0.0
-            e_grid_kwh = 0.0
-            e_export_kwh = 0.0
             mode = emaldo_modes[s]
-            if mode == 1:
-                # Charge — buy from grid at max rate
-                e_headroom = max(0.0, soc_max_kwh - e_soc + idle_drain)
-                e_charge_kwh = min(cfg.max_charge_per_slot_kwh * cfg.charge_efficiency, e_headroom)
-                e_soc = min(e_soc + e_charge_kwh - idle_drain, soc_max_kwh)
-                e_grid_kwh = e_charge_kwh / cfg.charge_efficiency
-                e_grid_kwh += max(net_loads[s], 0) * SLOT_DURATION_HOURS
-            elif mode == -1:
-                # Discharge — sell to grid / cover load
-                if net_loads[s] > 0:
-                    e_load_kwh = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
-                else:
-                    e_load_kwh = 0.0
-                    e_export_kwh = max(0.0, -net_loads[s] - cfg.max_charge_kw) * SLOT_DURATION_HOURS
-                e_bat_draw = min(
-                    e_load_kwh / cfg.discharge_efficiency,
-                    max(0.0, e_soc - soc_min_kwh),
-                )
-                e_cycled += e_bat_draw
-                e_soc = max(e_soc - e_bat_draw - idle_drain, 0.0)
-                # Grid covers load portion the battery couldn't deliver
-                e_grid_kwh += max(0.0, e_load_kwh - e_bat_draw * cfg.discharge_efficiency)
+
+            net = net_loads[s]  # kW; negative = solar surplus
+            surplus_ac = max(0.0, -net) * SLOT_DURATION_HOURS
+            deficit_ac = max(0.0, net) * SLOT_DURATION_HOURS
+            pv_on = pv_flags[s] if pv_flags else True
+
+            # PV handling: universal surplus charging when third-party PV on
+            # (any mode); when off, external solar is sold and the house
+            # draws the full base load from the grid.
+            if pv_on:
+                headroom_ac = max(0.0, (soc_max_kwh - e_soc) / cfg.charge_efficiency)
+                solar_charge_ac = min(surplus_ac, rate_ac, headroom_ac)
+                e_soc += solar_charge_ac * cfg.charge_efficiency
+                e_export_kwh = max(0.0, surplus_ac - solar_charge_ac)
+                load_def = deficit_ac
             else:
-                # Idle — grid imports FULL base load (battery not used);
-                # solar surplus above base load is exported.
-                e_soc = max(e_soc - idle_drain, 0.0)
-                e_grid_kwh = cfg.base_load_kw * SLOT_DURATION_HOURS
-                e_export_kwh = max(solar_15min[s] - cfg.base_load_kw, 0.0) * SLOT_DURATION_HOURS
+                solar_charge_ac = 0.0
+                e_export_kwh = solar_15min[s] * SLOT_DURATION_HOURS
+                load_def = cfg.base_load_kw * SLOT_DURATION_HOURS
+
+            # Mode semantics (grid/discharge policy):
+            #   charge  (1) — grid charging allowed: top the battery up to the
+            #                max AC rate beyond what solar already put in.
+            #   discharge(-1) — battery may discharge to cover the load.
+            #   idle    (0) — no grid charge, no discharge; grid covers load.
+            e_grid_kwh = 0.0
+            if mode == 1:
+                grid_charge_ac = max(
+                    0.0,
+                    min(rate_ac, (soc_max_kwh - e_soc) / cfg.charge_efficiency)
+                    - solar_charge_ac,
+                )
+                e_soc += grid_charge_ac * cfg.charge_efficiency
+                e_grid_kwh = grid_charge_ac + load_def
+            elif mode == -1:
+                draw_ac = min(
+                    load_def,
+                    max(0.0, (e_soc - soc_min_kwh) / cfg.discharge_efficiency),
+                    cfg.max_discharge_kw * SLOT_DURATION_HOURS,
+                )
+                e_soc -= draw_ac * cfg.discharge_efficiency
+                e_cycled += draw_ac
+                e_grid_kwh = max(0.0, load_def - draw_ac * cfg.discharge_efficiency)
+            else:
+                e_grid_kwh = load_def
+
+            e_soc = max(e_soc - cfg.idle_power_kw * SLOT_DURATION_HOURS, 0.0)
             emaldo_cost += e_bp * e_grid_kwh - e_sp * e_export_kwh
             # Decomposed emaldo subcosts.
             e_ie, e_it, e_itx, e_ic = buy_decomp[s]
@@ -2024,14 +2058,7 @@ def optimize(
     )
 
     if enable_pv_strategy:
-        result.thirdparty_pv_slots = _plan_pv_sell_slots(
-            cfg, result_slots, solar_15min, buy_prices, sell_prices,
-            start_slot=start_slot,
-            initial_soc_kwh=current_soc_kwh,
-        )
-        _correct_soc_for_pv_sells(
-            result_slots, result.thirdparty_pv_slots, solar_15min, cfg
-        )
+        result.thirdparty_pv_slots = pv_flags
 
     _LOGGER.info(
         "Optimization complete: savings=%.4f€ (baseline=%.4f, actual=%.4f, emaldo=%.4f), "

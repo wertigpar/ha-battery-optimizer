@@ -750,7 +750,6 @@ class SolarBalanceSensor(_BaseOptimizerSensor):
     battery alone cover base load?".
     """
 
-    _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = "kWh"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1

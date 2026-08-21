@@ -1,5 +1,45 @@
 # Changes
 
+## v0.3.3
+
+### Fixed
+
+- **Emaldo plan-cost estimate over-charged from grid during daytime solar** —
+  the Rest-of-Day/tomorrow Emaldo cost benchmark simulated the internal AI
+  plan with charge-mode slots buying the full charge energy from the grid and
+  silently dropping solar surplus (discharge-mode surplus never exported,
+  idle-mode imported the full base load even under solar). On solar days this
+  inflated the benchmark by €1.5+ (live: 2.76 € vs the 0.33 € optimizer plan
+  while the battery in fact fills from surplus PV for free). The simulation
+  now honours the real device semantics: with third-party PV enabled, surplus
+  solar charges the battery in EVERY mode (grid only tops up in charge-mode
+  slots); with PV disabled external solar is exported and the house draws the
+  full base load. The effective per-slot PV switch state is the optimizer's
+  own planned PV sell/charge schedule (`_plan_pv_sell_slots`), computed
+  before the benchmark instead of after. Full-battery charge slots no longer
+  import and export the surplus instead. Files: `optimizer.py` (emaldo sim
+  rewrite + PV-precompute reorder), `tests/test_cost_breakdown.py` (2 new
+  PV-aware emaldo tests, stale zero-result assertions updated).
+
+- **`sensor.solar_balance` rejected by HA (device_class/state_class clash)** —
+  the Solar Balance sensor set `device_class=energy` together with
+  `state_class=measurement`. HA forbids the `energy` device class with a
+  non-cumulative state class, so the entity failed to set up with
+  *"using state class 'measurement' which is impossible considering device
+  class ('energy')"*. The value is average daily solar (kWh/day), a rate, not
+  a cumulative total — so the device class was removed; unit (`kWh`) and
+  `measurement` state class are kept. Reported in issue #7.
+
+- **Schedule weekday selector showed numbers, not names** — the custom
+  schedule rule form (`RuleSubentryFlow`) rendered the weekday picker as
+  numeric chips `0 ×`…`6 ×` (Python `weekday()`: 0=Mon…6=Sun). The selector
+  already carried `translation_key="weekday"`, but HA only localizes that key
+  when the option values are its canonical weekday keys. Options are now
+  `monday`…`sunday`; HA's built-in `weekday` frontend translations render
+  them as localized day names (e.g. Swedish "måndag"), and the selected keys
+  are mapped back to `int` (0=Mon…6=Sun) for storage. Covers the request in
+  issue #4 (comment 5360285748). File: `config_flow.py`.
+
 ## v0.3.2
 
 ### Changed

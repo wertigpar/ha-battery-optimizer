@@ -313,6 +313,21 @@ def _build_schema(
     )
 
 
+# Canonical HA weekday keys — `translation_key="weekday"` makes the frontend
+# localize these (e.g. Swedish "måndag"), whereas raw integer options render
+# as untranslated chips (0=Mon…6=Sun). Internal storage stays int 0=Mon…6=Sun.
+WEEKDAY_KEYS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+_WEEKDAY_KEY_TO_INT = {key: i for i, key in enumerate(WEEKDAY_KEYS)}
+
+
 def _rule_schema(
     defaults: dict | None = None,
     *,
@@ -321,8 +336,8 @@ def _rule_schema(
 ) -> vol.Schema:
     d = defaults or {}
     level = level or d.get("level", LEVEL_WEEKDAY)
-    weekday_options = ["0", "1", "2", "3", "4", "5", "6"]
-    days_default = [str(x) for x in d.get("days", [0])]
+    weekday_options = list(WEEKDAY_KEYS)
+    days_default = [WEEKDAY_KEYS[x] for x in d.get("days", [0]) if 0 <= x <= 6]
     soc_target_field: dict = {}
     if action in ("charge", "discharge"):
         soc_target_field = {
@@ -492,7 +507,7 @@ class RuleSubentryFlow(ConfigSubentryFlow):
         user_input = dict(user_input)
         raw_days = user_input.get("days")
         if raw_days is not None:
-            user_input["days"] = [int(x) for x in raw_days]
+            user_input["days"] = [_WEEKDAY_KEY_TO_INT[x] for x in raw_days]
         rule = rule_from_data({**user_input, "action": action, "level": level})
         siblings = self._same_level_siblings(rule.level, editing)
         errors = rule_errors(rule, siblings)
