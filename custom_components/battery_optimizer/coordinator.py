@@ -793,8 +793,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _resolve_emaldo_entity(self, key: str, domain: str = "sensor") -> str | None:
         """Resolve an Emaldo entity_id from the entity registry.
 
-        Uses the emaldo coordinator's home_id to construct the unique_id
-        pattern ``{home_id}_{key}``.  This works for any Emaldo device model
+        Emaldo constructs its entities' unique_ids from the coordinator's
+        ``device_id`` on current versions and from ``home_id`` on older ones,
+        so both bases are tried: ``{device_id}_{key}`` first, then
+        ``{home_id}_{key}``.  This works for any Emaldo device model
         (Power Store, Power Core, …) regardless of the slugified device name.
 
         Args:
@@ -814,18 +816,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._emaldo_entry_id and self._emaldo_entry_id in emaldo_data
             else emaldo_data.items()
         )
+        registry = er.async_get(self.hass)
         for entry_id, entry_data in entries:
-            coord = entry_data.get("power")  # EmaldoCoordinator — holds home_id
+            coord = entry_data.get("power")  # EmaldoCoordinator — holds ids
             if coord is None:
                 continue
-            home_id = getattr(coord, "home_id", None)
-            if not home_id:
-                continue
-            unique_id = f"{home_id}_{key}"
-            registry = er.async_get(self.hass)
-            entity_id = registry.async_get_entity_id(domain, EMALDO_DOMAIN, unique_id)
-            if entity_id:
-                return entity_id
+            # Current ha-emaldo versions derive unique_ids from device_id;
+            # legacy ones from home_id. Try both so auto-discovery works
+            # across versions without hardcoding either scheme (#9).
+            for uid_base in (
+                getattr(coord, "device_id", None),
+                getattr(coord, "home_id", None),
+            ):
+                if not uid_base:
+                    continue
+                unique_id = f"{uid_base}_{key}"
+                entity_id = registry.async_get_entity_id(
+                    domain, EMALDO_DOMAIN, unique_id
+                )
+                if entity_id:
+                    return entity_id
         return None
 
     def _get_battery_soc(self) -> float | None:

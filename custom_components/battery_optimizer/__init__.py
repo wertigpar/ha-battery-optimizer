@@ -13,6 +13,7 @@ from typing import Callable
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import AbortFlow
 
 from .const import (
     DOMAIN,
@@ -49,8 +50,17 @@ async def _ensure_default_rule(hass: HomeAssistant, entry: ConfigEntry) -> None:
         for sub in entry.subentries.values()
         if sub.subentry_type == SUBENTRY_TYPE_RULE
     ]
+    # Detect by the same key we create with (unique_id) so a pre-existing
+    # default-rule subentry is always found even if its stored `level` drifted
+    # away from LEVEL_DEFAULT; otherwise we re-add `unique_id="default_rule"`
+    # and HA aborts the whole setup with `already_configured` (issue #7).
     default = next(
-        (sub for sub in existing if dict(sub.data).get("level") == LEVEL_DEFAULT),
+        (
+            sub
+            for sub in existing
+            if sub.unique_id == "default_rule"
+            or dict(sub.data).get("level") == LEVEL_DEFAULT
+        ),
         None,
     )
     if default is not None:
@@ -86,15 +96,23 @@ async def _ensure_default_rule(hass: HomeAssistant, entry: ConfigEntry) -> None:
         "pv_sell": "inherit",
         "label": DEFAULT_RULE_LABEL,
     }
-    hass.config_entries.async_add_subentry(
-        entry,
-        ConfigSubentry(
-            subentry_type=SUBENTRY_TYPE_RULE,
-            title=default_rule_title(rule_from_data(default_data)),
-            unique_id="default_rule",
-            data=default_data,
-        ),
-    )
+    try:
+        hass.config_entries.async_add_subentry(
+            entry,
+            ConfigSubentry(
+                subentry_type=SUBENTRY_TYPE_RULE,
+                title=default_rule_title(rule_from_data(default_data)),
+                unique_id="default_rule",
+                data=default_data,
+            ),
+        )
+    except AbortFlow as err:
+        if getattr(err, "reason", None) != "already_configured":
+            raise
+        _LOGGER.warning(
+            "Battery Optimizer: default rule subentry already exists "
+            "(unique_id='default_rule') — adopting the existing one"
+        )
 
 
 async def _ensure_device_subentry(
@@ -139,15 +157,24 @@ async def _ensure_device_subentry(
         # subentry_id is auto-assigned by the framework.  Re-lookup the
         # created subentry by type (the add call returns a bool, not the
         # subentry).
-        hass.config_entries.async_add_subentry(
-            entry,
-            ConfigSubentry(
-                subentry_type=SUBENTRY_TYPE_DEVICE,
-                title=DEVICE_SUBENTRY_LABEL,
-                unique_id=DEVICE_SUBENTRY_UNIQUE_ID,
-                data={},
-            ),
-        )
+        try:
+            hass.config_entries.async_add_subentry(
+                entry,
+                ConfigSubentry(
+                    subentry_type=SUBENTRY_TYPE_DEVICE,
+                    title=DEVICE_SUBENTRY_LABEL,
+                    unique_id=DEVICE_SUBENTRY_UNIQUE_ID,
+                    data={},
+                ),
+            )
+        except AbortFlow as err:
+            if getattr(err, "reason", None) != "already_configured":
+                raise
+            _LOGGER.warning(
+                "Battery Optimizer: device subentry already exists "
+                "(unique_id=%r) — adopting the existing one",
+                DEVICE_SUBENTRY_UNIQUE_ID,
+            )
         device_sub = next(
             sub
             for sub in entry.subentries.values()

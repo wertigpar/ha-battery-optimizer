@@ -761,17 +761,22 @@ def _plan_pv_sell_slots(
     needed_kwh = final_need
 
     # Mark all solar slots in [sell_from, T_cutover) as sell (if profitable).
-    # Economic gate: storing a solar kWh displaces a future grid buy, so the
-    # marginal value of storage = the cheapest planned discharge slot's buy
-    # price, discounted by the full round-trip (charge + discharge losses).
-    # Export only when the sell price beats that stored value (AND the config
-    # floor).  Comparing against the same-slot buy price is wrong: that price
-    # always includes VAT + transfer fees, so it can never be beaten on a
-    # normal day and the gate is dead.  pv_sell_min_price_spread remains the
-    # absolute floor.  pv_sell_margin scales the threshold (e.g. 1.05 requires
-    # the export price to clear storage value by 5%).
-    # Note: selling PV directly to grid incurs zero battery wear, so the
-    # wear-cost term is not applied here (only round-trip charge/discharge).
+    # Economic gate: a stored solar kWh displaces the BEST alternative use of
+    # that energy — either a future grid BUY (a planned discharge slot) or, on
+    # high-solar days when the battery fills from free solar, a future solar
+    # EXPORT (the post-cutover solar the battery would otherwise absorb).
+    #   - With discharge slots: stored value = min(discharge buy) × round-trip.
+    #   - Without discharge:    stored value = min(sell price) over the
+    #     post-cutover solar window (the cheapest export we'd displace).
+    # Export only when the slot's sell price clears that stored value (AND the
+    # config floor).  The old same-slot sell > buy check is dropped: buy always
+    # includes VAT + transfer fees, so it can never open on a normal tariff and
+    # left the PV-sell strategy dead precisely on the sunny days it targets.
+    # pv_sell_min_price_spread remains the absolute floor; pv_sell_margin
+    # scales the threshold (e.g. 1.05 requires the export price to clear the
+    # stored value by 5%).
+    # Note: selling PV directly to grid incurs zero battery wear, so no
+    # wear-cost term is applied here (only the round-trip discount above).
     discharge_slots = [sp.index for sp in slots if sp.action == "discharge"]
     if discharge_slots:
         sell_threshold = (
@@ -783,9 +788,17 @@ def _plan_pv_sell_slots(
             * cfg.pv_sell_margin
         )
     else:
-        # No discharge to displace — nothing to store for.  Fall back to the
-        # same-slot comparison (store now vs buy now), which is conservative.
-        sell_threshold = None
+        # No grid buy to displace: stored solar only offsets later solar
+        # export.  Reference the cheapest remaining sell price in the
+        # post-cutover window — selling now beats storing when this slot's
+        # sell price exceeds that (× margin), capturing the morning-vs-midday
+        # spread instead of never selling.
+        later_sell = [
+            sell_prices[t]
+            for t in range(T_cutover, n)
+            if t < len(sell_prices) and solar_15min[t] >= _MIN_SOLAR_KW
+        ]
+        sell_threshold = min(later_sell) * cfg.pv_sell_margin if later_sell else None
     for s in range(sell_from, T_cutover):
         sp = slot_map.get(s)
         if solar_15min[s] < _MIN_SOLAR_KW:

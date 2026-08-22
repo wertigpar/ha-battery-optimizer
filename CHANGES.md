@@ -17,6 +17,56 @@
     commission on feed-in export (€/kWh).
   File: `sensor.py`, `strings.json`, `translations/en.json`.
 
+### Fixed
+
+- **Upgrade from v0.3.2 → v0.3.3 failed to set up the integration**
+  (`AbortFlow: already_configured` in `_ensure_default_rule`) — on upgrade HA
+  raised *Flow aborted: already_configured* while adding the default-rule
+  subentry, which killed the whole config-entry setup (fresh installs were
+  unaffected). Root cause: the default rule was detected by
+  `data.level == LEVEL_DEFAULT` but created with `unique_id="default_rule"`;
+  when a pre-existing default-rule subentry's stored `level` had drifted (or a
+  concurrent setup/reload raced), detection missed it and the re-add collided
+  on the unique_id. Detection now also matches `unique_id == "default_rule"`,
+  and the `async_add_subentry` call is wrapped so a residual/duplicate
+  `already_configured` is logged and tolerated instead of aborting setup. The
+  same defensive guard was added to the device-subentry creation. Reported in
+  issue #7 (comment 5373140091). File: `__init__.py`.
+
+- **Emaldo entity auto-discovery broken by device_id vs home_id unique_id
+  scheme** — `_resolve_emaldo_entity()` built only `{home_id}_{key}`, but
+  current ha-emaldo derives entity unique_ids from `device_id`, so every
+  lookup returned `None` and SoC / schedule chart / third-party-PV switch fell
+  back to failure ("Cannot optimize"). The resolver now tries the `device_id`
+  base first, then `home_id`, so auto-discovery works across ha-emaldo
+  versions (issue #9). File: `coordinator.py`.
+
+- **PV Sell Strategy never triggered on high-solar days** — the economic gate
+  in `_plan_pv_sell_slots()` only opened when a stored solar kWh displaced a
+  future grid buy (a planned discharge slot). On sunny days the battery fills
+  entirely from free solar, so no discharge is planned and the gate fell back
+  to a same-slot `sell_price > buy_price` check — which can never open because
+  buy always includes VAT + transfer fees. Result: PV export never happened and
+  the "sell morning solar, charge from later solar" feature was dead precisely
+  on the days it targets. The gate now also models the alternative use of
+  stored solar on no-discharge days: it displaces *later solar export*, so a
+  slot sells whenever its sell price beats the cheapest post-cutover sell price
+  (× `pv_sell_margin`). This captures the intraday morning-vs-midday spread, is
+  wear-free (direct export), and preserves the existing SoC-starvation and floor
+  guards.   Reported in issue #8. File: `optimizer.py`.
+
+### Changed
+
+- **Schedule chart no longer shows the misleading `128` (`SLOT_NO_OVERRIDE`)
+  value for already-elapsed slots** — the diagnostic `schedule_chart` sensor
+  renders the full 96-slot plan, and slots before `start_slot` (today's
+  already-run periods) kept the default override byte `128` while the battery
+  had in fact moved on. The sensor now reports `value: null` and a new
+  `past: true` flag for those slots; future idle slots still report `0` (real
+  `SLOT_IDLE`). Purely cosmetic — the device push path already forced idle
+  (`0`) for elapsed slots, so battery behaviour is unchanged. Secondary
+  symptom of issue #8. File: `sensor.py`.
+
 ## v0.3.3
 
 ### Fixed
