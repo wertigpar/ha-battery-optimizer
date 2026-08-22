@@ -1,5 +1,22 @@
 # Changes
 
+## v0.3.4
+
+### Added
+
+- **Diagnostic sensors for cost configuration parameters** — three new
+  `diagnostic` sensors expose the optimizer's cost-setup values so they can
+  be placed on dashboards or inspected at a glance. They read live from the
+  config entry options and reflect option changes:
+  - `VAT Multiplier` (`sensor.battery_optimizer_vat_multiplier`) — VAT factor
+    applied to import energy cost (dimensionless).
+  - `Grid Transfer Fee` (`sensor.battery_optimizer_grid_transfer_fee`) — grid
+    transfer fee on imported energy (€/kWh).
+  - `Feed-in Sales Commission`
+    (`sensor.battery_optimizer_feed_in_sales_commission`) — retailer
+    commission on feed-in export (€/kWh).
+  File: `sensor.py`, `strings.json`, `translations/en.json`.
+
 ## v0.3.3
 
 ### Fixed

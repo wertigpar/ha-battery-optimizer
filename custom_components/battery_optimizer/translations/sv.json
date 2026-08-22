@@ -140,6 +140,15 @@
       "user_schedule_chart": {
         "name": "Användarschema"
       },
+      "vat_multiplier": {
+        "name": "Momsfaktor"
+      },
+      "grid_transfer_fee": {
+        "name": "Nätöverföringsavgift"
+      },
+      "feed_in_sales_commission": {
+        "name": "Inmatningsprovision"
+      },
       "solar_regime": {
         "name": "Solar Regime"
       },

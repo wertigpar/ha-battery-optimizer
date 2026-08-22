@@ -140,6 +140,15 @@
       "user_schedule_chart": {
         "name": "Käyttäjän aikataulu"
       },
+      "vat_multiplier": {
+        "name": "ALV-kerroin"
+      },
+      "grid_transfer_fee": {
+        "name": "Verkkosiirtomaksu"
+      },
+      "feed_in_sales_commission": {
+        "name": "Syöttömyynnin provisio"
+      },
       "solar_regime": {
         "name": "Solar Regime"
       },

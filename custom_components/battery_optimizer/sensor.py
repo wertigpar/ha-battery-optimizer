@@ -19,6 +19,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_SALES_COMMISSION,
+    CONF_TRANSFER_FEE_BUY,
+    CONF_VAT_MULTIPLIER,
+    DEFAULT_SALES_COMMISSION,
+    DEFAULT_TRANSFER_FEE_BUY,
+    DEFAULT_VAT_MULTIPLIER,
     DOMAIN,
     SLOTS_PER_DAY,
     SLOT_DURATION_HOURS,
@@ -67,6 +73,9 @@ async def async_setup_entry(
         PlanAccuracySensor(coordinator, entry),
         SolarRegimeSensor(coordinator, entry),
         SolarBalanceSensor(coordinator, entry),
+        VatMultiplierSensor(coordinator, entry),
+        GridTransferFeeSensor(coordinator, entry),
+        FeedInSalesCommissionSensor(coordinator, entry),
     ], config_subentry_id=coordinator._device_subentry_id())
 
 
@@ -792,4 +801,69 @@ class SolarBalanceSensor(_BaseOptimizerSensor):
             self.coordinator._accuracy_history,
             self.coordinator.auto_base_load_value,
             band,
+        )
+
+
+class VatMultiplierSensor(_BaseOptimizerSensor):
+    """Diagnostic: configured VAT multiplier applied to import energy cost."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 4
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "vat_multiplier")
+
+    @property
+    def native_value(self) -> float:
+        return float(
+            self.coordinator.config_entry.options.get(
+                CONF_VAT_MULTIPLIER, DEFAULT_VAT_MULTIPLIER
+            )
+        )
+
+
+class GridTransferFeeSensor(_BaseOptimizerSensor):
+    """Diagnostic: configured grid transfer fee (€/kWh) on imported energy."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 4
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "grid_transfer_fee")
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return f"{self._currency}/kWh"
+
+    @property
+    def native_value(self) -> float:
+        return float(
+            self.coordinator.config_entry.options.get(
+                CONF_TRANSFER_FEE_BUY, DEFAULT_TRANSFER_FEE_BUY
+            )
+        )
+
+
+class FeedInSalesCommissionSensor(_BaseOptimizerSensor):
+    """Diagnostic: configured retailer sales commission (€/kWh) on feed-in."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 4
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "feed_in_sales_commission")
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return f"{self._currency}/kWh"
+
+    @property
+    def native_value(self) -> float:
+        return float(
+            self.coordinator.config_entry.options.get(
+                CONF_SALES_COMMISSION, DEFAULT_SALES_COMMISSION
+            )
         )

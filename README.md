@@ -429,6 +429,23 @@ negative). The attribute sum matches the state value exactly. Example —
 
 ![Cost sensor attributes — subcosts in sensor attributes](images/cost_attributes.png)
 
+**Showing these attributes on a dashboard.** The subcosts live in sensor
+attributes, so they are not separate entities and don't appear as their own
+cards by default. Two clean ways to surface them:
+
+- **Template sensor helper** (Settings → Helpers → Template → Template a
+  sensor) — turns an attribute into a real entity you can place on any card.
+  Example state template:
+  `{{ state_attr('sensor.battery_optimizer_optimizer_plan_cost', 'wear_cost') }}`.
+- **Markdown card** — render the attributes as inline text. Paste this as the
+  card content:
+
+    Rest of the day details
+    - Wear: {{state_attr('sensor.battery_optimizer_optimizer_plan_cost', 'wear_cost')}} €
+    - Tax:  {{state_attr('sensor.battery_optimizer_optimizer_plan_cost', 'grid_tax')}} €
+
+  ![Markdown card showing plan-cost attributes on a dashboard](images/markdown-card-attributes.png)
+
 ### Idle Power Drain
 
 The battery unit draws constant power (default 0.1 kW = 100 W) regardless of mode.
@@ -1458,19 +1475,3 @@ battery_optimizer/
 - **Issues & feature requests:** [GitHub Issues](https://github.com/wertigpar/ha-battery-optimizer/issues)
 - **Repository:** [github.com/wertigpar/ha-battery-optimizer](https://github.com/wertigpar/ha-battery-optimizer)
 
-## Development & Deployment
-
-HA runs in Docker (HAOS). Code lives in the repo but HA loads from inside the container's `/config/custom_components/battery_optimizer/`. After editing any file in the repo, deploy:
-
-```
-# 1. Copy changed files to container via Samba
-Copy-Item ".\custom_components\battery_optimizer\<file>.py" "\\homeassistant.local\config\custom_components\battery_optimizer\<file>.py" -Force
-
-# 2. Clear Python cache in container
-Remove-Item "\\homeassistant.local\config\custom_components\battery_optimizer\__pycache__" -Recurse -Force
-
-# 3. Full restart required (reload_core does NOT pick up Python code changes)
-#    Settings → System → Restart, or call ha_restart(confirm=True)
-```
-
-**Important:** `ha_reload_core(entry_id=...)` only reloads config, not Python modules. Custom component code changes always require a full HA restart.

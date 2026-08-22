@@ -140,6 +140,15 @@
       "user_schedule_chart": {
         "name": "Brugertidsplan"
       },
+      "vat_multiplier": {
+        "name": "Momsfaktor"
+      },
+      "grid_transfer_fee": {
+        "name": "Nettoverførselsgebyr"
+      },
+      "feed_in_sales_commission": {
+        "name": "Indføringsprovision"
+      },
       "solar_regime": {
         "name": "Solar Regime"
       },

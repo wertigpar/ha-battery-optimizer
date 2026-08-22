@@ -105,7 +105,10 @@
       "plan_accuracy": { "name": "Plan Accuracy" },
       "solar_regime": { "name": "Solar Regime" },
       "solar_balance": { "name": "Solar Balance" },
-      "user_schedule_chart": { "name": "User Schedule" }
+      "user_schedule_chart": { "name": "User Schedule" },
+      "vat_multiplier": { "name": "VAT Multiplier" },
+      "grid_transfer_fee": { "name": "Grid Transfer Fee" },
+      "feed_in_sales_commission": { "name": "Feed-in Sales Commission" }
     },
     "switch": {
       "pv_strategy": { "name": "PV Sell Strategy" },

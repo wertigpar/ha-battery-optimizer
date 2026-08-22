@@ -140,6 +140,15 @@
       "user_schedule_chart": {
         "name": "Brukertidsplan"
       },
+      "vat_multiplier": {
+        "name": "MVA-multiplikator"
+      },
+      "grid_transfer_fee": {
+        "name": "Nettleie"
+      },
+      "feed_in_sales_commission": {
+        "name": "Innmatningsprovisjon"
+      },
       "solar_regime": {
         "name": "Solar Regime"
       },
