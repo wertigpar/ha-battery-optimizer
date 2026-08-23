@@ -19,9 +19,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_BATTERY_WEAR_COST,
     CONF_SALES_COMMISSION,
     CONF_TRANSFER_FEE_BUY,
     CONF_VAT_MULTIPLIER,
+    DEFAULT_BATTERY_WEAR_COST,
     DEFAULT_SALES_COMMISSION,
     DEFAULT_TRANSFER_FEE_BUY,
     DEFAULT_VAT_MULTIPLIER,
@@ -76,6 +78,7 @@ async def async_setup_entry(
         VatMultiplierSensor(coordinator, entry),
         GridTransferFeeSensor(coordinator, entry),
         FeedInSalesCommissionSensor(coordinator, entry),
+        BatteryWearCostSensor(coordinator, entry),
     ], config_subentry_id=coordinator._device_subentry_id())
 
 
@@ -485,6 +488,10 @@ class UserScheduleChartSensor(_BaseOptimizerSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         if self._result is None:
             return {}
+        # No active user rule (state == "no_schedule") -> expose an empty
+        # schedule so this attribute cannot be mistaken for user-rule activity.
+        if self.coordinator.last_sources is None:
+            return {"schedule": []}
         result = self._result
         sources = self.coordinator.last_sources or ["optimizer"] * len(result.slots)
         winners = self.coordinator.last_user_winners or []
@@ -867,5 +874,28 @@ class FeedInSalesCommissionSensor(_BaseOptimizerSensor):
         return float(
             self.coordinator.config_entry.options.get(
                 CONF_SALES_COMMISSION, DEFAULT_SALES_COMMISSION
+            )
+        )
+
+
+class BatteryWearCostSensor(_BaseOptimizerSensor):
+    """Diagnostic: configured battery wear cost (€/kWh cycled) used by the optimizer."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 4
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "battery_wear_cost")
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return f"{self._currency}/kWh"
+
+    @property
+    def native_value(self) -> float:
+        return float(
+            self.coordinator.config_entry.options.get(
+                CONF_BATTERY_WEAR_COST, DEFAULT_BATTERY_WEAR_COST
             )
         )

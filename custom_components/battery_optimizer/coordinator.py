@@ -1025,12 +1025,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ext_now is not None,
         )
         if solar_source == "skip":
-            _LOGGER.warning(
-                "External solar sensor (%s) unavailable — skipping accuracy "
-                "record to keep auto-tune training data single-sourced",
+            _LOGGER.debug(
+                "External solar sensor (%s) unavailable — omitting solar "
+                "accuracy portion; discharge/charge still recorded",
                 self.config.get(CONF_SOLAR_ACTUAL_SENSOR, ""),
             )
-            return None
+            # Keep discharge/charge accuracy even when the external solar counter
+            # is unreadable: only the solar actuals are omitted below (emaldo_pairs
+            # / external block require their respective source). This keeps the
+            # plan-accuracy sensor populated through solar-sensor outages instead
+            # of dropping to unknown (issue #10).
 
         accuracy: dict = {
             "elapsed_slots": elapsed,

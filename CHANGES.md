@@ -1,5 +1,40 @@
 # Changes
 
+## v0.3.5
+
+### Added
+
+- **Diagnostic sensor for battery wear cost** — new `diagnostic` sensor
+  `Battery Wear Cost` (`sensor.battery_optimizer_battery_wear_cost`) exposes
+  the configured `battery_wear_cost` (€/kWh cycled, default 0.03) that the
+  optimizer charges against every battery cycle when comparing buy vs
+  discharge profitability. Reads live from config-entry options, so it tracks
+  option changes. Mirrors the existing VAT / transfer-fee / commission
+  diagnostic sensors. Files: `sensor.py`, `strings.json`, `translations/en.json`.
+
+### Fixed
+
+- **`user_schedule` sensor no longer mirrors the optimizer plan when state is
+  `no_schedule`** — `UserScheduleChartSensor.extra_state_attributes` guarded only
+  on `last_result is None`; when no user rule was active
+  (`coordinator.last_sources is None`, the same condition that drives the
+  `no_schedule` state) it still emitted the full 96-slot optimizer plan as the
+  `schedule` attribute, making the sensor look like it had active user-rule
+  activity. It now returns an empty `schedule` list in that case. Reported in
+  issue #11. File: `sensor.py`.
+
+- **Plan-accuracy sensor no longer drops to `unknown` when the external solar
+  sensor is momentarily unavailable** — when `CONF_SOLAR_ACTUAL_SENSOR` is
+  configured but the external counter (`solar_ext`) is unreadable,
+  `resolve_solar_source` returns `"skip"`. The old code then `return None` for
+  the *entire* accuracy record, blanking
+  `sensor.battery_optimizer_*_plan_accuracy` (the reported permanent `unknown`).
+  The accuracy record is now still written with discharge/charge accuracy; only
+  the solar portion is omitted (the solar actuals require their source), keeping
+  the auto-tune training data single-sourced while the sensor stays populated
+  through solar-sensor outages. Regression test: `tests/test_accuracy_skip.py`.
+  Reported in issue #10. File: `coordinator.py`.
+
 ## v0.3.4
 
 ### Added
