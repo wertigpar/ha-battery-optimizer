@@ -14,14 +14,16 @@
 
 ### Fixed
 
-- **`user_schedule` sensor no longer mirrors the optimizer plan when state is
-  `no_schedule`** — `UserScheduleChartSensor.extra_state_attributes` guarded only
-  on `last_result is None`; when no user rule was active
-  (`coordinator.last_sources is None`, the same condition that drives the
-  `no_schedule` state) it still emitted the full 96-slot optimizer plan as the
-  `schedule` attribute, making the sensor look like it had active user-rule
-  activity. It now returns an empty `schedule` list in that case. Reported in
-  issue #11. File: `sensor.py`.
+- **`user_schedule` chart now renders the baseline timeline when no custom
+  rule is set** — when only the default (optimizer) rule exists,
+  `coordinator.last_sources is None` and the prior fix returned `schedule: []`,
+  which left dashboards showing a blank / "loading…" placeholder. The sensor
+  now emits the full 96-slot (today) + 96-slot (tomorrow) schedule with every
+  slot sourced `"optimizer"`, so the chart always renders the baseline timeline
+  (empty of *user* overrides) instead of a loading placeholder. The state still
+  reads `no_schedule` and no slot ever carries `source="user"`, so it cannot be
+  mistaken for active user-rule activity. Regression test:
+  `tests/test_user_schedule_chart.py`. Refinement of issue #11. File: `sensor.py`.
 
 - **Plan-accuracy sensor no longer drops to `unknown` when the external solar
   sensor is momentarily unavailable** — when `CONF_SOLAR_ACTUAL_SENSOR` is

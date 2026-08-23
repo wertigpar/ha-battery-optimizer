@@ -488,10 +488,12 @@ class UserScheduleChartSensor(_BaseOptimizerSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         if self._result is None:
             return {}
-        # No active user rule (state == "no_schedule") -> expose an empty
-        # schedule so this attribute cannot be mistaken for user-rule activity.
-        if self.coordinator.last_sources is None:
-            return {"schedule": []}
+        # No active custom user rule (state == "no_schedule"): emit the full
+        # schedule with every slot sourced as "optimizer" so dashboards render
+        # the baseline timeline (empty of user overrides) instead of a blank /
+        # loading placeholder. This is the intended "no custom timings" view:
+        # it surfaces the default/optimizer schedule, not fabricated user
+        # activity (no slot carries source="user").
         result = self._result
         sources = self.coordinator.last_sources or ["optimizer"] * len(result.slots)
         winners = self.coordinator.last_user_winners or []
