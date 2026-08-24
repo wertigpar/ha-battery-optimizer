@@ -173,6 +173,8 @@ When the optimizer decides a slot should be "idle" (no charge/discharge), the st
 
 > **Background:** The Emaldo battery has an internal AI that makes its own charge/discharge decisions. When the optimizer sends `SLOT_NO_OVERRIDE` (0x80), the internal AI is free to act — which can lead to unwanted overnight grid charging that fills the battery before solar production arrives. The `full_control` strategy prevents this by explicitly forcing the battery idle for slots the optimizer doesn't need.
 
+> **Note — dashboard chart semantics under Full control:** The `sensor.battery_optimizer_schedule_chart` entity renders the optimizer's *current* plan, which starts at the slot the plan was last computed. Slots that have already elapsed carry `action: "none"` and are shown as `value: null` / `past: true`. This is expected: nothing is pushed retroactively for past slots, and it does **not** mean the internal AI took control of them. At the time each slot was in the active rolling window, Full control did push `SLOT_IDLE` (0x00) for every idle slot. To confirm enforcement on a live install, either check the log line `Pushing rolling 96-slot schedule to Emaldo: N overrides` (under Full control, `N` covers essentially all remaining slots), or inspect a **future** idle slot in the chart — it shows `action: "idle"`, `value: 0`.
+
 ### User Schedule Layer
 
 Users can define persistent schedule rules that override the optimizer
