@@ -21,6 +21,10 @@
 !/custom_components/
 !/custom_components/**
 
+# ── Docs belong ONLY in README.md / OPTIMIZER_DESIGN.md ─────────────────
+# The working docs/ folder (e.g. superpowers specs) must never be published.
+docs/
+
 # ── Junk guards inside allowed folders ─────────────────────────────────
 __pycache__/
 *.py[cod]
