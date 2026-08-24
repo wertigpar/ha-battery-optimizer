@@ -17,8 +17,10 @@ from .const import (
     DEFAULT_ENABLE_EMALDO_CONTROL,
     DEFAULT_ENABLE_PV_STRATEGY,
     DOMAIN,
+    SUBENTRY_TYPE_RULE,
 )
 from .coordinator import BatteryOptimizerCoordinator
+from .rules import rule_from_data, default_rule_title
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,10 +32,31 @@ async def async_setup_entry(
 ) -> None:
     """Set up Battery Optimizer switch entities from a config entry."""
     coordinator: BatteryOptimizerCoordinator = hass.data[DOMAIN][entry.entry_id]
+
+    def _rule_switches() -> list[RuleEnabledSwitch]:
+        out = []
+        for sub in entry.subentries.values():
+            if sub.subentry_type == SUBENTRY_TYPE_RULE:
+                out.append(RuleEnabledSwitch(coordinator, entry, sub))
+        return out
+
     async_add_entities([
         PvStrategySwitch(coordinator, entry),
         EmaldoControlEnableSwitch(coordinator, entry),
+        *_rule_switches(),
     ], config_subentry_id=coordinator._device_subentry_id())
+
+    def _on_add_subentry(subentry):
+        if subentry.subentry_type == SUBENTRY_TYPE_RULE:
+            async_add_entities([RuleEnabledSwitch(coordinator, entry, subentry)],
+                               config_subentry_id=coordinator._device_subentry_id())
+
+    def _on_remove_subentry(subentry):
+        # Entity is auto-removed by HA when its bound subentry disappears.
+        pass
+
+    entry.async_on_unload(entry.async_on_add_subentry(_on_add_subentry))
+    entry.async_on_unload(entry.async_on_remove_subentry(_on_remove_subentry))
 
 
 class PvStrategySwitch(
@@ -172,3 +195,47 @@ class EmaldoControlEnableSwitch(
         self._attr_is_on = False
         self.async_write_ha_state()
         await self.coordinator.set_emaldo_control_enabled(False, rerun=True)
+
+
+class RuleEnabledSwitch(SwitchEntity):
+    """Per-rule enable/pause toggle for User Schedule rules (issue #13)."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "rule_enabled"
+
+    def __init__(self, coordinator: BatteryOptimizerCoordinator, entry: ConfigEntry, subentry) -> None:
+        self.coordinator = coordinator
+        self._entry = entry
+        self._subentry = subentry
+        self._subentry_id = subentry.subentry_id
+        self._attr_unique_id = f"{entry.entry_id}_{self._subentry_id}_enabled"
+        self._attr_config_subentry_id = self._subentry_id
+
+    @property
+    def _live_subentry(self):
+        # Read live: async_update_subentry replaces the subentry object, so a
+        # cached reference would go stale and show the wrong toggle state.
+        return self.coordinator._entry.subentries.get(self._subentry_id)
+
+    @property
+    def is_on(self) -> bool:
+        sub = self._live_subentry
+        if sub is None:
+            return False
+        return bool(dict(sub.data).get("enabled", True))
+
+    @property
+    def name(self) -> str:
+        sub = self._live_subentry
+        if sub is None:
+            return "Rule"
+        data = dict(sub.data)
+        return data.get("label") or default_rule_title(rule_from_data(data))
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.set_rule_enabled(self._subentry_id, True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.set_rule_enabled(self._subentry_id, False)
+        self.async_write_ha_state()

@@ -162,6 +162,9 @@
       },
       "emaldo_control_enable": {
         "name": "Emaldo-ohjaus"
+      },
+      "rule_enabled": {
+        "name": "Aikataulusääntö käytössä"
       }
     }
   },

@@ -1511,11 +1511,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if sub.subentry_type != SUBENTRY_TYPE_RULE:
                     continue
                 try:
-                    rules.append(rule_from_data(dict(sub.data)))
+                    rule = rule_from_data(dict(sub.data))
                 except Exception:
                     _LOGGER.warning(
                         "Skipping invalid schedule rule subentry %s", sub.subentry_id
                     )
+                    continue
+                if not rule.enabled:
+                    continue
+                rules.append(rule)
         except Exception:
             _LOGGER.warning("Could not read schedule rule subentries")
         if not any(r.level == LEVEL_DEFAULT for r in rules):
@@ -2341,6 +2345,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info("Emaldo control %s", "enabled" if enabled else "disabled")
         if rerun and changed:
             await self.run_optimizer(reason="emaldo_control_changed", force=True)
+
+    async def set_rule_enabled(self, subentry_id: str, enabled: bool) -> None:
+        """Enable/disable a single User Schedule rule (Pause/Resume).
+
+        Persists the flag onto the rule subentry (merge, not overwrite) and
+        re-runs the optimizer so the schedule is recomputed immediately.
+        """
+        sub = self._entry.subentries.get(subentry_id)
+        if sub is None:
+            return
+        data = {**dict(sub.data), "enabled": bool(enabled)}
+        await self.hass.config_entries.async_update_subentry(self._entry, sub, data=data)
+        await self.run_optimizer(reason="rule_enabled_changed", force=True)
 
     async def _set_pv_switch(self, turn_on: bool) -> None:
         """Turn the Emaldo third-party PV switch on or off.

@@ -349,6 +349,7 @@ def _rule_schema(
     # itself was picked in the first menu step, so it is not a form field.
     fields: dict = {
         vol.Optional("label", default=d.get("label", "")): str,
+        vol.Optional("enabled", default=d.get("enabled", True)): bool,
     }
     if level == LEVEL_WEEKDAY:
         fields[vol.Optional("days", default=days_default)] = SelectSelector(
@@ -366,13 +367,17 @@ def _rule_schema(
     fields[vol.Required("start_time", default=d.get("start_time", "07:00"))] = str
     fields[vol.Required("end_time", default=d.get("end_time", "17:00"))] = str
     fields.update(soc_target_field)
-    fields[
-        vol.Required("pv_sell", default=d.get("pv_sell", "inherit"))
-    ] = SelectSelector(
-        SelectSelectorConfig(
-            options=list(PV_BEHAVIORS), translation_key="pv_sell"
+    if action in ("charge", "discharge"):
+        # PV-beteende only affects how surplus solar is handled during a
+        # charge/discharge window. For idle/original/optimizer it is inert,
+        # so don't show it (issue #13: avoid redundant re-selection).
+        fields[
+            vol.Required("pv_sell", default=d.get("pv_sell", "inherit"))
+        ] = SelectSelector(
+            SelectSelectorConfig(
+                options=list(PV_BEHAVIORS), translation_key="pv_sell"
+            )
         )
-    )
     return vol.Schema(fields)
 
 

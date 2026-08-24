@@ -222,6 +222,19 @@ schedule charts). See [Dashboard chart — User Schedule](#dashboard-chart--user
 for a ready-made card, and add the user as an extra series to the
 Schedule Source chart (`source == 'user'`).
 
+### Pause / Resume a rule
+
+Each schedule rule gets its own enable switch (`switch.<your rule label>_rule_enabled`,
+translation key `rule_enabled`). Flip it off to **pause** the rule — the optimizer stops
+applying it, but your settings stay intact, so you can resume later without re-entering them.
+Disabled rules are skipped when the optimizer builds the plan, exactly like a rule you deleted,
+but without losing the configuration. The toggle is also offered as an `enabled` checkbox inside
+the rule editor.
+
+> **Note:** the *PV Sell Strategy* (`pv_sell`) selector only appears in the rule editor when the
+> rule action is **Charge** or **Discharge**. For *Force Idle*, *Idle Slot Strategy*, or
+> *Optimizer (Control)* the field is hidden, because those actions never sell surplus solar.
+
 ### SoC Guard
 
 The Emaldo battery uses a single global "Battery Range" setting (high/low markers) that applies to **all** discharge slots simultaneously. This means per-slot discharge thresholds (e.g. "discharge to 75% at 17:00, then to 60% at 19:00") cannot be achieved through the slot values alone — the firmware treats `high_marker` as a global discharge floor.

@@ -1,5 +1,25 @@
 # Changes
 
+## v0.3.6
+
+### Added
+
+- **Per-rule Pause/Resume toggle (issue #13, Ask 2)** — each User Schedule rule now
+  exposes a `switch.<rule>_rule_enabled` entity that pauses or resumes the rule without
+  deleting it. Toggling it persists the `enabled` flag on the rule subentry and immediately
+  re-runs the optimizer so the schedule recomputes. Disabled rules are skipped in
+  `coordinator._read_user_rules`, so they no longer affect the optimizer plan. The same
+  `enabled` flag is also editable as a checkbox inside the rule editor. Files: `rules.py`,
+  `coordinator.py`, `switch.py`, `config_flow.py`, `translations/*`.
+
+### Changed
+
+- **PV Sell Strategy field hidden unless relevant (issue #13, Ask 1)** — in the rule editor
+  the `PV Sell Strategy` (`pv_sell`) selector now only appears when the rule action is
+  **Charge** or **Discharge**. For Force Idle / Idle Slot Strategy / Optimizer (Control) it
+  is correctly hidden, because those actions never sell. No data migration needed —
+  `rule_from_data` keeps `pv_sell` defaulting to `inherit`. File: `config_flow.py`.
+
 ## v0.3.5
 
 ### Added

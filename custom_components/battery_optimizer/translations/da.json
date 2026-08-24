@@ -162,6 +162,9 @@
       },
       "emaldo_control_enable": {
         "name": "Emaldo-styring"
+      },
+      "rule_enabled": {
+        "name": "Tidsplanregel aktiveret"
       }
     }
   },

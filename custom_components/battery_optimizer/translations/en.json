@@ -113,7 +113,8 @@
     },
     "switch": {
       "pv_strategy": { "name": "PV Sell Strategy" },
-      "emaldo_control_enable": { "name": "Emaldo Control" }
+      "emaldo_control_enable": { "name": "Emaldo Control" },
+      "rule_enabled": { "name": "Schedule Rule Enabled" }
     }
   },
   "config_subentries": {

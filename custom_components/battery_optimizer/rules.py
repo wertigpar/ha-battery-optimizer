@@ -55,6 +55,7 @@ class UserRule:
     soc_target: int | None = None
     pv_sell: str = PV_INHERIT
     label: str = ""
+    enabled: bool = True
 
 
 @dataclass
@@ -206,6 +207,7 @@ def rule_from_data(data: dict) -> UserRule:
         soc_target=data.get("soc_target"),
         pv_sell=data.get("pv_sell", PV_INHERIT),
         label=data.get("label", ""),
+        enabled=bool(data.get("enabled", True)),
     )
 
 
