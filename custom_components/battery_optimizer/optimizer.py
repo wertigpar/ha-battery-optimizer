@@ -2044,7 +2044,7 @@ def optimize(
     gross_profit = baseline_cost - actual_cost  # positive = savings vs no battery
     emaldo_wear_total = cfg.wear_cost_per_kwh * e_cycled
     emaldo_grid_cost = emaldo_cost  # pre-wear grid cost (net of export revenue)
-    emaldo_cost -= emaldo_wear_total  # unchanged net semantics
+    emaldo_cost += emaldo_wear_total  # wear is a real cost, netted like the optimizer sensor
 
     # Baseline gross import cost and net export revenue (F1 breakdown).
     baseline_import_cost = (
