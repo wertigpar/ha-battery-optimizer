@@ -318,12 +318,14 @@ def _build_schema(
                 default=d.get(
                     CONF_GRID_IMPORT_SENSOR, DEFAULT_GRID_IMPORT_SENSOR
                 ),
+                description="Leave empty to auto-detect the grid import sensor from the linked Emaldo unit.",
             ): str,
             vol.Optional(
                 CONF_GRID_EXPORT_SENSOR,
                 default=d.get(
                     CONF_GRID_EXPORT_SENSOR, DEFAULT_GRID_EXPORT_SENSOR
                 ),
+                description="Leave empty to auto-detect the grid export sensor from the linked Emaldo unit.",
             ): str,
         }
     )

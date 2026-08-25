@@ -32,8 +32,8 @@
           "solar_sell_min_forecast_kwh": "Min. Solcast-prognose for å aktivere PV-salgsstrategien (kWh, standard 10 — hopp over på skyete dager)",
           "solar_forecast_mode": "Solprognosemodus for ladeplanlegging (p10 = pessimistisk/væravhengig, p50 = median/optimistisk)",
           "solar_forecast_scale": "Skalering av solprognosen (0 = automatisk justering fra nøyaktighetshistorikk; 0,8 skalerer prognosen ned 20 %)",
-          "grid_import_sensor": "Nettoimport-energiteller (kumulativ, Wh eller kWh, f.eks. sensor.power_store_grid_import_today). Tom = Emaldos interne estimat",
-          "grid_export_sensor": "Nettoexport-energiteller (kumulativ, Wh eller kWh, f.eks. sensor.power_store_grid_export_today). Tom = Emaldos interne estimat"
+          "grid_import_sensor": "Nettoimport-energiteller (kumulativ, Wh eller kWh). La stå tom for å auto-oppdages fra den tilknyttede Emaldo-enheten; eller oppgi en livstidsteller (f.eks. en EM24 `_total`-teller) for en sky-fri installasjon.",
+          "grid_export_sensor": "Nettoexport-energiteller (kumulativ, Wh eller kWh). La stå tom for å auto-oppdages fra den tilknyttede Emaldo-enheten; eller oppgi en livstidsteller (f.eks. en EM24 `_total`-teller) for en sky-fri installasjon."
         }
       }
     },
@@ -80,8 +80,8 @@
           "solar_forecast_mode": "Solprognosemodus (p10 = konservativ, p50 = optimistisk)",
           "solar_forecast_scale": "Skalering av solprognosen (0 = automatisk eller manuell 0,3–1,2)",
           "solar_actual_sensor": "Måler for faktisk solenergi (akkumulert, Wh eller kWh). Tom = Emaldos interne estimat",
-          "grid_import_sensor": "Nettoimport-energiteller (kumulativ, Wh eller kWh). Tom = Emaldos interne estimat",
-          "grid_export_sensor": "Nettoexport-energiteller (kumulativ, Wh eller kWh). Tom = Emaldos interne estimat"
+          "grid_import_sensor": "Nettoimport-energiteller (kumulativ, Wh eller kWh). Tom = auto-oppdages fra tilknyttet Emaldo-enhet.",
+          "grid_export_sensor": "Nettoexport-energiteller (kumulativ, Wh eller kWh). Tom = auto-oppdages fra tilknyttet Emaldo-enhet."
         }
       }
     }

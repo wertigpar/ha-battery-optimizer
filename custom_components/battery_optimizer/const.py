@@ -98,8 +98,8 @@ DEFAULT_SOLAR_ACTUAL_SENSOR = ""      # empty = Emaldo-internal estimate
 # Realized cost history — metered import/export energy counters. Defaults to
 # the Emaldo cloud daily counters; override with lifetime grid meters
 # (e.g. an EM24 energy meter) for cloud-free, reset-safe accounting.
-DEFAULT_GRID_IMPORT_SENSOR = "sensor.power_store_grid_import_today"
-DEFAULT_GRID_EXPORT_SENSOR = "sensor.power_store_grid_export_today"
+DEFAULT_GRID_IMPORT_SENSOR = ""
+DEFAULT_GRID_EXPORT_SENSOR = ""
 SOLAR_SCALE_MIN = 0.3                # effective scale floor (also manual clamp floor)
 SOLAR_SCALE_MAX = 1.2                # effective scale ceiling
 SOLAR_SCALE_EWMA_ALPHA = 0.1         # EWMA smoothing factor

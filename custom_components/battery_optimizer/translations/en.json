@@ -32,8 +32,8 @@
           "solar_sell_min_forecast_kwh": "Min Solcast forecast to activate PV sell strategy (kWh, default 10 — skip on cloudy days)",
           "solar_forecast_mode": "Solar forecast mode for charge planning (p10 = pessimistic/weather-aware, p50 = median/optimistic)",
           "solar_forecast_scale": "Solar forecast scale (0 = auto-tune from accuracy history; 0.8 scales the forecast down 20%)",
-          "grid_import_sensor": "Grid import energy counter (cumulative, Wh or kWh, e.g. sensor.power_store_grid_import_today). Empty = Emaldo-internal estimate",
-          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh, e.g. sensor.power_store_grid_export_today). Empty = Emaldo-internal estimate"
+          "grid_import_sensor": "Grid import energy counter (cumulative, Wh or kWh). Leave empty to auto-detect the linked Emaldo unit's grid import sensor; or enter a lifetime meter (e.g. an EM24 `_total` counter) for a cloud-free install.",
+          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh). Leave empty to auto-detect the linked Emaldo unit's grid export sensor; or enter a lifetime meter (e.g. an EM24 `_total` counter) for a cloud-free install."
         }
       }
     },
@@ -80,8 +80,8 @@
           "solar_forecast_mode": "Solar forecast mode (p10 = conservative, p50 = optimistic)",
           "solar_forecast_scale": "Solar forecast scale (0 = auto-tune, or manual 0.3–1.2)",
           "solar_actual_sensor": "Actual solar energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate",
-          "grid_import_sensor": "Grid import energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate",
-          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate"
+          "grid_import_sensor": "Grid import energy counter (cumulative, Wh or kWh). Leave empty to auto-detect from the linked Emaldo unit.",
+          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh). Leave empty to auto-detect from the linked Emaldo unit."
         }
       }
     }

@@ -234,6 +234,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._grid_export_sensor: str = self.config.get(
             CONF_GRID_EXPORT_SENSOR, DEFAULT_GRID_EXPORT_SENSOR
         )
+        # Effective (override-or-auto) grid sensors, resolved lazily + cached.
+        self._grid_import_effective: str | None = None
+        self._grid_export_effective: str | None = None
         self._cost_import_snap: float | None = None
         self._cost_export_snap: float | None = None
         self._cost_buy_prices: list[float] | None = None
@@ -869,6 +872,39 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     return entity_id
         return None
 
+    def _effective_grid_import_sensor(self) -> str | None:
+        """Grid import sensor to use: explicit config override, else auto-discovered.
+
+        Empty config => auto-discover the linked Emaldo unit's
+        ``grid_import_today`` sensor (model-agnostic via the entity registry).
+        Cached once resolved; a not-yet-available auto sensor is retried.
+        """
+        if self._grid_import_effective is not None:
+            return self._grid_import_effective
+        if self._grid_import_sensor:
+            self._grid_import_effective = self._grid_import_sensor
+            return self._grid_import_effective
+        resolved = self._resolve_emaldo_entity("grid_import_today")
+        if resolved is not None:
+            self._grid_import_effective = resolved
+        return resolved
+
+    def _effective_grid_export_sensor(self) -> str | None:
+        """Grid export sensor to use: explicit config override, else auto-discovered.
+
+        Empty config => auto-discover the linked Emaldo unit's
+        ``grid_export_today`` sensor (model-agnostic via the entity registry).
+        """
+        if self._grid_export_effective is not None:
+            return self._grid_export_effective
+        if self._grid_export_sensor:
+            self._grid_export_effective = self._grid_export_sensor
+            return self._grid_export_effective
+        resolved = self._resolve_emaldo_entity("grid_export_today")
+        if resolved is not None:
+            self._grid_export_effective = resolved
+        return resolved
+
     def _get_battery_soc(self) -> float | None:
         """Read current battery SoC, auto-discovered from the selected Emaldo entry."""
         sensor_id = self._resolve_emaldo_entity("battery_soc")
@@ -1352,7 +1388,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         counter_delta_kwh), and prices the delta with the cached buy/sell
         vectors from the last optimizer run.
         """
-        if not self._grid_import_sensor or not self._grid_export_sensor:
+        import_sensor = self._effective_grid_import_sensor()
+        export_sensor = self._effective_grid_export_sensor()
+        if not import_sensor or not export_sensor:
             return
         # Reset the day boundary + re-seed snapshots on local midnight.
         today = now.date()
@@ -1366,8 +1404,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._load_cost_history
             )
 
-        import_kwh = self._read_counter_kwh(self._grid_import_sensor)
-        export_kwh = self._read_counter_kwh(self._grid_export_sensor)
+        import_kwh = self._read_counter_kwh(import_sensor)
+        export_kwh = self._read_counter_kwh(export_sensor)
         if import_kwh is None or export_kwh is None:
             return
 
@@ -2303,19 +2341,29 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._unsub_listeners.append(unsub)
 
-        # 7) Realized cost capture — every 15 min aligned to :00/:15/:30/:45
-        if self._grid_import_sensor and self._grid_export_sensor:
-            unsub = async_track_time_change(
-                self.hass,
-                self._capture_cost_slot,
-                minute="/15",
-                second=0,
-            )
-            self._unsub_listeners.append(unsub)
+        # 7) Realized cost capture — every 15 min aligned to :00/:15/:30/:45.
+        # Registered unconditionally; _capture_cost_slot skips until a grid
+        # sensor (explicit override or auto-discovered from the linked Emaldo
+        # unit) is available, then retries auto-discovery until it resolves.
+        unsub = async_track_time_change(
+            self.hass,
+            self._capture_cost_slot,
+            minute="/15",
+            second=0,
+        )
+        self._unsub_listeners.append(unsub)
+        import_sensor = self._effective_grid_import_sensor()
+        export_sensor = self._effective_grid_export_sensor()
+        if import_sensor and export_sensor:
             _LOGGER.info(
                 "Realized cost capture registered on %s / %s",
-                self._grid_import_sensor,
-                self._grid_export_sensor,
+                import_sensor,
+                export_sensor,
+            )
+        else:
+            _LOGGER.debug(
+                "Realized cost capture registered; grid sensors pending "
+                "(set grid_import_sensor/grid_export_sensor or link an Emaldo unit)"
             )
 
     @callback

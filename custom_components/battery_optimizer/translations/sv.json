@@ -32,8 +32,8 @@
           "solar_sell_min_forecast_kwh": "Min Solcast-prognos för att aktivera PV-försäljningsstrategin (kWh, standard 10 — hoppa över molniga dagar)",
           "solar_forecast_mode": "Solprognosläge för laddningsplanering (p10 = pessimistisk/väderberoende, p50 = median/optimistisk)",
           "solar_forecast_scale": "Skalning av solprognosen (0 = automatisk injustering från noggrannhetshistorik; 0,8 skalar ned prognosen med 20 %)",
-          "grid_import_sensor": "Nätimports energiräknare (ackumulerad, Wh eller kWh, t.ex. sensor.power_store_grid_import_today). Tom = Emaldos interna uppskattning",
-          "grid_export_sensor": "Nätexports energiräknare (ackumulerad, Wh eller kWh, t.ex. sensor.power_store_grid_export_today). Tom = Emaldos interna uppskattning"
+          "grid_import_sensor": "Nätimports energiräknare (ackumulerad, Wh eller kWh). Lämna tom för att auto-upptäcka den länkade Emaldo-enhetens import-sensor; eller ange en livstidsmätare (t.ex. en EM24 `_total`-räknare) för en installation utan moln.",
+          "grid_export_sensor": "Nätexports energiräknare (ackumulerad, Wh eller kWh). Lämna tom för att auto-upptäcka den länkade Emaldo-enhetens export-sensor; eller ange en livstidsmätare (t.ex. en EM24 `_total`-räknare) för en installation utan moln."
         }
       }
     },
@@ -80,8 +80,8 @@
           "solar_forecast_mode": "Solprognosläge (p10 = konservativ, p50 = optimistisk)",
           "solar_forecast_scale": "Skalning av solprognosen (0 = automatisk eller manuell 0,3–1,2)",
           "solar_actual_sensor": "Mätare för faktisk solenergi (ackumulerad, Wh eller kWh). Tom = Emaldos interna uppskattning",
-          "grid_import_sensor": "Nätimports energiräknare (ackumulerad, Wh eller kWh). Tom = Emaldos interna uppskattning",
-          "grid_export_sensor": "Nätexports energiräknare (ackumulerad, Wh eller kWh). Tom = Emaldos interna uppskattning"
+          "grid_import_sensor": "Nätimports energiräknare (ackumulerad, Wh eller kWh). Tom = auto-upptäcks från länkad Emaldo-enhet.",
+          "grid_export_sensor": "Nätexports energiräknare (ackumulerad, Wh eller kWh). Tom = auto-upptäcks från länkad Emaldo-enhet."
         }
       }
     }

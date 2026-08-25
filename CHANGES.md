@@ -25,8 +25,9 @@
   solar accuracy sidecar), prices each delta with the cached buy/sell vectors from the
   last optimizer run, and persists a 60-day JSON sidecar
   (`battery_optimizer_cost_history.json`) so the series survives recorder pruning.
-  Defaults to the Emaldo cloud daily counters (`sensor.power_store_grid_import_today` /
-  `sensor.power_store_grid_export_today`); override with lifetime grid meters
+  Defaults to **empty = auto-detect** the linked Emaldo unit's
+  `grid_import_today` / `grid_export_today` sensors (model-agnostic via the
+  entity registry); override with explicit entity IDs or lifetime grid meters
   (e.g. an EM24 `_total` counter) for a cloud-free install. Config fields
   `grid_import_sensor` / `grid_export_sensor` added to setup + options. Files:
   `cost_history.py` (new, pure helper), `const.py`, `coordinator.py`, `sensor.py`,

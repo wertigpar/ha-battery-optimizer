@@ -32,8 +32,8 @@
           "solar_sell_min_forecast_kwh": "Min. Solcast-ennuste PV-myyntistrategian käynnistämiseen (kWh, oletus 10 — ohita pilvisinä päivinä)",
           "solar_forecast_mode": "Aurinkoennusteen tila lataussuunnittelua varten (p10 = pessimistinen/sään huomioiva, p50 = mediaani/optimistinen)",
           "solar_forecast_scale": "Aurinkoennusteen skaalaus (0 = automaattinen hienosäätö tarkkuushistoriasta; 0,8 skaalaa ennusteen 20 % pienemmäksi)",
-          "grid_import_sensor": "Sähkön tuonnin energialaskuri (kumulatiivinen, Wh tai kWh, esim. sensor.power_store_grid_import_today). Tyhjä = Emaldon sisäinen arvio",
-          "grid_export_sensor": "Sähkön viennin energialaskuri (kumulatiivinen, Wh tai kWh, esim. sensor.power_store_grid_export_today). Tyhjä = Emaldon sisäinen arvio"
+          "grid_import_sensor": "Sähkön tuonnin energialaskuri (kumulatiivinen, Wh tai kWh). Jätä tyhjäksi, jolloin linkitetyn Emaldo-laitteen tuontisensori haetaan automaattisesti; tai syötä kokoelman mittauksen laskuri (esim. EM24 `_total`) pilvettömään asennukseen.",
+          "grid_export_sensor": "Sähkön viennin energialaskuri (kumulatiivinen, Wh tai kWh). Jätä tyhjäksi, jolloin linkitetyn Emaldo-laitteen vientisensori haetaan automaattisesti; tai syötä kokoelman mittauksen laskuri (esim. EM24 `_total`) pilvettömään asennukseen."
         }
       }
     },
@@ -80,8 +80,8 @@
           "solar_forecast_mode": "Aurinkoennusteen tila (p10 = konservatiivinen, p50 = optimistinen)",
           "solar_forecast_scale": "Aurinkoennusteen skaalaus (0 = automaattinen tai manuaalinen 0,3–1,2)",
           "solar_actual_sensor": "Todellisen aurinkoenergian mittari (kumulatiivinen, Wh tai kWh). Tyhjä = Emaldon sisäinen arvio",
-          "grid_import_sensor": "Sähkön tuonnin energialaskuri (kumulatiivinen, Wh tai kWh). Tyhjä = Emaldon sisäinen arvio",
-          "grid_export_sensor": "Sähkön viennin energialaskuri (kumulatiivinen, Wh tai kWh). Tyhjä = Emaldon sisäinen arvio"
+          "grid_import_sensor": "Sähkön tuonnin energialaskuri (kumulatiivinen, Wh tai kWh). Tyhjä = haetaan automaattisesti linkitetystä Emaldo-laitteesta.",
+          "grid_export_sensor": "Sähkön viennin energialaskuri (kumulatiivinen, Wh tai kWh). Tyhjä = haetaan automaattisesti linkitetystä Emaldo-laitteesta."
         }
       }
     }
