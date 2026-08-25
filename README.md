@@ -528,8 +528,8 @@ The integration creates 20 sensor entities:
 | **Solar Regime** | diagnostic | Durable no-refill regime gate: `engaged`, `not_engaged`, or `unknown` (before the first run). Engaged = winter/snow regime active → discharge must beat the cheapest known future grid recharge (see [Solar Regime](#solar-regime)) | `ewma`, `forecast_fraction`, `low_days`, `high_days`, `last_updated`, `band_kwh`, `engage_threshold`, `disengage_threshold`, `debounce_days` |
 | **Solar Balance** | diagnostic | Average daily solar production (kWh) over the trailing 7 days from the accuracy records (`unknown` before 5 sampled days). Context for "is the home a net importer/exporter?" — display only, never gates planning | `daily_base_load_kwh`, `self_sufficiency` (<1 = net importer), `battery_days`, `usable_band_kwh`, `days_sampled`, `window_start`, `window_end`, `solar_source` |
 | **User Schedule** | diagnostic | Effective user rule overlay on the plan: slots a rule governs carry `source: user`, untouched slots carry `source: optimizer`. Full 48 h window (192 slots) so the chart aligns with the other schedule charts. | `schedule` (list of up to 192 slots with `source`, `soc_target`, `pv_sell`, `pv_source`) |
-| **Realized Cost History** | monetary | Actual billed-minus-refunded grid cost for the latest 15-min slot (€), signed (negative = refund). Derived from import/export energy counters, priced with the last optimizer run's buy/sell vectors — *real* money, not the plan. Plot this entity's history to see the daily cost wave. | `slots` (today's per-slot records as JSON for an ApexCharts card), `today_net`, `today_buy`, `today_sell`, `slot`, `buy_price`, `sell_price`, `import_kwh`, `export_kwh` |
-| **Realized Cost Today** | monetary | Signed net grid cost realized so far today (€) — import spend minus export refund. Survives recorder pruning via a 60-day JSON sidecar. | `buy_total`, `sell_total`, `import_kwh`, `export_kwh` |
+| **Realized Cost History** | none (currency, signed) | Actual billed-minus-refunded grid cost for the latest 15-min slot (€), signed (negative = refund). Derived from import/export energy counters, priced with the last optimizer run's buy/sell vectors — *real* money, not the plan. Plot this entity's history to see the daily cost wave. | `slots` (today's per-slot records as JSON for an ApexCharts card), `today_net`, `today_buy`, `today_sell`, `slot`, `buy_price`, `sell_price`, `import_kwh`, `export_kwh` |
+| **Realized Cost Today** | none (currency, signed) | Signed net grid cost realized so far today (€) — import spend minus export refund. Survives recorder pruning via a 60-day JSON sidecar. | `buy_total`, `sell_total`, `import_kwh`, `export_kwh` |
 
 ## Switches
 
@@ -912,6 +912,61 @@ series:
       in_header: false
       legend_value: false
 ```
+
+#### Realized Grid Cost
+
+Shows the **actual** (not planned) grid cost wave for the day. Two sensors back it:
+
+- `sensor.battery_optimizer_configuration_realized_cost_today` — signed net grid cost realized so far today (€); import spend minus export refund.
+- `sensor.battery_optimizer_configuration_realized_cost_history` — latest 15-minute slot's signed net cost (€), with a `slots` attribute carrying today's per-slot records as JSON.
+
+Both depend on the **Grid import sensor** / **Grid export sensor** config options (cumulative kWh counters). Values accrue per 15-minute slot — the first ~30 minutes after a restart only seeds the counter, then recording begins. The Battery dashboard ships with a `history-graph` card using these two entities.
+
+**Native `history-graph` (no HACS required):**
+
+```yaml
+type: history-graph
+title: Realized grid cost (EUR)
+hours_to_show: 24
+entities:
+  - entity: sensor.battery_optimizer_configuration_realized_cost_today
+    name: Realized cost today (net)
+  - entity: sensor.battery_optimizer_configuration_realized_cost_history
+    name: Latest 15-min slot net
+```
+
+**ApexCharts — per-slot bars from the `slots` attribute:**
+
+```yaml
+type: custom:apexcharts-card
+header:
+  title: Realized Grid Cost (per 15-min slot)
+  show: true
+graph_span: 24h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+  color: red
+apex_config:
+  chart:
+    height: 200px
+  plotOptions:
+    bar:
+      columnWidth: "100%"
+  legend:
+    show: false
+series:
+  - entity: sensor.battery_optimizer_configuration_realized_cost_history
+    type: column
+    color: "#3498db"
+    data_generator: |
+      const slots = JSON.parse(entity.attributes.slots || "[]");
+      return slots.map(s => [new Date(s.ts).getTime(), s.net]);
+```
+
+Negative bars (refunds, when feed-in exceeds purchase in a slot) plot below zero. Replace the entity IDs with your integration's actual ones if you used a custom config-entry name.
 
 ## PV Sell Strategy
 
