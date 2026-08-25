@@ -1414,8 +1414,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._cost_history = prune_history(self._cost_history, now)
         await self.hass.async_add_executor_job(self._save_cost_history)
-        # Push the new record to the cost-history sensors immediately.
-        self.async_write_ha_state()
+        # Push the new record to all coordinator-backed entities (incl. cost sensors).
+        self.async_update_listeners()
 
     @property
     def realized_cost_history(self) -> list[dict]:
