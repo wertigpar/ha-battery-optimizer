@@ -1478,6 +1478,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         soc = self._get_battery_soc()
         self._auto_base_load_value = await self._fetch_auto_base_load_kw()
         cfg = self._build_battery_config()
+        # Cache today's buy/sell prices for the 15-min cost-capture task.
+        # Must run before the force=False skip (below) and the SoC bail:
+        # otherwise the cache stays None after a restart and every captured
+        # slot is dropped at the `_cost_buy_prices is None` guard, so the
+        # realized-cost sensors never receive a state write.
+        buy_prices, sell_prices = compute_prices(prices_today, cfg)
+        self._cost_buy_prices = buy_prices
+        self._cost_sell_prices = sell_prices
         now_slot = _current_slot_index()
 
         if soc is None:
