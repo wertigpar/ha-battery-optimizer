@@ -1774,11 +1774,16 @@ def optimize(
             if action == "idle" and net_loads[s] < 0:
                 # Idle with solar surplus — absorbs solar without grid draw
                 slot_value = SLOT_IDLE
-                charge_kwh = min(-net_loads[s], cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
+                surplus_ac = (-net_loads[s]) * SLOT_DURATION_HOURS
+                absorb_ac = min(
+                    surplus_ac,
+                    cfg.max_charge_per_slot_kwh,
+                    (soc_max_kwh - soc) / cfg.charge_efficiency,
+                )
+                charge_kwh = absorb_ac * cfg.charge_efficiency
                 net_kwh = charge_kwh - idle_drain
                 soc = max(min(soc + net_kwh, soc_max_kwh), 0.0)
-                # Fix 2: excess solar exported when battery full
-                export_kwh = max(0.0, -net_loads[s] - cfg.max_charge_kw) * SLOT_DURATION_HOURS
+                export_kwh = max(0.0, surplus_ac - absorb_ac)
                 n_idle += 1
             elif action == "charge":
                 slot_value = charge_target
@@ -1811,24 +1816,31 @@ def optimize(
                     # charge from excess solar.  For SoC accounting, assume
                     # the solar covers load and the net SoC change is small
                     # (solar charge minus idle drain).
-                    surplus_kw = min(-net_loads[s], cfg.max_charge_kw)
-                    solar_kwh = surplus_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
+                    surplus_ac = (-net_loads[s]) * SLOT_DURATION_HOURS
+                    absorb_ac = min(
+                        surplus_ac,
+                        cfg.max_charge_per_slot_kwh,
+                        (soc_max_kwh - soc) / cfg.charge_efficiency,
+                    )
+                    solar_kwh = absorb_ac * cfg.charge_efficiency
                     soc = max(min(soc + solar_kwh, soc_max_kwh), 0.0)
                     load_kwh = 0.0
-                    # Fix 2: excess solar exported when battery full
-                    export_kwh = max(0.0, -net_loads[s] - cfg.max_charge_kw) * SLOT_DURATION_HOURS
-                # Battery internal draw = delivered kWh / η_d (inverter
-                # efficiency loss).  The discharge byte stops at the floor
-                # marker — commanded discharge cannot pull SoC below soc_min;
-                # only the idle drain continues past it.
-                battery_draw = min(
-                    load_kwh / cfg.discharge_efficiency,
-                    max(0.0, soc - soc_min_kwh),
+                    export_kwh = max(0.0, surplus_ac - absorb_ac)
+                # Mirror the Emaldo discharge model so the two cost sensors
+                # converge: battery AC output = draw_ac (capped by headroom
+                # and max discharge rate), the inverter efficiency loss is
+                # metered as grid import (matching the Emaldo device), and SoC
+                # drops by the delivered energy.  The discharge byte stops at
+                # the floor marker — commanded discharge cannot pull SoC below
+                # soc_min; only the idle drain continues past it.
+                draw_ac = min(
+                    load_kwh,
+                    max(0.0, (soc - soc_min_kwh) / cfg.discharge_efficiency),
+                    cfg.max_discharge_kw * SLOT_DURATION_HOURS,
                 )
-                cycled_kwh += battery_draw
-                soc = max(soc - battery_draw - idle_drain, 0.0)
-                # Grid covers load portion the battery couldn't deliver
-                actual_grid_kwh += max(0.0, load_kwh - battery_draw * cfg.discharge_efficiency)
+                cycled_kwh += draw_ac
+                soc = max(soc - draw_ac * cfg.discharge_efficiency - idle_drain, 0.0)
+                actual_grid_kwh += max(0.0, load_kwh - draw_ac * cfg.discharge_efficiency)
                 # Per-slot SoC threshold: battery discharges only while
                 # SoC is above the planned post-slot level.  This protects
                 # the schedule against unexpected load spikes — if a large
@@ -1850,11 +1862,16 @@ def optimize(
                     # Solar surplus slot — idle absorbs solar without grid draw
                     action = "idle"
                     slot_value = SLOT_IDLE
-                    charge_kwh = min(-net_loads[s], cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
+                    surplus_ac = (-net_loads[s]) * SLOT_DURATION_HOURS
+                    absorb_ac = min(
+                        surplus_ac,
+                        cfg.max_charge_per_slot_kwh,
+                        (soc_max_kwh - soc) / cfg.charge_efficiency,
+                    )
+                    charge_kwh = absorb_ac * cfg.charge_efficiency
                     net_kwh = charge_kwh - idle_drain
                     soc = max(min(soc + net_kwh, soc_max_kwh), 0.0)
-                    # Fix 2: excess solar exported when battery full
-                    export_kwh = max(0.0, -net_loads[s] - cfg.max_charge_kw) * SLOT_DURATION_HOURS
+                    export_kwh = max(0.0, surplus_ac - absorb_ac)
                     n_idle += 1
                 else:
                     # Idle — explicitly override to idle
