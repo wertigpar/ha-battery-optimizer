@@ -153,6 +153,8 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Solar forecast mode** | Which Solcast percentile to use for charge planning. `p10` (default) uses the pessimistic 10th-percentile forecast — weather-aware, causes the optimizer to add more grid charge slots on cloudy/uncertain days. `p50` uses the median, which can leave the battery undercharged when actual solar is lower than expected. | `p10` |
 | **Solar forecast scale** | Whole-day multiplier applied to the solar forecast before planning. `0` (default) = auto-tune from the accuracy history (see [Plan Accuracy](#plan-accuracy)); e.g. `0.8` scales the forecast down by 20% when it over-predicts. Manual values are clamped to 0.3–1.2. | `0` (auto) |
 | **Actual solar sensor** | Entity ID of a cumulative energy counter for actual PV production (e.g. daily inverter yield, Wh or kWh). Used for plan-vs-actual accuracy and the solar-scale auto-tune instead of the Emaldo-internal estimate (balance-derived, distorted by household loads). Empty (default) = Emaldo-internal estimate. | *(empty)* |
+| **Grid import sensor** | Entity ID of a cumulative energy counter for grid import (Wh or kWh) — the basis for the Realized Cost sensors. Empty (default) = Emaldo cloud daily counter `sensor.power_store_grid_import_today`. Override with a lifetime meter (e.g. an EM24 `_total` counter) for a cloud-free install. | `sensor.power_store_grid_import_today` |
+| **Grid export sensor** | Entity ID of a cumulative energy counter for grid export (Wh or kWh) — the basis for the Realized Cost sensors. Empty (default) = Emaldo cloud daily counter `sensor.power_store_grid_export_today`. Override with a lifetime meter (e.g. an EM24 `_total` counter) for a cloud-free install. | `sensor.power_store_grid_export_today` |
 | **SoC floor safeguard** | When enabled, the optimizer forces a grid charge back to `soc_min + buffer` whenever the actual SoC drops below that floor (battery would otherwise miss the evening peak after a solar shortfall). | `true` |
 | **SoC recovery buffer** | Percentage of capacity reserved above `soc_min` as the dischargeable bottom edge. A planned run never ends below `soc_min + buffer`, so it never reaches the floor with no idle-drain headroom. | `5.0` |
 | **Optimizer re-run interval** | How often (minutes) the optimizer re-runs to refresh the schedule: 15, 30, 60, or 120. | `120` |
@@ -504,7 +506,7 @@ The sensor may include both today's and tomorrow's data in the same list — ent
 
 ## Sensors
 
-The integration creates 18 sensor entities:
+The integration creates 20 sensor entities:
 
 | Entity | Type | Description | Attributes |
 |---|---|---|---|
@@ -526,6 +528,8 @@ The integration creates 18 sensor entities:
 | **Solar Regime** | diagnostic | Durable no-refill regime gate: `engaged`, `not_engaged`, or `unknown` (before the first run). Engaged = winter/snow regime active → discharge must beat the cheapest known future grid recharge (see [Solar Regime](#solar-regime)) | `ewma`, `forecast_fraction`, `low_days`, `high_days`, `last_updated`, `band_kwh`, `engage_threshold`, `disengage_threshold`, `debounce_days` |
 | **Solar Balance** | diagnostic | Average daily solar production (kWh) over the trailing 7 days from the accuracy records (`unknown` before 5 sampled days). Context for "is the home a net importer/exporter?" — display only, never gates planning | `daily_base_load_kwh`, `self_sufficiency` (<1 = net importer), `battery_days`, `usable_band_kwh`, `days_sampled`, `window_start`, `window_end`, `solar_source` |
 | **User Schedule** | diagnostic | Effective user rule overlay on the plan: slots a rule governs carry `source: user`, untouched slots carry `source: optimizer`. Full 48 h window (192 slots) so the chart aligns with the other schedule charts. | `schedule` (list of up to 192 slots with `source`, `soc_target`, `pv_sell`, `pv_source`) |
+| **Realized Cost History** | monetary | Actual billed-minus-refunded grid cost for the latest 15-min slot (€), signed (negative = refund). Derived from import/export energy counters, priced with the last optimizer run's buy/sell vectors — *real* money, not the plan. Plot this entity's history to see the daily cost wave. | `slots` (today's per-slot records as JSON for an ApexCharts card), `today_net`, `today_buy`, `today_sell`, `slot`, `buy_price`, `sell_price`, `import_kwh`, `export_kwh` |
+| **Realized Cost Today** | monetary | Signed net grid cost realized so far today (€) — import spend minus export refund. Survives recorder pruning via a 60-day JSON sidecar. | `buy_total`, `sell_total`, `import_kwh`, `export_kwh` |
 
 ## Switches
 

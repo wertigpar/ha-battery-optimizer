@@ -31,7 +31,9 @@
           "enable_pv_strategy": "Enable PV sell strategy (sell solar to grid during high-price slots instead of charging battery)",
           "solar_sell_min_forecast_kwh": "Min Solcast forecast to activate PV sell strategy (kWh, default 10 — skip on cloudy days)",
           "solar_forecast_mode": "Solar forecast mode for charge planning (p10 = pessimistic/weather-aware, p50 = median/optimistic)",
-          "solar_forecast_scale": "Solar forecast scale (0 = auto-tune from accuracy history; 0.8 scales the forecast down 20%)"
+          "solar_forecast_scale": "Solar forecast scale (0 = auto-tune from accuracy history; 0.8 scales the forecast down 20%)",
+          "grid_import_sensor": "Grid import energy counter (cumulative, Wh or kWh, e.g. sensor.power_store_grid_import_today). Empty = Emaldo-internal estimate",
+          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh, e.g. sensor.power_store_grid_export_today). Empty = Emaldo-internal estimate"
         }
       }
     },
@@ -77,7 +79,9 @@
           "solar_sell_min_forecast_kwh": "Min solar forecast for PV sell strategy (kWh)",
           "solar_forecast_mode": "Solar forecast mode (p10 = conservative, p50 = optimistic)",
           "solar_forecast_scale": "Solar forecast scale (0 = auto-tune, or manual 0.3–1.2)",
-          "solar_actual_sensor": "Actual solar energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate"
+          "solar_actual_sensor": "Actual solar energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate",
+          "grid_import_sensor": "Grid import energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate",
+          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate"
         }
       }
     }
@@ -109,7 +113,9 @@
       "vat_multiplier": { "name": "VAT Multiplier" },
       "grid_transfer_fee": { "name": "Grid Transfer Fee" },
       "feed_in_sales_commission": { "name": "Feed-in Sales Commission" },
-      "battery_wear_cost": { "name": "Battery Wear Cost" }
+      "battery_wear_cost": { "name": "Battery Wear Cost" },
+      "realized_cost_history": { "name": "Realized Cost History" },
+      "realized_cost_today": { "name": "Realized Cost Today" }
     },
     "switch": {
       "pv_strategy": { "name": "PV Sell Strategy" },

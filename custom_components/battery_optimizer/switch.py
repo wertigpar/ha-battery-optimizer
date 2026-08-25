@@ -55,8 +55,11 @@ async def async_setup_entry(
         # Entity is auto-removed by HA when its bound subentry disappears.
         pass
 
-    entry.async_on_unload(entry.async_on_add_subentry(_on_add_subentry))
-    entry.async_on_unload(entry.async_on_remove_subentry(_on_remove_subentry))
+    # Backwards/forwards compatible: older HA lacks async_on_(add|remove)_subentry.
+    if hasattr(entry, "async_on_add_subentry"):
+        entry.async_on_unload(entry.async_on_add_subentry(_on_add_subentry))
+    if hasattr(entry, "async_on_remove_subentry"):
+        entry.async_on_unload(entry.async_on_remove_subentry(_on_remove_subentry))
 
 
 class PvStrategySwitch(

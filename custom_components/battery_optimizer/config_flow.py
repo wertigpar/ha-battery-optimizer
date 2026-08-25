@@ -63,6 +63,8 @@ from .const import (
     CONF_SOLAR_FORECAST_MODE,
     CONF_SOLAR_FORECAST_SCALE,
     CONF_SOLAR_ACTUAL_SENSOR,
+    CONF_GRID_IMPORT_SENSOR,
+    CONF_GRID_EXPORT_SENSOR,
     SOLAR_FORECAST_P50,
     SOLAR_FORECAST_P10,
     DEFAULT_VAT_MULTIPLIER,
@@ -93,6 +95,8 @@ from .const import (
     DEFAULT_SOLAR_FORECAST_MODE,
     DEFAULT_SOLAR_FORECAST_SCALE,
     DEFAULT_SOLAR_ACTUAL_SENSOR,
+    DEFAULT_GRID_IMPORT_SENSOR,
+    DEFAULT_GRID_EXPORT_SENSOR,
     SOLAR_SCALE_MAX,
 )
 from .rules import (
@@ -307,6 +311,18 @@ def _build_schema(
                 CONF_SOLAR_ACTUAL_SENSOR,
                 default=d.get(
                     CONF_SOLAR_ACTUAL_SENSOR, DEFAULT_SOLAR_ACTUAL_SENSOR
+                ),
+            ): str,
+            vol.Optional(
+                CONF_GRID_IMPORT_SENSOR,
+                default=d.get(
+                    CONF_GRID_IMPORT_SENSOR, DEFAULT_GRID_IMPORT_SENSOR
+                ),
+            ): str,
+            vol.Optional(
+                CONF_GRID_EXPORT_SENSOR,
+                default=d.get(
+                    CONF_GRID_EXPORT_SENSOR, DEFAULT_GRID_EXPORT_SENSOR
                 ),
             ): str,
         }

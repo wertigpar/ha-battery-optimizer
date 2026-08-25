@@ -46,6 +46,9 @@ CONF_SOLAR_FORECAST_MODE = "solar_forecast_mode"
 CONF_SOLAR_FORECAST_SCALE = "solar_forecast_scale"
 CONF_SOLAR_ACTUAL_SENSOR = "solar_actual_sensor"
 
+CONF_GRID_IMPORT_SENSOR = "grid_import_sensor"
+CONF_GRID_EXPORT_SENSOR = "grid_export_sensor"
+
 # ── Solar forecast mode options ──────────────────────────────────────
 SOLAR_FORECAST_P50 = "p50"  # Solcast median (optimistic, current legacy)
 SOLAR_FORECAST_P10 = "p10"  # Solcast 10th-percentile (pessimistic, weather-aware)
@@ -92,6 +95,11 @@ DEFAULT_SOLAR_FORECAST_MODE = SOLAR_FORECAST_P10  # conservative planning by def
 # ── Solar forecast scale (over-forecast compensation) ────────────────
 DEFAULT_SOLAR_FORECAST_SCALE = 0.0   # 0.0 = auto-tune sentinel (0 = auto)
 DEFAULT_SOLAR_ACTUAL_SENSOR = ""      # empty = Emaldo-internal estimate
+# Realized cost history — metered import/export energy counters. Defaults to
+# the Emaldo cloud daily counters; override with lifetime grid meters
+# (e.g. an EM24 energy meter) for cloud-free, reset-safe accounting.
+DEFAULT_GRID_IMPORT_SENSOR = "sensor.power_store_grid_import_today"
+DEFAULT_GRID_EXPORT_SENSOR = "sensor.power_store_grid_export_today"
 SOLAR_SCALE_MIN = 0.3                # effective scale floor (also manual clamp floor)
 SOLAR_SCALE_MAX = 1.2                # effective scale ceiling
 SOLAR_SCALE_EWMA_ALPHA = 0.1         # EWMA smoothing factor

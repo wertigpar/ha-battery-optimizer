@@ -74,6 +74,8 @@ from .const import (
     CONF_SOLAR_FORECAST_MODE,
     CONF_SOLAR_FORECAST_SCALE,
     CONF_SOLAR_ACTUAL_SENSOR,
+    CONF_GRID_IMPORT_SENSOR,
+    CONF_GRID_EXPORT_SENSOR,
     SOLAR_FORECAST_P10,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
@@ -82,6 +84,8 @@ from .const import (
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_SOLAR_FORECAST_MODE,
     DEFAULT_SOLAR_FORECAST_SCALE,
+    DEFAULT_GRID_IMPORT_SENSOR,
+    DEFAULT_GRID_EXPORT_SENSOR,
     DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
@@ -112,6 +116,13 @@ from .solar_regime import default_state as solar_regime_default_state
 from .solar_regime import deserialize as solar_regime_deserialize
 from .solar_regime import update_regime
 from .solar_actual import counter_delta_kwh, normalize_to_kwh, resolve_solar_source
+from .cost_history import (
+    local_slot_index,
+    slot_cost,
+    prune_history,
+    today_records,
+    day_totals,
+)
 from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
 
 _LOGGER = logging.getLogger(__name__)
@@ -212,6 +223,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._solar_regime: dict | None = None
         self._solar_regime_fraction: float | None = None
         self._solar_regime_band_kwh: float | None = None
+        # Realized grid cost history — per-15-min billed/refunded cost derived
+        # from import/export energy counters (defaults to the Emaldo cloud
+        # daily counters; overridable with lifetime grid meters). Cached
+        # buy/sell prices price each slot; a JSON sidecar persists the series
+        # because the HA recorder strips sensor attributes.
+        self._grid_import_sensor: str = self.config.get(
+            CONF_GRID_IMPORT_SENSOR, DEFAULT_GRID_IMPORT_SENSOR
+        )
+        self._grid_export_sensor: str = self.config.get(
+            CONF_GRID_EXPORT_SENSOR, DEFAULT_GRID_EXPORT_SENSOR
+        )
+        self._cost_import_snap: float | None = None
+        self._cost_export_snap: float | None = None
+        self._cost_buy_prices: list[float] | None = None
+        self._cost_sell_prices: list[float] | None = None
+        self._cost_day = dt_util.now().date()
+        self._cost_history_path = self.hass.config.path(
+            "battery_optimizer_cost_history.json"
+        )
+        self._cost_history: list[dict] | None = None
         # PV sell strategy
         self._pv_strategy_enabled: bool = self.config.get(
             CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY
@@ -1282,6 +1313,132 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         accuracy["accuracy_history"] = self._accuracy_summary()
         await self.hass.async_add_executor_job(self._save_accuracy_history)
 
+    # ── Realized cost history ───────────────────────────────────────
+    def _load_cost_history(self) -> list[dict]:
+        """Load the persisted cost-history sidecar (empty list if absent)."""
+        try:
+            with open(self._cost_history_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, list) else []
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def _save_cost_history(self) -> None:
+        """Persist the in-memory cost history to the JSON sidecar."""
+        try:
+            with open(self._cost_history_path, "w", encoding="utf-8") as fh:
+                json.dump(self._cost_history, fh)
+        except OSError:
+            _LOGGER.warning(
+                "Could not write cost history to %s", self._cost_history_path
+            )
+
+    def _read_counter_kwh(self, entity_id: str) -> float | None:
+        """Read a cumulative energy counter entity and normalize to kWh."""
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        try:
+            value = float(state.state)
+        except (ValueError, TypeError):
+            return None
+        return normalize_to_kwh(value, state.attributes.get("unit_of_measurement"))
+
+    async def _capture_cost_slot(self, now: datetime) -> None:
+        """Record the realized cost of the 15-min slot that just elapsed.
+
+        Fires aligned to :00/:15/:30/:45. Reads the import/export energy
+        counters, diffs them against the previous snapshot (reset-safe via
+        counter_delta_kwh), and prices the delta with the cached buy/sell
+        vectors from the last optimizer run.
+        """
+        if not self._grid_import_sensor or not self._grid_export_sensor:
+            return
+        # Reset the day boundary + re-seed snapshots on local midnight.
+        today = now.date()
+        if today != self._cost_day:
+            self._cost_day = today
+            self._cost_import_snap = None
+            self._cost_export_snap = None
+
+        if self._cost_history is None:
+            self._cost_history = await self.hass.async_add_executor_job(
+                self._load_cost_history
+            )
+
+        import_kwh = self._read_counter_kwh(self._grid_import_sensor)
+        export_kwh = self._read_counter_kwh(self._grid_export_sensor)
+        if import_kwh is None or export_kwh is None:
+            return
+
+        if self._cost_import_snap is None or self._cost_export_snap is None:
+            # First sample after (re)start or midnight — seed, no delta yet.
+            self._cost_import_snap = import_kwh
+            self._cost_export_snap = export_kwh
+            return
+
+        import_delta, import_reset = counter_delta_kwh(
+            self._cost_import_snap, import_kwh
+        )
+        export_delta, export_reset = counter_delta_kwh(
+            self._cost_export_snap, export_kwh
+        )
+        self._cost_import_snap = import_kwh
+        self._cost_export_snap = export_kwh
+        # A counter reset mid-day (daily meter) makes the delta unusable.
+        if import_reset or export_reset:
+            return
+
+        slot = local_slot_index(now)
+        if self._cost_buy_prices is None or self._cost_sell_prices is None:
+            _LOGGER.debug(
+                "Cost capture skipped: no cached prices for slot %d", slot
+            )
+            return
+        if not (0 <= slot < len(self._cost_buy_prices)):
+            return
+        buy = self._cost_buy_prices[slot]
+        sell = self._cost_sell_prices[slot]
+
+        cost = slot_cost(import_delta, export_delta, buy, sell)
+        self._cost_history.append(
+            {
+                "ts": now.isoformat(timespec="seconds"),
+                "slot": slot,
+                "buy": round(buy, 4),
+                "sell": round(sell, 4),
+                "import_kwh": round(import_delta, 4),
+                "export_kwh": round(export_delta, 4),
+                **cost,
+            }
+        )
+        self._cost_history = prune_history(self._cost_history, now)
+        await self.hass.async_add_executor_job(self._save_cost_history)
+        # Push the new record to the cost-history sensors immediately.
+        self.async_write_ha_state()
+
+    @property
+    def realized_cost_history(self) -> list[dict]:
+        """Full persisted cost-history series (oldest→newest)."""
+        return self._cost_history or []
+
+    @property
+    def realized_cost_today_records(self) -> list[dict]:
+        """Cost-history records for the current local day."""
+        return today_records(self._cost_history, dt_util.now().date())
+
+    @property
+    def realized_cost_today(self) -> dict[str, float]:
+        """Signed net/buy/sell totals for the current local day."""
+        return day_totals(self.realized_cost_today_records)
+
+    @property
+    def realized_cost_latest(self) -> dict | None:
+        """Most recent cost record, or None if none captured yet."""
+        if not self._cost_history:
+            return None
+        return self._cost_history[-1]
+
     # ── Optimizer entry point ─────────────────────────────────────────
 
     async def run_optimizer(
@@ -1375,6 +1532,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Run optimizer — prices_today is already 96 x 15-min in €/kWh
         buy_prices, sell_prices = compute_prices(prices_today, cfg)
+        # Cache today's buy/sell prices so the 15-min cost-capture task can
+        # price each slot without re-parsing spot data.
+        self._cost_buy_prices = buy_prices
+        self._cost_sell_prices = sell_prices
         # Tomorrow's prices (published ~13:00 CET, sensor-triggered re-run)
         # must be ready BEFORE today's plan: when the no-refill regime is
         # engaged, today's discharge floor is min(remaining today, tomorrow).
@@ -2133,6 +2294,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             timedelta(minutes=5),
         )
         self._unsub_listeners.append(unsub)
+
+        # 7) Realized cost capture — every 15 min aligned to :00/:15/:30/:45
+        if self._grid_import_sensor and self._grid_export_sensor:
+            unsub = async_track_time_change(
+                self.hass,
+                self._capture_cost_slot,
+                minute="/15",
+                second=0,
+            )
+            self._unsub_listeners.append(unsub)
+            _LOGGER.info(
+                "Realized cost capture registered on %s / %s",
+                self._grid_import_sensor,
+                self._grid_export_sensor,
+            )
 
     @callback
     def _on_ha_started(self, _event) -> None:

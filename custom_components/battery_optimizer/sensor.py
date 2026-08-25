@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 import logging
 from typing import Any
@@ -75,6 +76,8 @@ async def async_setup_entry(
         PlanAccuracySensor(coordinator, entry),
         SolarRegimeSensor(coordinator, entry),
         SolarBalanceSensor(coordinator, entry),
+        RealizedCostHistorySensor(coordinator, entry),
+        RealizedCostTodaySensor(coordinator, entry),
         VatMultiplierSensor(coordinator, entry),
         GridTransferFeeSensor(coordinator, entry),
         FeedInSalesCommissionSensor(coordinator, entry),
@@ -228,6 +231,80 @@ class EstimatedSavingsSensor(_BaseOptimizerSensor):
             "gross_savings": round(self._result.total_profit, 4),
             "wear_cost": round(self._result.wear_cost_total, 4),
             "cycled_kwh": round(self._result.cycled_kwh, 3),
+        }
+
+
+class _RealizedCostBaseSensor(_BaseOptimizerSensor):
+    """Base for realized-cost sensors (currency measurement, signed, resets daily)."""
+
+    _attr_device_class = None  # signed/non-monotonic/daily-reset: not a monetary total
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry, key: str) -> None:
+        super().__init__(coordinator, entry, key)
+        self._attr_native_unit_of_measurement = self._currency
+        self._attr_icon = "mdi:currency-eur"
+
+
+class RealizedCostHistorySensor(_RealizedCostBaseSensor):
+    """Per-15-min realized grid cost for elapsed slots (billed minus refunded).
+
+    Native value is the latest slot's signed net cost (negative = refund), so
+    HA's own history graph charts the cost wave directly. The ``slots``
+    attribute carries today's per-slot records as JSON for an ApexCharts card.
+    """
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "realized_cost_history")
+
+    @property
+    def native_value(self) -> float | None:
+        latest = self.coordinator.realized_cost_latest
+        if latest is None:
+            return None
+        return latest["net"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        today = self.coordinator.realized_cost_today
+        latest = self.coordinator.realized_cost_latest
+        attrs: dict[str, Any] = {
+            "today_net": today["net"],
+            "today_buy": today["buy"],
+            "today_sell": today["sell"],
+        }
+        if latest is not None:
+            attrs["slot"] = latest.get("slot")
+            attrs["buy_price"] = latest.get("buy")
+            attrs["sell_price"] = latest.get("sell")
+            attrs["import_kwh"] = latest.get("import_kwh")
+            attrs["export_kwh"] = latest.get("export_kwh")
+        # Today's per-slot records for an ApexCharts history card.
+        attrs["slots"] = json.dumps(self.coordinator.realized_cost_today_records)
+        return attrs
+
+
+class RealizedCostTodaySensor(_RealizedCostBaseSensor):
+    """Signed net grid cost realized so far today (billed minus refunded)."""
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "realized_cost_today")
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.realized_cost_today["net"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        today = self.coordinator.realized_cost_today
+        records = self.coordinator.realized_cost_today_records
+        import_kwh = sum(r.get("import_kwh", 0.0) for r in records)
+        export_kwh = sum(r.get("export_kwh", 0.0) for r in records)
+        return {
+            "buy_total": today["buy"],
+            "sell_total": today["sell"],
+            "import_kwh": round(import_kwh, 3),
+            "export_kwh": round(export_kwh, 3),
         }
 
 

@@ -31,7 +31,9 @@
           "enable_pv_strategy": "Ota PV-myyntistrategia käyttöön (myy aurinkosähkö verkkoon korkean hinnan tunneilla akun lataamisen sijaan)",
           "solar_sell_min_forecast_kwh": "Min. Solcast-ennuste PV-myyntistrategian käynnistämiseen (kWh, oletus 10 — ohita pilvisinä päivinä)",
           "solar_forecast_mode": "Aurinkoennusteen tila lataussuunnittelua varten (p10 = pessimistinen/sään huomioiva, p50 = mediaani/optimistinen)",
-          "solar_forecast_scale": "Aurinkoennusteen skaalaus (0 = automaattinen hienosäätö tarkkuushistoriasta; 0,8 skaalaa ennusteen 20 % pienemmäksi)"
+          "solar_forecast_scale": "Aurinkoennusteen skaalaus (0 = automaattinen hienosäätö tarkkuushistoriasta; 0,8 skaalaa ennusteen 20 % pienemmäksi)",
+          "grid_import_sensor": "Sähkön tuonnin energialaskuri (kumulatiivinen, Wh tai kWh, esim. sensor.power_store_grid_import_today). Tyhjä = Emaldon sisäinen arvio",
+          "grid_export_sensor": "Sähkön viennin energialaskuri (kumulatiivinen, Wh tai kWh, esim. sensor.power_store_grid_export_today). Tyhjä = Emaldon sisäinen arvio"
         }
       }
     },
@@ -77,7 +79,9 @@
           "solar_sell_min_forecast_kwh": "Min. aurinkoennuste PV-myyntistrategialle (kWh)",
           "solar_forecast_mode": "Aurinkoennusteen tila (p10 = konservatiivinen, p50 = optimistinen)",
           "solar_forecast_scale": "Aurinkoennusteen skaalaus (0 = automaattinen tai manuaalinen 0,3–1,2)",
-          "solar_actual_sensor": "Todellisen aurinkoenergian mittari (kumulatiivinen, Wh tai kWh). Tyhjä = Emaldon sisäinen arvio"
+          "solar_actual_sensor": "Todellisen aurinkoenergian mittari (kumulatiivinen, Wh tai kWh). Tyhjä = Emaldon sisäinen arvio",
+          "grid_import_sensor": "Sähkön tuonnin energialaskuri (kumulatiivinen, Wh tai kWh). Tyhjä = Emaldon sisäinen arvio",
+          "grid_export_sensor": "Sähkön viennin energialaskuri (kumulatiivinen, Wh tai kWh). Tyhjä = Emaldon sisäinen arvio"
         }
       }
     }
@@ -154,6 +158,12 @@
       },
       "solar_balance": {
         "name": "Solar Balance"
+      },
+      "realized_cost_history": {
+        "name": "Toteutunut kustannushistoria"
+      },
+      "realized_cost_today": {
+        "name": "Toteutunut kustannus tänään"
       }
     },
     "switch": {

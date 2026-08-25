@@ -31,7 +31,9 @@
           "enable_pv_strategy": "Aktivér PV-salgsstrategi (sælg solenergi til nettet i tidsrum med høje priser i stedet for at oplade batteriet)",
           "solar_sell_min_forecast_kwh": "Min. Solcast-prognose for at aktivere PV-salgsstrategien (kWh, standard 10 — spring over på skyede dage)",
           "solar_forecast_mode": "Solprognosetilstand til opladningsplanlægning (p10 = pessimistisk/vejrafhængig, p50 = median/optimistisk)",
-          "solar_forecast_scale": "Skalering af solprognosen (0 = automatisk justering ud fra nøjagtighedshistorik; 0,8 skalerer prognosen ned med 20 %)"
+          "solar_forecast_scale": "Skalering af solprognosen (0 = automatisk justering ud fra nøjagtighedshistorik; 0,8 skalerer prognosen ned med 20 %)",
+          "grid_import_sensor": "Nettoimport energimåler (akkumulerende, Wh eller kWh, f.eks. sensor.power_store_grid_import_today). Tom = Emaldos interne estimat",
+          "grid_export_sensor": "Nettoexport energimåler (akkumulerende, Wh eller kWh, f.eks. sensor.power_store_grid_export_today). Tom = Emaldos interne estimat"
         }
       }
     },
@@ -77,7 +79,9 @@
           "solar_sell_min_forecast_kwh": "Min. solprognose for PV-salgsstrategi (kWh)",
           "solar_forecast_mode": "Solprognosetilstand (p10 = konservativ, p50 = optimistisk)",
           "solar_forecast_scale": "Skalering af solprognosen (0 = automatisk eller manuel 0,3–1,2)",
-          "solar_actual_sensor": "Måler for faktisk solenergi (akkumulerende, Wh eller kWh). Tom = Emaldos interne estimat"
+          "solar_actual_sensor": "Måler for faktisk solenergi (akkumulerende, Wh eller kWh). Tom = Emaldos interne estimat",
+          "grid_import_sensor": "Nettoimport energimåler (akkumulerende, Wh eller kWh). Tom = Emaldos interne estimat",
+          "grid_export_sensor": "Nettoexport energimåler (akkumulerende, Wh eller kWh). Tom = Emaldos interne estimat"
         }
       }
     }
@@ -154,6 +158,12 @@
       },
       "solar_balance": {
         "name": "Solar Balance"
+      },
+      "realized_cost_history": {
+        "name": "Realiseret omkostningshistorik"
+      },
+      "realized_cost_today": {
+        "name": "Realiseret omkostning i dag"
       }
     },
     "switch": {

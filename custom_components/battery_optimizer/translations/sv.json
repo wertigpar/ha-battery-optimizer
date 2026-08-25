@@ -31,7 +31,9 @@
           "enable_pv_strategy": "Aktivera PV-försäljningsstrategi (sälj solenergi till nätet under perioder med höga priser i stället för att ladda batteriet)",
           "solar_sell_min_forecast_kwh": "Min Solcast-prognos för att aktivera PV-försäljningsstrategin (kWh, standard 10 — hoppa över molniga dagar)",
           "solar_forecast_mode": "Solprognosläge för laddningsplanering (p10 = pessimistisk/väderberoende, p50 = median/optimistisk)",
-          "solar_forecast_scale": "Skalning av solprognosen (0 = automatisk injustering från noggrannhetshistorik; 0,8 skalar ned prognosen med 20 %)"
+          "solar_forecast_scale": "Skalning av solprognosen (0 = automatisk injustering från noggrannhetshistorik; 0,8 skalar ned prognosen med 20 %)",
+          "grid_import_sensor": "Nätimports energiräknare (ackumulerad, Wh eller kWh, t.ex. sensor.power_store_grid_import_today). Tom = Emaldos interna uppskattning",
+          "grid_export_sensor": "Nätexports energiräknare (ackumulerad, Wh eller kWh, t.ex. sensor.power_store_grid_export_today). Tom = Emaldos interna uppskattning"
         }
       }
     },
@@ -77,7 +79,9 @@
           "solar_sell_min_forecast_kwh": "Min solprognos för PV-försäljningsstrategin (kWh)",
           "solar_forecast_mode": "Solprognosläge (p10 = konservativ, p50 = optimistisk)",
           "solar_forecast_scale": "Skalning av solprognosen (0 = automatisk eller manuell 0,3–1,2)",
-          "solar_actual_sensor": "Mätare för faktisk solenergi (ackumulerad, Wh eller kWh). Tom = Emaldos interna uppskattning"
+          "solar_actual_sensor": "Mätare för faktisk solenergi (ackumulerad, Wh eller kWh). Tom = Emaldos interna uppskattning",
+          "grid_import_sensor": "Nätimports energiräknare (ackumulerad, Wh eller kWh). Tom = Emaldos interna uppskattning",
+          "grid_export_sensor": "Nätexports energiräknare (ackumulerad, Wh eller kWh). Tom = Emaldos interna uppskattning"
         }
       }
     }
@@ -154,6 +158,12 @@
       },
       "solar_balance": {
         "name": "Solar Balance"
+      },
+      "realized_cost_history": {
+        "name": "Realiserad kostnadshistorik"
+      },
+      "realized_cost_today": {
+        "name": "Realiserad kostnad idag"
       }
     },
     "switch": {

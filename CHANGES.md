@@ -12,6 +12,26 @@
   `enabled` flag is also editable as a checkbox inside the rule editor. Files: `rules.py`,
   `coordinator.py`, `switch.py`, `config_flow.py`, `translations/*`.
 
+- **Realized grid cost history + daily sensor (issue #14 follow-up)** — two new sensors
+  track the actual money moving across the grid each 15-minute slot, derived from import
+  and export energy counters (not the optimizer's plan):
+  - `sensor.<entry>_realized_cost_history` — native value is the latest slot's signed net
+    cost (negative = refund, so HA's own history graph charts the cost wave); its `slots`
+    attribute carries today's per-slot records as JSON for an ApexCharts card, plus
+    `today_net` / `today_buy` / `today_sell`.
+  - `sensor.<entry>_realized_cost_today` — signed net grid cost realized so far today,
+    with `buy_total` / `sell_total` / `import_kwh` / `export_kwh` breakdown.
+  A 15-minute `async_track_time_change` task diffs the counters (reset-safe, mirrors the
+  solar accuracy sidecar), prices each delta with the cached buy/sell vectors from the
+  last optimizer run, and persists a 60-day JSON sidecar
+  (`battery_optimizer_cost_history.json`) so the series survives recorder pruning.
+  Defaults to the Emaldo cloud daily counters (`sensor.power_store_grid_import_today` /
+  `sensor.power_store_grid_export_today`); override with lifetime grid meters
+  (e.g. an EM24 `_total` counter) for a cloud-free install. Config fields
+  `grid_import_sensor` / `grid_export_sensor` added to setup + options. Files:
+  `cost_history.py` (new, pure helper), `const.py`, `coordinator.py`, `sensor.py`,
+  `config_flow.py`, `strings.json`, `translations/*`.
+
 ### Changed
 
 - **PV Sell Strategy field hidden unless relevant (issue #13, Ask 1)** — in the rule editor
