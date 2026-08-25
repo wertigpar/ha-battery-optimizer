@@ -1548,7 +1548,7 @@ battery_optimizer/
 
 Full release history: [CHANGES.md](CHANGES.md).
 
-### v0.3.6b
+### v0.3.6b1
 - **Fixed** — Emaldo plan-cost breakdown doc/attribute now reports grid cost **plus** wear, consistent with the optimizer plan-cost sensor (`emaldo_cost = emaldo_grid_cost + emaldo_wear_total`).
 
 ## Support

@@ -9,5 +9,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/wertigpar/ha-battery-optimizer/issues",
   "requirements": [],
-  "version": "0.3.6b"
+  "version": "0.3.6b1"
 }

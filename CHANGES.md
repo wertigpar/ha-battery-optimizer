@@ -1,6 +1,6 @@
 # Changes
 
-## v0.3.6b
+## v0.3.6b1
 
 ### Fixed
 
