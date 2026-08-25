@@ -1544,6 +1544,13 @@ battery_optimizer/
 └── translations/        # Localized strings (da, en, fi, nb, sv)
 ```
 
+## Changelog
+
+Full release history: [CHANGES.md](CHANGES.md).
+
+### v0.3.6b
+- **Fixed** — Emaldo plan-cost breakdown doc/attribute now reports grid cost **plus** wear, consistent with the optimizer plan-cost sensor (`emaldo_cost = emaldo_grid_cost + emaldo_wear_total`).
+
 ## Support
 
 - **Issues & feature requests:** [GitHub Issues](https://github.com/wertigpar/ha-battery-optimizer/issues)

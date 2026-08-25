@@ -201,9 +201,9 @@ def optimizer_plan_cost_breakdown(result: OptimizationResult) -> dict[str, float
 
 
 def emaldo_plan_cost_breakdown(result: OptimizationResult) -> dict[str, float]:
-    """Subcosts forming the Emaldo plan cost (net: grid cost minus wear).
+    """Subcosts forming the Emaldo plan cost (grid cost plus wear).
 
-    emaldo_grid_cost - emaldo_wear_cost == the sensor state value
+    emaldo_grid_cost + emaldo_wear_cost == the sensor state value
     (``emaldo_cost``).  Money attrs 4 dp, cycled 3 dp.
     """
     return {

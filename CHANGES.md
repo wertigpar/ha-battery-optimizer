@@ -1,5 +1,11 @@
 # Changes
 
+## v0.3.6b
+
+### Fixed
+
+- **Emaldo plan-cost breakdown reports grid cost plus wear (matching the optimizer sensor)** — `emaldo_plan_cost_breakdown`'s docstring previously claimed the `emaldo_plan_cost` sensor state equals `emaldo_grid_cost - emaldo_wear_cost` (minus). The real sensor value is `emaldo_cost = emaldo_grid_cost + emaldo_wear_total` (grid cost plus wear), identical in form to `optimizer_plan_cost` (`baseline_cost - net_profit`). The attribute dict keys were already correct; only the docstring was corrected so the decomposition reads `emaldo_grid_cost + emaldo_wear_cost == sensor state`. No numeric logic or values changed. File: `optimizer.py`.
+
 ## v0.3.6
 
 ### Added
