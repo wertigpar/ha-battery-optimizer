@@ -1595,6 +1595,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             start_slot=start_slot, initial_soc_kwh=initial_soc_kwh,
             charge_targets=charge_targets,
             discharge_targets=discharge_targets,
+            pv_slots=masked_pv,
         )
         for sp in result.slots:
             if sp.index < len(traj_kwh):

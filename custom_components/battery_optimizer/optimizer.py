@@ -346,6 +346,7 @@ def _simulate_soc_trajectory(
     initial_soc_kwh: float,
     charge_targets: dict[int, int] | None = None,
     discharge_targets: dict[int, int] | None = None,
+    pv_slots: list[bool] | None = None,
 ) -> list[float]:
     """Forward-simulate the true (unclamped) SoC trajectory in kWh.
 
@@ -398,12 +399,21 @@ def _simulate_soc_trajectory(
                 )
                 soc = soc - battery_draw - idle_drain
             else:
-                surplus_kw = min(-net_loads[s], cfg.max_charge_kw)
-                solar_kwh = surplus_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
-                soc = min(soc + solar_kwh - idle_drain, soc_max_kwh)
+                # Solar surplus during discharge: only charges the battery when
+                # PV is enabled.  Sold solar (pv_slots[s] is False) goes to the
+                # grid, so it must not raise the battery SoC forecast.
+                pv_on = pv_slots[s] if (pv_slots and s < len(pv_slots)) else True
+                if pv_on:
+                    surplus_kw = min(-net_loads[s], cfg.max_charge_kw)
+                    solar_kwh = surplus_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
+                    soc = min(soc + solar_kwh - idle_drain, soc_max_kwh)
+                else:
+                    soc = soc - idle_drain
         else:
-            # idle / none — absorbs solar surplus, otherwise just drains
-            if net_loads[s] < 0:
+            # idle / none — absorbs solar surplus only when PV is enabled;
+            # sold solar goes to the grid, not the battery.
+            pv_on = pv_slots[s] if (pv_slots and s < len(pv_slots)) else True
+            if pv_on and net_loads[s] < 0:
                 charge_kwh = min(-net_loads[s], cfg.max_charge_kw) * SLOT_DURATION_HOURS * cfg.charge_efficiency
                 soc = min(soc + charge_kwh - idle_drain, soc_max_kwh)
             else:

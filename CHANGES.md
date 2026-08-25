@@ -20,6 +20,23 @@
   is correctly hidden, because those actions never sell. No data migration needed —
   `rule_from_data` keeps `pv_sell` defaulting to `inherit`. File: `config_flow.py`.
 
+- **Swedish label for the PV Sell `inherit` option (issue #13)** — the `sv` translation of
+  the PV Sell Strategy `inherit` option was `Arv standard`; relabelled to
+  `Urladdning av batteri` per tester feedback. File: `translations/sv.json`.
+
+### Fixed
+
+- **SoC forecast (`schedule.soc`) no longer rises during PV Sell windows (issue #14)** —
+  the dashboard `soc` trajectory is re-derived in `coordinator._apply_user_rules` via
+  `_simulate_soc_trajectory`, which was PV-blind: in its discharge-surplus and idle branches
+  it credited *sold* solar to the battery, so `schedule.soc` climbed while those same slots
+  were flagged `pv_sell: true`. `_correct_soc_for_pv_sells` (Step 7) fixed the
+  optimizer-internal copy, but the re-simulation discarded it. `_simulate_soc_trajectory`
+  now takes a `pv_slots` argument and only charges the battery from solar when PV is enabled
+  for that slot; sold solar drains by idle loss only. `coordinator._apply_user_rules` now
+  threads `masked_pv` through. Regression test: `tests/test_pv_sell_soc.py`. Files:
+  `optimizer.py`, `coordinator.py`.
+
 ## v0.3.5
 
 ### Added
