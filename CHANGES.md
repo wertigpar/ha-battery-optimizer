@@ -2,6 +2,18 @@
 
 ## v0.3.7
 
+### Added
+
+- **Automatic deletion of expired date rules (option `rule_retention_days`)** —
+  date-level schedule rules are auto-removed once their `end_date` is older
+  than the configured retention: 0 = keep forever (default), 1 = next day,
+  7 = after 1 week, 30 = after 30 days. Weekday and default rules are never
+  touched. A daily sweep plus a sweep at the start of every optimizer run
+  removes rules retroactively the moment the option is enabled; each removed
+  rule's `rule_enabled` switch entity disappears with it and the plan
+  recomputes. Files: `config_flow.py`, `coordinator.py`, `rules.py`,
+  `const.py`, `strings.json`, `translations/*`.
+
 ### Fixed
 
 - **Rule editor no longer drops the Enabled flag** — `_detail_step` built the

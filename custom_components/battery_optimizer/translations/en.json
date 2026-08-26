@@ -25,6 +25,7 @@
           "soc_recovery_buffer_pct": "SoC recovery buffer (%) — keep-alive charge target = Min SoC + buffer (default 5)",
           "idle_strategy": "Idle slot strategy (full_control = override all idle slots; solar_guard = override idle only before solar; smart_override = override only when internal AI plans charge before solar)",
           "soc_guard_interval": "SoC guard update interval in minutes (0 = disabled, 15/30/60/120). Actively adjusts the discharge floor to prevent faster-than-planned discharge.",
+          "rule_retention_days": "Auto-delete passed date rules after (0 = never)",
           "optimizer_interval": "Optimizer re-run interval in minutes (15/30/60/120). How often the optimizer recalculates the schedule.",
           "auto_base_load": "Auto-tune base load from history (uses household load power sensor)",
           "load_energy_sensor": "Household load power sensor (W) for auto base load (e.g. sensor.emhass_combined_power)",
@@ -72,6 +73,7 @@
           "soc_recovery_buffer_pct": "SoC recovery buffer (%, keep-alive target = Min SoC + buffer)",
           "idle_strategy": "Idle slot strategy (full_control / solar_guard / smart_override)",
           "soc_guard_interval": "SoC guard interval (0=off, 15/30/60/120 min)",
+          "rule_retention_days": "Auto-delete passed date rules after (0 = never)",
           "optimizer_interval": "Optimizer re-run interval (15/30/60/120 min)",
           "auto_base_load": "Auto-tune base load from history",
           "load_energy_sensor": "Household load power sensor (W, for auto base load)",
@@ -237,6 +239,14 @@
         "full_control": "Full control",
         "solar_guard": "Solar guard",
         "smart_override": "Smart override"
+      }
+    },
+    "rule_retention": {
+      "options": {
+        "0": "Keep forever (no automatic deletion)",
+        "1": "Next day",
+        "7": "After 1 week",
+        "30": "After 30 days"
       }
     }
   }

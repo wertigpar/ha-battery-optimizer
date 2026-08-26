@@ -9,13 +9,14 @@ this module is the pure logic layer so it can be unit-tested standalone
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from .const import (
     SLOTS_PER_DAY,
     SLOT_NO_OVERRIDE,
     SLOT_IDLE,
     DEFAULT_RULE_LABEL,
+    SUBENTRY_TYPE_RULE,
 )
 
 # ── Levels (strongest first — ladder walk order) ─────────────────────
@@ -461,3 +462,38 @@ def sources_summary(sources: list[str], masked_bytes: list[int]) -> str:
         else:
             n_idle += 1
     return f"{n_charge}C {n_discharge}D {n_idle}I"
+
+
+def expired_rule_ids(subentries, today: date, retention_days: int) -> list[str]:
+    """Subentry ids of date rules expired past the retention window.
+
+    Eligible: ``subentry_type == "rule"`` with ``level == "date"`` and a
+    parseable ``end_date``.  A rule is released when
+    ``(today - end_date).days >= retention_days``.  ``retention_days <= 0``
+    disables deletion entirely.  Duck-typed: ``subentries`` is any iterable
+    of objects exposing ``subentry_id`` / ``subentry_type`` / ``data``.
+    """
+    if retention_days <= 0:
+        return []
+    expired = []
+    for sub in subentries:
+        if getattr(sub, "subentry_type", "") != SUBENTRY_TYPE_RULE:
+            continue
+        data = getattr(sub, "data", None) or {}
+        if data.get("level") != LEVEL_DATE:
+            continue
+        raw_end = data.get("end_date")
+        if not raw_end:
+            continue
+        if isinstance(raw_end, datetime):
+            end = raw_end.date()
+        elif isinstance(raw_end, date):
+            end = raw_end
+        else:
+            try:
+                end = date.fromisoformat(str(raw_end))
+            except ValueError:
+                continue
+        if (today - end).days >= retention_days:
+            expired.append(sub.subentry_id)
+    return expired

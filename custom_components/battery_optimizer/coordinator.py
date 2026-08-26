@@ -76,6 +76,7 @@ from .const import (
     CONF_SOLAR_ACTUAL_SENSOR,
     CONF_GRID_IMPORT_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
+    CONF_RULE_RETENTION_DAYS,
     SOLAR_FORECAST_P10,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
@@ -86,6 +87,7 @@ from .const import (
     DEFAULT_SOLAR_FORECAST_SCALE,
     DEFAULT_GRID_IMPORT_SENSOR,
     DEFAULT_GRID_EXPORT_SENSOR,
+    DEFAULT_RULE_RETENTION_DAYS,
     DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
@@ -107,6 +109,7 @@ from .rules import (
     UserRule,
     rule_from_data,
     expand_day,
+    expired_rule_ids,
     mask_plan,
     LEVEL_DEFAULT,
     SlotWinner,
@@ -163,6 +166,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._entry = entry
         self._unsub_listeners: list[CALLBACK_TYPE] = []
+        self._last_rule_sweep_day: date | None = None
         self._unsub_ha_started: CALLBACK_TYPE | None = None
         self._unsub_startup: CALLBACK_TYPE | None = None
         self._startup_attempts: int = 0
@@ -1488,6 +1492,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             reason: Why this run was triggered.
             force: If False, skip if conditions haven't changed enough.
         """
+        await self._maybe_sweep_expired_rules(reason)
         await self._restore_runtime_state()
         _LOGGER.info("Optimizer triggered: reason=%s, force=%s", reason, force)
 
@@ -2205,6 +2210,41 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await sched_coord.async_request_refresh()
                 return
 
+    async def _maybe_sweep_expired_rules(self, reason: str) -> None:
+        """Delete date rules past their retention window.
+
+        No-op when retention is 0.  Scarce: scans at most once per calendar
+        day, except when ``reason == "config_change"`` (option/rule edited —
+        sweep immediately so newly-enabled retention is retroactive).
+        """
+        retention = self._config_int(
+            CONF_RULE_RETENTION_DAYS, DEFAULT_RULE_RETENTION_DAYS
+        )
+        if retention <= 0:
+            return
+        today = dt_util.now().date()
+        if reason != "config_change" and self._last_rule_sweep_day == today:
+            return
+        self._last_rule_sweep_day = today
+        ids = expired_rule_ids(self._entry.subentries.values(), today, retention)
+        if not ids:
+            return
+        _LOGGER.info(
+            "Sweeping %d expired date rule(s) [%s]",
+            len(ids), ", ".join(ids),
+        )
+        removed = 0
+        for sub_id in ids:
+            try:
+                if await self.hass.config_entries.async_remove_subentry(
+                    self._entry, sub_id
+                ):
+                    removed += 1
+            except Exception:
+                _LOGGER.exception("Failed to remove expired rule %s", sub_id)
+        if removed:
+            await self.run_optimizer(reason="expired_rules_swept", force=True)
+
     # ── Listeners ─────────────────────────────────────────────────────
 
     @callback
@@ -2365,6 +2405,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Realized cost capture registered; grid sensors pending "
                 "(set grid_import_sensor/grid_export_sensor or link an Emaldo unit)"
             )
+
+        # 8) Expired date-rule sweep — daily at 00:00 (retention cleanup).
+        unsub = async_track_time_change(
+            self.hass,
+            self._maybe_sweep_expired_rules,
+            hour="0",
+            minute="0",
+            second=0,
+        )
+        self._unsub_listeners.append(unsub)
 
     @callback
     def _on_ha_started(self, _event) -> None:

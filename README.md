@@ -147,6 +147,7 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Household load power sensor** | Entity ID of a combined household load power sensor in Watts (e.g. `sensor.combined_power`). Required when auto-tune is enabled. | *(empty)* |
 | **Idle slot strategy** | Controls what happens for slots where the optimizer has no action (see below). | `full_control` |
 | **SoC guard interval** | How often (minutes) to actively update the discharge floor marker. See [SoC Guard](#soc-guard). | `0` (disabled) |
+| **Auto-delete passed date rules** | Delete date-level rules after their end date. `0` = keep them (never auto-delete), `1` = next day, `7` = after 1 week, `30` = after 30 days. Weekday and default rules are never touched. | `0` (never) |
 | **Emaldo battery device** | Emaldo config entry to use. Shown as a dropdown — select the correct system when multiple Emaldo devices are installed. | first found |
 | **Enable PV sell strategy** | Initial default for the live `switch.battery_optimizer_pv_strategy` entity. When `true`, the optimizer will plan PV-to-grid slots on sunny days instead of always charging the battery. See [PV Sell Strategy](#pv-sell-strategy). | `false` |
 | **Min solar forecast for PV sell** | Minimum Solcast forecast (kWh) required to activate PV sell strategy. Below this threshold the strategy is skipped (cloudy day guard). | `10.0` |

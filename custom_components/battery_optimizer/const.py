@@ -48,6 +48,7 @@ CONF_SOLAR_ACTUAL_SENSOR = "solar_actual_sensor"
 
 CONF_GRID_IMPORT_SENSOR = "grid_import_sensor"
 CONF_GRID_EXPORT_SENSOR = "grid_export_sensor"
+CONF_RULE_RETENTION_DAYS = "rule_retention_days"
 
 # ── Solar forecast mode options ──────────────────────────────────────
 SOLAR_FORECAST_P50 = "p50"  # Solcast median (optimistic, current legacy)
@@ -126,6 +127,10 @@ OPTIMIZER_INTERVALS = [15, 30, 60, 120]
 # ── SoC Guard ────────────────────────────────────────────────────────
 DEFAULT_SOC_GUARD_INTERVAL = 0   # minutes, 0 = disabled
 SOC_GUARD_INTERVALS = [0, 15, 30, 60, 120]
+
+# ── Date-rule retention (auto-delete expired date rules) ─────────────
+DEFAULT_RULE_RETENTION_DAYS = 0   # 0 = keep forever (feature off)
+RULE_RETENTION_OPTIONS = [0, 1, 7, 30]
 
 # ── Idle strategy options ────────────────────────────────────────────
 IDLE_FULL_CONTROL = "full_control"

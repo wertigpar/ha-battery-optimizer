@@ -25,6 +25,7 @@
           "soc_recovery_buffer_pct": "SoC-återställningsbuffert (%) — underhållsladdningsmål = min SoC + buffert (standard 5)",
           "idle_strategy": "Strategi för tomgångsperioder (full_control = åsidosätt alla tomgångsperioder; solar_guard = åsidosätt endast tomgång före sol; smart_override = åsidosätt endast när den interna AI:n planerar laddning före sol)",
           "soc_guard_interval": "Uppdateringsintervall för SoC-skydd i minuter (0 = avaktiverad, 15/30/60/120). Justerar aktivt urladdningsgränsen för att förhindra snabbare urladdning än planerat.",
+          "rule_retention_days": "Ta bort passerade datumsregler automatiskt (0 = aldrig)",
           "optimizer_interval": "Intervall för optimizerens omberäkning i minuter (15/30/60/120). Hur ofta optimeraren beräknar om schemat.",
           "auto_base_load": "Automatisk injustering av baskraft från historik (använder sensorn för hushållets effekt)",
           "load_energy_sensor": "Sensor för hushållets effekt (W) för automatisk baskraft (t.ex. sensor.emhass_combined_power)",
@@ -72,6 +73,7 @@
           "soc_recovery_buffer_pct": "SoC-återställningsbuffert (%, underhållsladdningsmål = min SoC + buffert)",
           "idle_strategy": "Strategi för tomgångsperioder (full_control / solar_guard / smart_override)",
           "soc_guard_interval": "SoC-skyddsintervall (0=av, 15/30/60/120 min)",
+          "rule_retention_days": "Ta bort passerade datumsregler automatiskt (0 = aldrig)",
           "optimizer_interval": "Optimizeromberäkningsintervall (15/30/60/120 min)",
           "auto_base_load": "Automatisk injustering av baskraft från historik",
           "load_energy_sensor": "Sensor för hushållets effekt (W, för automatisk baskraft)",
@@ -292,6 +294,14 @@
         "full_control": "Full kontroll",
         "solar_guard": "Solskydd",
         "smart_override": "Smart åsidosättande"
+      }
+    },
+    "rule_retention": {
+      "options": {
+        "0": "Behåll alltid",
+        "1": "Nästa dag",
+        "7": "Efter 1 vecka",
+        "30": "Efter 30 dagar"
       }
     },
     "pv_sell": {

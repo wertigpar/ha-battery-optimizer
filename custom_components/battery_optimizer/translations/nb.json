@@ -25,6 +25,7 @@
           "soc_recovery_buffer_pct": "SoC-gjenopprettingsbuffer (%) — vedlikeholdsmål = min. SoC + buffer (standard 5)",
           "idle_strategy": "Strategi for tomgangsperioder (full_control = overstyr alle tomgangsperioder; solar_guard = overstyr bare tomgang før sol; smart_override = overstyr bare når den interne AI-en planlegger lading før sol)",
           "soc_guard_interval": "Oppdateringsintervall for SoC-beskyttelse i minutter (0 = av, 15/30/60/120). Justerer aktivt utladingsgrensen for å forhindre raskere utlading enn planlagt.",
+          "rule_retention_days": "Slett autom. dato-regler etter (0 = aldri)",
           "optimizer_interval": "Intervall for optimizerens omberegning i minutter (15/30/60/120). Hvor ofte optimereren beregner tidsplanen på nytt.",
           "auto_base_load": "Automatisk justering av grunnlast fra historikk (bruker sensoren for husholdningens effekt)",
           "load_energy_sensor": "Sensor for husholdningens effekt (W) for automatisk grunnlast (f.eks. sensor.emhass_combined_power)",
@@ -72,6 +73,7 @@
           "soc_recovery_buffer_pct": "SoC-gjenopprettingsbuffer (%, vedlikeholdsmål = min. SoC + buffer)",
           "idle_strategy": "Strategi for tomgangsperioder (full_control / solar_guard / smart_override)",
           "soc_guard_interval": "SoC-beskyttelsesintervall (0=av, 15/30/60/120 min)",
+          "rule_retention_days": "Slett autom. dato-regler etter (0 = aldri)",
           "optimizer_interval": "Optimizeromberegningsintervall (15/30/60/120 min)",
           "auto_base_load": "Automatisk justering av grunnlast fra historikk",
           "load_energy_sensor": "Sensor for husholdningens effekt (W, for automatisk grunnlast)",
@@ -292,6 +294,14 @@
         "full_control": "Full kontroll",
         "solar_guard": "Solbeskyttelse",
         "smart_override": "Smart overstyring"
+      }
+    },
+    "rule_retention": {
+      "options": {
+        "0": "Behold alltid",
+        "1": "Neste dag",
+        "7": "Etter 1 uke",
+        "30": "Etter 30 dager"
       }
     },
     "pv_sell": {

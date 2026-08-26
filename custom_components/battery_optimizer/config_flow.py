@@ -65,6 +65,7 @@ from .const import (
     CONF_SOLAR_ACTUAL_SENSOR,
     CONF_GRID_IMPORT_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
+    CONF_RULE_RETENTION_DAYS,
     SOLAR_FORECAST_P50,
     SOLAR_FORECAST_P10,
     DEFAULT_VAT_MULTIPLIER,
@@ -97,6 +98,8 @@ from .const import (
     DEFAULT_SOLAR_ACTUAL_SENSOR,
     DEFAULT_GRID_IMPORT_SENSOR,
     DEFAULT_GRID_EXPORT_SENSOR,
+    DEFAULT_RULE_RETENTION_DAYS,
+    RULE_RETENTION_OPTIONS,
     SOLAR_SCALE_MAX,
 )
 from .rules import (
@@ -327,6 +330,19 @@ def _build_schema(
                 ),
                 description="Leave empty to auto-detect the grid export sensor from the linked Emaldo unit.",
             ): str,
+            vol.Optional(
+                CONF_RULE_RETENTION_DAYS,
+                default=str(
+                    _int_default(
+                        CONF_RULE_RETENTION_DAYS, DEFAULT_RULE_RETENTION_DAYS
+                    )
+                ),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[str(v) for v in RULE_RETENTION_OPTIONS],
+                    translation_key="rule_retention",
+                )
+            ),
         }
     )
 

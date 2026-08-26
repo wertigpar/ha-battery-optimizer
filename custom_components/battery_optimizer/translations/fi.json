@@ -25,6 +25,7 @@
           "soc_recovery_buffer_pct": "SoC-palautuspuskuri (%) — ylläpidon lataustavoite = Min SoC + puskuri (oletus 5)",
           "idle_strategy": "Tyhjäkäyntituntien strategia (full_control = ohita kaikki tyhjäkäyntitunnit; solar_guard = ohita tyhjäkäynti vain ennen aurinkoa; smart_override = ohita vain kun sisäinen AI suunnittelee latausta ennen aurinkoa)",
           "soc_guard_interval": "SoC-suojan päivitysväli minuutteina (0 = pois käytöstä, 15/30/60/120). Säätää aktiivisesti purkurajaa estääkseen suunniteltua nopeamman purkamisen.",
+          "rule_retention_days": "Poista vanhentuneet päivämääräsäännöt (0 = ei koskaan)",
           "optimizer_interval": "Optimoijan uudelleenajon väli minuutteina (15/30/60/120). Kuinka usein optimoija laskee aikataulun uudelleen.",
           "auto_base_load": "Automaattinen peruskuorman hienosäätö historiasta (käyttää kotitalouden kuormatehoanturia)",
           "load_energy_sensor": "Kotitalouden kuormatehoanturi (W) automaattista peruskuormaa varten (esim. sensor.emhass_combined_power)",
@@ -72,6 +73,7 @@
           "soc_recovery_buffer_pct": "SoC-palautuspuskuri (%, ylläpidon tavoite = Min SoC + puskuri)",
           "idle_strategy": "Tyhjäkäyntituntien strategia (full_control / solar_guard / smart_override)",
           "soc_guard_interval": "SoC-suojaväli (0=pois, 15/30/60/120 min)",
+          "rule_retention_days": "Poista vanhentuneet päivämääräsäännöt (0 = ei koskaan)",
           "optimizer_interval": "Optimoijan uudelleenajoväli (15/30/60/120 min)",
           "auto_base_load": "Automaattinen peruskuorman hienosäätö historiasta",
           "load_energy_sensor": "Kotitalouden kuormatehoanturi (W, automaattista peruskuormaa varten)",
@@ -292,6 +294,14 @@
         "full_control": "Täysi ohjaus",
         "solar_guard": "Aurinkosuoja",
         "smart_override": "Älykäs ohitus"
+      }
+    },
+    "rule_retention": {
+      "options": {
+        "0": "Säilytä aina",
+        "1": "Seuraavana päivänä",
+        "7": "Viikon kuluttua",
+        "30": "30 päivän kuluttua"
       }
     },
     "pv_sell": {
