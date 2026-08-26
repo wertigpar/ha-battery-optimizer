@@ -225,6 +225,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await _ensure_default_rule(hass, entry)
 
+    # Restore the persisted cost history so the realized-cost sensors
+    # publish real values right after setup (not 0.0 until the first
+    # 15-minute capture tick reloads the sidecar).
+    await coordinator.async_restore_cost_history()
+
     # Set up checkpoint & Nordpool listeners
     coordinator.async_setup_listeners()
 

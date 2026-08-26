@@ -155,6 +155,24 @@ def default_rule_title(rule: UserRule) -> str:
     return f"{DEFAULT_RULE_LABEL} ({summary})"
 
 
+def rule_title(rule: UserRule) -> str:
+    """Subentry title shown in the config flow / rule list.
+
+    Default rules keep their stable "Default Schedule (...)" label; other
+    rules use their summary (optionally prefixed by the label).  Disabled
+    rules get an explicit "(disabled)" suffix.
+    """
+    if rule.level == LEVEL_DEFAULT:
+        title = default_rule_title(rule)
+    elif rule.label:
+        title = f"{rule.label}: {rule_summary(rule)}"
+    else:
+        title = rule_summary(rule)
+    if not rule.enabled:
+        title = f"{title} (disabled)"
+    return title
+
+
 def _parse_hhmm(value: str) -> tuple[int, int] | None:
     """Parse 'HH:MM' -> (hours, minutes); None when malformed."""
     try:

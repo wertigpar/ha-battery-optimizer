@@ -106,8 +106,7 @@ from .rules import (
     UserRule,
     rule_errors,
     rule_from_data,
-    rule_summary,
-    default_rule_title,
+    rule_title,
     LEVEL_WEEKDAY,
     LEVEL_DATE,
     LEVEL_DEFAULT,
@@ -570,14 +569,9 @@ class RuleSubentryFlow(ConfigSubentryFlow):
             "label": rule.label,
             "enabled": rule.enabled,
         }
-        # default rule keeps its stable "Default Schedule" label, with the
-        # governing source appended (Optimizer / Original / manual action)
-        if rule.level == LEVEL_DEFAULT:
-            title = default_rule_title(rule)
-        elif rule.label:
-            title = f"{rule.label}: {rule_summary(rule)}"
-        else:
-            title = rule_summary(rule)
+        # Title: stable default-rule label, or summary (with optional label
+        # prefix); disabled rules get an explicit "(disabled)" suffix.
+        title = rule_title(rule)
 
         if editing is not None:
             entry = self._get_entry()

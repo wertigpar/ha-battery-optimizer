@@ -14,7 +14,21 @@
   recomputes. Files: `config_flow.py`, `coordinator.py`, `rules.py`,
   `const.py`, `strings.json`, `translations/*`.
 
+### Changed
+
+- **Disabled rules show "(disabled)" in their title** — the rule subentry
+  title now carries an explicit `(disabled)` suffix whenever the rule's
+  `enabled` flag is off, both when edited in the UI and when toggled via the
+  per-rule switch (the latter now also refreshes the title on toggle).
+  Files: `rules.py`, `config_flow.py`, `coordinator.py`.
+
 ### Fixed
+
+- **Realized-cost sensors show real values immediately after an HA restart** —
+  the persisted 60-day cost-history sidecar was only loaded on the first
+  15-minute capture tick, so `realized_cost_today` published `0.0` for up to
+  15 minutes after every restart. The sidecar is now restored eagerly at setup.
+  Files: `__init__.py`, `coordinator.py`.
 
 - **Rule editor no longer drops the Enabled flag** — `_detail_step` built the
   saved subentry data WITHOUT the `enabled` key, so editing any schedule rule in

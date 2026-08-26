@@ -108,6 +108,7 @@ from .optimizer import (
 from .rules import (
     UserRule,
     rule_from_data,
+    rule_title,
     expand_day,
     expired_rule_ids,
     mask_plan,
@@ -1373,6 +1374,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Could not write cost history to %s", self._cost_history_path
             )
 
+    async def async_restore_cost_history(self) -> None:
+        """Eagerly load the persisted cost-history sidecar (idempotent).
+
+        Called at setup so the realized-cost sensors publish the persisted
+        series immediately instead of falling back to 0.0 until the first
+        15-minute capture tick reloads the sidecar.
+        """
+        if self._cost_history is None:
+            self._cost_history = await self.hass.async_add_executor_job(
+                self._load_cost_history
+            )
+
     def _read_counter_kwh(self, entity_id: str) -> float | None:
         """Read a cumulative energy counter entity and normalize to kWh."""
         state = self.hass.states.get(entity_id)
@@ -2632,14 +2645,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def set_rule_enabled(self, subentry_id: str, enabled: bool) -> None:
         """Enable/disable a single User Schedule rule (Pause/Resume).
 
-        Persists the flag onto the rule subentry (merge, not overwrite) and
+        Persists the flag onto the rule subentry (merge, not overwrite),
+        refreshes the subentry title (disabled rules show "(disabled)") and
         re-runs the optimizer so the schedule is recomputed immediately.
         """
         sub = self._entry.subentries.get(subentry_id)
         if sub is None:
             return
         data = {**dict(sub.data), "enabled": bool(enabled)}
-        await self.hass.config_entries.async_update_subentry(self._entry, sub, data=data)
+        title = rule_title(rule_from_data(data))
+        await self.hass.config_entries.async_update_subentry(
+            self._entry, sub, data=data, title=title
+        )
         await self.run_optimizer(reason="rule_enabled_changed", force=True)
 
     async def _set_pv_switch(self, turn_on: bool) -> None:
