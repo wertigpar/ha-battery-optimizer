@@ -552,6 +552,7 @@ class RuleSubentryFlow(ConfigSubentryFlow):
             "soc_target": rule.soc_target,
             "pv_sell": rule.pv_sell,
             "label": rule.label,
+            "enabled": rule.enabled,
         }
         # default rule keeps its stable "Default Schedule" label, with the
         # governing source appended (Optimizer / Original / manual action)

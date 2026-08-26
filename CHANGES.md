@@ -1,5 +1,18 @@
 # Changes
 
+## v0.3.7
+
+### Fixed
+
+- **Rule editor no longer drops the Enabled flag** — `_detail_step` built the
+  saved subentry data WITHOUT the `enabled` key, so editing any schedule rule in
+  the UI (e.g. unchecking "Enabled") reset the flag to the default True: the
+  checkbox reappeared enabled, the per-rule switch stayed on, and the plan kept
+  applying the rule. The save dict now includes `enabled` from the rule model,
+  so a rule disabled in the editor persists as disabled. The per-rule toggle
+  switch already worked (`set_rule_enabled` merges the flag); the editor simply
+  never wrote it. File: `config_flow.py`.
+
 ## v0.3.6b1
 
 ### Fixed
