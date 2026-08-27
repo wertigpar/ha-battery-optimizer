@@ -1208,9 +1208,12 @@ def optimize(
     if initial_soc_pct is not None:
         current_soc_kwh = cfg.capacity_kwh * initial_soc_pct / 100.0
     else:
-        _LOGGER.warning(
+        # Issue #16 hardening: the coordinator refuses to call with None, so
+        # this only fires for direct API callers.  Plan quality is degraded
+        # (zero discharge budget) — log it as an error, not a warning.
+        _LOGGER.error(
             "initial_soc_pct is None — defaulting to soc_min (%.0f%%). "
-            "Schedule will assume near-empty battery!",
+            "Schedule will assume near-empty battery and DISCHARGE NOTHING!",
             cfg.soc_min,
         )
         current_soc_kwh = soc_min_kwh

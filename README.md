@@ -1549,6 +1549,9 @@ battery_optimizer/
 
 Full release history: [CHANGES.md](CHANGES.md).
 
+### v0.3.8
+- **Fixed** — unreadable battery SoC no longer degrades the plan to all-idle over the profitable window (issue #16): last-known-SoC fallback + skip-run with no history.
+
 ### v0.3.7
 - **Fixed** — disabling a schedule rule in the rule editor now persists (`enabled` flag was dropped from the saved subentry data).
 

@@ -251,6 +251,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "battery_optimizer_cost_history.json"
         )
         self._cost_history: list[dict] | None = None
+        # Last successfully read battery SoC — fallback if a later read fails.
+        self._last_known_soc: float | None = None
         # PV sell strategy
         self._pv_strategy_enabled: bool = self.config.get(
             CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY
@@ -1509,6 +1511,27 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._restore_runtime_state()
         _LOGGER.info("Optimizer triggered: reason=%s, force=%s", reason, force)
 
+        # Battery SoC guard (issue #16): a failed/unavailable SoC read must
+        # never degrade into an all-idle plan pushed over a profitable window.
+        # Fall back to the last known good value; with no history at all,
+        # skip the run entirely and keep the previously pushed schedule.
+        soc = self._get_battery_soc()
+        if soc is None:
+            if self._last_known_soc is not None:
+                soc = self._last_known_soc
+                _LOGGER.warning(
+                    "Battery SoC unreadable — reusing last known value %.1f%%",
+                    soc,
+                )
+            else:
+                _LOGGER.error(
+                    "Battery SoC unreadable and no last-known value — "
+                    "skipping optimization (prior schedule kept)"
+                )
+                return None
+        else:
+            self._last_known_soc = soc
+
         # Gather data
         try:
             prices_today, prices_tomorrow = self._parse_price_data()
@@ -1531,7 +1554,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._resolve_solar_scale
         )
         solar = self._get_solcast_forecast("today")
-        soc = self._get_battery_soc()
         self._auto_base_load_value = await self._fetch_auto_base_load_kw()
         cfg = self._build_battery_config()
         # Cache today's buy/sell prices for the 15-min cost-capture task.
