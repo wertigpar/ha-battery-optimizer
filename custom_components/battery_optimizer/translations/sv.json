@@ -95,6 +95,9 @@
       },
       "clear_schedule": {
         "name": "Rensa schema"
+      },
+      "export_plan_analysis": {
+        "name": "Exportera plananalys"
       }
     },
     "sensor": {

@@ -27,3 +27,11 @@ clear_schedule:
   description: >
     Remove all battery override slots, reverting the battery to its
     internal (built-in) schedule.
+
+export_plan_analysis:
+  name: Export plan analysis
+  description: >
+    Renders the last optimizer run snapshot (inputs, plan, and the
+    gate/budget math) into battery_optimizer_analysis.md in the config
+    directory.
+  fields: {}

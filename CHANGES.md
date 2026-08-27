@@ -1,21 +1,5 @@
 # Changes
 
-## v0.3.8
-
-### Fixed
-
-- **Unreadable battery SoC no longer silently degrades the plan (issue #16)** —
-  when the battery SoC read fails or returns `unknown`/`unavailable` at plan
-  time, `run_optimizer` previously fell back to `soc_min`, which zeroed the
-  discharge budget and pushed an all-idle 24h override straight through the
-  day's most profitable window — reported by a user whose battery was actually
-  full. Now: (1) the last known good SoC is reused instead, (2) when there is
-  no history at all the run is **skipped** (prior schedule kept) with an ERROR
-  logged, and (3) the `optimize()` fallback logs at ERROR level if it is ever
-  reached by a direct caller. The latent `None SoC × custom rules` crash in
-  `_apply_user_mask` is gone with it (a valid SoC is now guaranteed before the
-  mask path). Files: `coordinator.py`, `optimizer.py`.
-
 ## v0.3.7
 
 ### Added
@@ -29,6 +13,17 @@
   rule's `rule_enabled` switch entity disappears with it and the plan
   recomputes. Files: `config_flow.py`, `coordinator.py`, `rules.py`,
   `const.py`, `strings.json`, `translations/*`.
+
+- **Plan forensics export (button + `export_plan_analysis` service)** — every
+  optimizer run now snapshots its inputs, planned schedule, and the gate/budget
+  decisions to an in-memory record; an **Export Plan Analysis** button (and the
+  `battery_optimizer.export_plan_analysis` service) renders that snapshot to
+  `battery_optimizer_analysis.md` in the config directory — input prices, solar,
+  the SoC input path, the chosen plan (slot/action/buy/sell/SoC/profit), the
+  decision trace (floor recovery, SoC cutover, starvation/sell gates), and the
+  outcome. Intended for debugging/forensics of `battery_optimizer_schedule_chart`
+  decisions. Files: `coordinator.py`, `optimizer.py`, `plan_export.py`,
+  `button.py`, `services.py`, `services.yaml`.
 
 ### Changed
 
@@ -54,6 +49,18 @@
   so a rule disabled in the editor persists as disabled. The per-rule toggle
   switch already worked (`set_rule_enabled` merges the flag); the editor simply
   never wrote it. File: `config_flow.py`.
+
+- **Unreadable battery SoC no longer silently degrades the plan (issue #16)** —
+  when the battery SoC read fails or returns `unknown`/`unavailable` at plan
+  time, `run_optimizer` previously fell back to `soc_min`, which zeroed the
+  discharge budget and pushed an all-idle 24h override straight through the
+  day's most profitable window — reported by a user whose battery was actually
+  full. Now: (1) the last known good SoC is reused instead, (2) when there is
+  no history at all the run is **skipped** (prior schedule kept) with an ERROR
+  logged, and (3) the `optimize()` fallback logs at ERROR level if it is ever
+  reached by a direct caller. The latent `None SoC × custom rules` crash in
+  `_apply_user_mask` is gone with it (a valid SoC is now guaranteed before the
+  mask path). Files: `coordinator.py`, `optimizer.py`.
 
 ## v0.3.6b1
 

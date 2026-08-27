@@ -543,12 +543,13 @@ The integration creates 2 switch entities:
 
 ## Buttons
 
-The integration creates 2 button entities:
+The integration creates 3 button entities:
 
 | Entity | Description |
 |---|---|
 | **Run Optimizer** | Manually trigger an optimization run. Equivalent to calling `battery_optimizer.run_optimizer` with `reason: manual_button, force: true`. |
 | **Clear Schedule** | Remove all battery override slots, reverting the battery to its internal (built-in) schedule. Equivalent to `battery_optimizer.clear_schedule`. |
+| **Export Plan Analysis** | Render the last optimizer run snapshot (inputs, plan, gates/budget) to `battery_optimizer_analysis.md` in the config directory. For debugging/game-forensics of the schedule chart. Equivalent to `battery_optimizer.export_plan_analysis`. |
 
 ### Schedule Chart Attribute Format
 
@@ -645,6 +646,38 @@ Remove all battery override slots, reverting the battery to its internal (built-
 ```yaml
 service: battery_optimizer.clear_schedule
 ```
+
+### `battery_optimizer.export_plan_analysis`
+
+Render the last optimizer run snapshot to `battery_optimizer_analysis.md` in the config directory. Takes no parameters. The file captures the inputs (prices, solar, SoC input path), the chosen plan per slot (action / buy / sell / SoC / profit), the decision trail (floor recovery, SoC cutover, starvation/sell gates), and the outcome — for debugging why the schedule chart chose what it did. No snapshot yet (no run since restart) → logs a warning and writes nothing.
+
+```yaml
+service: battery_optimizer.export_plan_analysis
+```
+
+### Collecting the analysis report
+
+The report is a plain markdown file written to your Home Assistant **config directory** as
+`<config>/battery_optimizer_analysis.md` (on HA OS: `/config/battery_optimizer_analysis.md`).
+
+1. **Trigger it** — either press the **Export Plan Analysis** button on the Battery Optimizer device card, or call `battery_optimizer.export_plan_analysis` (no parameters). Exporting right after pressing **Run Optimizer** gives the freshest plan.
+2. **Open the file** — any of:
+   - **File editor** or **Studio Code Server** add-on: open `battery_optimizer_analysis.md` in the config root.
+   - **Samba share**: `\\<ha-host>\config\battery_optimizer_analysis.md`.
+   - Terminal: `cat /config/battery_optimizer_analysis.md`.
+3. **Read it** — the file is written for humans *and* LLMs: cost breakdown (baseline vs optimizer vs the Emaldo internal-plan benchmark), decision trace (gates/budgets), per-slot plan, and an "AI evaluation" section. Paste the whole file into an LLM chat to get a plan-quality review.
+
+The coordinator also keeps companion sidecar JSONs in the same directory — copy them along if you want raw data:
+
+| File | Content |
+|---|---|
+| `battery_optimizer_run_snapshot.json` | Full machine-readable snapshot of the last run (prices, solar, plan, trace, outcome) |
+| `battery_optimizer_runtime.json` | Last-run slot/scale + live plan slots |
+| `battery_optimizer_accuracy.json` | Solar-forecast accuracy records |
+| `battery_optimizer_cost_history.json` | 60-day realized-cost history |
+| `battery_optimizer_solar_regime.json` | Solar regime state (EWMA, high/low day counts) |
+
+> The snapshot is **last write wins**: periodic checkpoints that skip planning also record a small skip snapshot and overwrite the previous one. If the export shows "Skipped run", press **Run Optimizer** first, then export.
 
 ## Automatic Triggers
 
@@ -1527,16 +1560,17 @@ The Emaldo integration is not loaded or its services haven't registered yet. The
 battery_optimizer/
 ├── __init__.py          # HA entry setup, platform forwarding (sensor + button + switch)
 ├── brand/               # Logos + icons (HACS branding)
-├── button.py            # Run Optimizer + Clear Schedule buttons
+├── button.py            # Run Optimizer + Clear Schedule + Export Plan Analysis buttons
 ├── config_flow.py       # UI config + options flow + user schedule rule subentries
 ├── const.py             # All constants, defaults, slot encoding
-├── coordinator.py       # Data gathering, trigger management, Emaldo push, PV strategy
+├── coordinator.py       # Data gathering, trigger management, Emaldo push, PV strategy, run snapshots
 ├── manifest.json        # Integration metadata
 ├── optimizer.py         # Greedy solver — core optimization algorithm + PV sell planner
+├── plan_export.py       # Pure renderer: run snapshot -> markdown analysis report
 ├── rules.py             # User schedule rule models, validation, precedence resolution
 ├── runtime_state.py     # Persisted runtime state (rule sources, PV sources, winners)
 ├── sensor.py            # 18 sensor entities
-├── services.py          # run_optimizer + clear_schedule services
+├── services.py          # run_optimizer + clear_schedule + export_plan_analysis services
 ├── services.yaml        # Service descriptions for UI
 ├── solar_actual.py      # Actual solar reading (Emaldo-internal vs external counter)
 ├── solar_scale.py       # Solar forecast auto-tune (EWMA scaling from accuracy history)

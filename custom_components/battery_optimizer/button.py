@@ -27,6 +27,7 @@ async def async_setup_entry(
     async_add_entities([
         RunOptimizerButton(coordinator, entry),
         ClearScheduleButton(coordinator, entry),
+        ExportPlanButton(coordinator, entry),
     ], config_subentry_id=coordinator._device_subentry_id())
 
 
@@ -80,3 +81,26 @@ class ClearScheduleButton(CoordinatorEntity[BatteryOptimizerCoordinator], Button
             _LOGGER.info("Schedule cleared (reset to internal)")
         else:
             _LOGGER.warning("Emaldo reset_to_internal service not available")
+
+
+class ExportPlanButton(CoordinatorEntity[BatteryOptimizerCoordinator], ButtonEntity):
+    """Button to export the last optimizer run analysis as markdown."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Export Plan Analysis"
+    _attr_translation_key = "export_plan_analysis"
+    _attr_icon = "mdi:file-export-outline"
+
+    def __init__(self, coordinator: BatteryOptimizerCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_export_plan_analysis"
+
+    @property
+    def device_info(self):
+        """Return device info for the virtual Battery Optimizer device."""
+        return self.coordinator.device_info
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        _LOGGER.info("Plan analysis export triggered via button")
+        await self.coordinator.export_plan_analysis()

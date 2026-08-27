@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 import json
 import logging
+import os
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -128,6 +129,7 @@ from .cost_history import (
     day_totals,
 )
 from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
+from .plan_export import render_analysis
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -145,6 +147,34 @@ def _action_to_mode(action: str) -> int:
     if action == "discharge":
         return -1
     return 0
+
+
+def _write_json(path: str, data: dict) -> None:
+    """Synchronous JSON write (executor-safe)."""
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+
+
+def _write_text(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+_MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "manifest.json")
+try:
+    with open(_MANIFEST_PATH, encoding="utf-8") as _fh:
+        _INTEGRATION_VERSION = json.load(_fh).get("version", "unknown")
+except (OSError, ValueError):
+    _INTEGRATION_VERSION = "unknown"
+
+
+def _config_snapshot(cfg) -> dict:
+    """Plain-dict snapshot of the BatteryConfig in effect for a run."""
+    import dataclasses
+
+    snap = dataclasses.asdict(cfg)
+    snap.pop("enable_soc_safeguard", None)  # already reflected by floor target
+    return snap
 
 
 class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -251,6 +281,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "battery_optimizer_cost_history.json"
         )
         self._cost_history: list[dict] | None = None
+        self._snapshot_path = self.hass.config.path(
+            "battery_optimizer_run_snapshot.json"
+        )
+        self._last_snapshot: dict | None = None
         # Last successfully read battery SoC — fallback if a later read fails.
         self._last_known_soc: float | None = None
         # PV sell strategy
@@ -1474,6 +1508,39 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Push the new record to all coordinator-backed entities (incl. cost sensors).
         self.async_update_listeners()
 
+    async def _capture_run_snapshot(self, snapshot: dict) -> None:
+        """Persist the last optimizer-run snapshot (last write wins)."""
+        snapshot["_written"] = dt_util.now().isoformat(timespec="seconds")
+        self._last_snapshot = snapshot
+        try:
+            await self.hass.async_add_executor_job(
+                _write_json, self._snapshot_path, snapshot
+            )
+        except OSError:
+            _LOGGER.warning(
+                "Could not write run snapshot to %s", self._snapshot_path
+            )
+
+    async def export_plan_analysis(self) -> str | None:
+        """Render the last run snapshot to a markdown analysis file.
+
+        Returns the written path, or None when no snapshot exists / write fails.
+        """
+        if self._last_snapshot is None:
+            _LOGGER.warning(
+                "No run snapshot available yet — run the optimizer first"
+            )
+            return None
+        md = render_analysis(self._last_snapshot)
+        path = self.hass.config.path("battery_optimizer_analysis.md")
+        try:
+            await self.hass.async_add_executor_job(_write_text, path, md)
+        except OSError:
+            _LOGGER.exception("Could not write plan analysis to %s", path)
+            return None
+        _LOGGER.info("Plan analysis exported to %s", path)
+        return path
+
     @property
     def realized_cost_history(self) -> list[dict]:
         """Full persisted cost-history series (oldest→newest)."""
@@ -1519,6 +1586,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if soc is None:
             if self._last_known_soc is not None:
                 soc = self._last_known_soc
+                soc_input_flag = "last_known"
                 _LOGGER.warning(
                     "Battery SoC unreadable — reusing last known value %.1f%%",
                     soc,
@@ -1528,19 +1596,45 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Battery SoC unreadable and no last-known value — "
                     "skipping optimization (prior schedule kept)"
                 )
+                await self._capture_run_snapshot(
+                    {
+                        "state": "soc_guard_skip",
+                        "planned": False,
+                        "reason": reason,
+                        "initial_soc_pct": None,
+                        "last_known_soc": self._last_known_soc,
+                    }
+                )
                 return None
         else:
             self._last_known_soc = soc
+            soc_input_flag = "read"
 
         # Gather data
         try:
             prices_today, prices_tomorrow = self._parse_price_data()
         except Exception:
             _LOGGER.exception("Failed to parse price data")
+            await self._capture_run_snapshot(
+                {
+                    "state": "price_parse_error",
+                    "planned": False,
+                    "reason": reason,
+                    "initial_soc_pct": soc,
+                }
+            )
             return None
 
         if prices_today is None:
             _LOGGER.error("Cannot optimize: no prices available")
+            await self._capture_run_snapshot(
+                {
+                    "state": "no_prices",
+                    "planned": False,
+                    "reason": reason,
+                    "initial_soc_pct": soc,
+                }
+            )
             return None
 
         _LOGGER.info(
@@ -1566,18 +1660,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cost_sell_prices = sell_prices
         now_slot = _current_slot_index()
 
-        if soc is None:
-            if self._ha_started:
-                _LOGGER.error(
-                    "Cannot optimize: battery SoC could not be read. "
-                    "Ensure the Emaldo integration is loaded and the device is online.",
-                )
-            else:
-                _LOGGER.debug(
-                    "Skipping startup optimizer run — Emaldo integration not ready yet"
-                )
-            return None
-
         _LOGGER.info("Battery SoC: %.1f%%, start_slot: %d", soc, now_slot)
 
         # Record actual SoC for dashboard overlay
@@ -1588,6 +1670,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not force and self._last_result is not None:
             if not self._should_reoptimize(soc, cfg):
                 _LOGGER.info("Skipping optimization — no significant changes")
+                await self._capture_run_snapshot(
+                    {
+                        "state": "no_change_skip",
+                        "planned": False,
+                        "reason": reason,
+                        "initial_soc_pct": soc,
+                        "start_slot": now_slot,
+                    }
+                )
                 return self._last_result
 
         # Compute plan accuracy from the previous result before overwriting
@@ -1724,7 +1815,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._last_result_tomorrow = None
 
         # Push today (+ tomorrow if available) to Emaldo
-        await self._push_schedule(result, self._last_result_tomorrow)
+        push_overrides = await self._push_schedule(result, self._last_result_tomorrow)
 
         # Apply PV sell strategy (controls Emaldo third-party PV switch)
         await self._apply_pv_strategy(result)
@@ -1739,6 +1830,62 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_run": self._last_run.isoformat(),
             "reason": reason,
             "activated_time": self._activated_time,
+        })
+
+        await self._capture_run_snapshot({
+            "state": "planned",
+            "planned": True,
+            "version": _INTEGRATION_VERSION,
+            "entry": self._entry.entry_id,
+            "reason": reason,
+            "start_slot": now_slot,
+            "soc_input": soc_input_flag,
+            "initial_soc_pct": soc,
+            "emaldo_control_enabled": self._emaldo_control_enabled,
+            "config": _config_snapshot(cfg),
+            "pv_strategy_enabled": self._pv_strategy_enabled,
+            "prices_today_raw": prices_today,
+            "prices_tomorrow_raw": prices_tomorrow or [],
+            "buy_prices": buy_prices,
+            "sell_prices": sell_prices,
+            "solar_15min": solar,
+            "emaldo_modes": emaldo_modes or [],
+            "plan": [
+                {
+                    "index": sp.index,
+                    "action": sp.action,
+                    "slot_value": sp.slot_value,
+                    "buy_price": sp.buy_price,
+                    "sell_price": sp.sell_price,
+                    "solar_kw": sp.solar_kw,
+                    "load_kw": sp.load_kw,
+                    "soc_after": sp.soc_after,
+                    "profit": sp.profit,
+                    "export_kwh": sp.export_kwh,
+                }
+                for sp in result.slots
+            ],
+            "trace": result.trace,
+            "push_overrides": push_overrides,
+            "outcome": {
+                "total_profit": result.total_profit,
+                "baseline_cost": result.baseline_cost,
+                "actual_cost": round(result.baseline_cost - result.total_profit, 4),
+                "net_profit": result.net_profit,
+                "wear_cost_total": result.wear_cost_total,
+                "cycled_kwh": result.cycled_kwh,
+                "charge_slots": result.charge_slots,
+                "discharge_slots": result.discharge_slots,
+                "idle_slots": result.idle_slots,
+            },
+            "emaldo_plan_cost": result.emaldo_cost,
+            "emaldo_plan": {
+                "grid_cost": round(result.emaldo_grid_cost, 4),
+                "wear_cost": round(result.emaldo_wear_total, 4),
+                "cycled_kwh": round(result.emaldo_cycled_kwh, 3),
+                "import_kwh": round(result.emaldo_import_kwh, 3),
+                "export_kwh": round(result.emaldo_export_kwh, 3),
+            },
         })
 
         return result
@@ -1937,7 +2084,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         result: OptimizationResult,
         result_tomorrow: OptimizationResult | None = None,
-    ) -> None:
+    ) -> int | None:
         """Push optimizer schedule to Emaldo using rolling 24h slot mapping.
 
         The Emaldo E2E override uses a rolling 24-hour window:
@@ -1954,21 +2101,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug(
                 "Emaldo control disabled — schedule computed but not applied"
             )
-            return
+            return None
 
         if not self.hass.services.has_service(EMALDO_DOMAIN, "apply_bulk_schedule"):
             _LOGGER.warning(
                 "Emaldo service 'apply_bulk_schedule' not available — "
                 "schedule computed but not applied"
             )
-            return
+            return None
 
         if self._is_balancing_active():
             _LOGGER.info(
                 "Balancing active (%s) — skipping schedule push",
                 self.hass.states.get(self._balancing_sensor).state,
             )
-            return
+            return None
 
         emaldo_modes = self._read_emaldo_internal_modes()
         now_slot = _current_slot_index()
@@ -2050,7 +2197,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "no overrides needed"
             )
             await self._refresh_emaldo_schedule()
-            return
+            return None
 
         # SoC Guard: remap discharge slot values to use a unified
         # high_marker and send it as a global parameter.  The Emaldo
@@ -2100,6 +2247,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info("Rolling schedule applied to Emaldo successfully")
         except Exception as err:
             _LOGGER.error("Failed to push schedule to Emaldo: %s", err)
+
+        return overrides_needed
 
     def _compute_activated_time(
         self,

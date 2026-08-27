@@ -15,6 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SERVICE_RUN_OPTIMIZER = "run_optimizer"
 SERVICE_CLEAR_SCHEDULE = "clear_schedule"
+SERVICE_EXPORT_PLAN = "export_plan_analysis"
 
 SCHEMA_RUN_OPTIMIZER = vol.Schema(
     {
@@ -24,6 +25,7 @@ SCHEMA_RUN_OPTIMIZER = vol.Schema(
 )
 
 SCHEMA_CLEAR_SCHEDULE = vol.Schema({})
+SCHEMA_EXPORT_PLAN = vol.Schema({})
 
 
 async def async_handle_run_optimizer(hass: HomeAssistant, call: ServiceCall) -> None:
@@ -59,6 +61,20 @@ async def async_handle_clear_schedule(hass: HomeAssistant, call: ServiceCall) ->
     _LOGGER.info("Battery schedule cleared (reset to internal)")
 
 
+async def async_handle_export_plan(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Handle export_plan_analysis service call — export each entry's last snapshot."""
+    entries = hass.data.get(DOMAIN, {})
+    if not entries:
+        _LOGGER.error("No battery_optimizer entries found")
+        return
+    for entry_id, coordinator in entries.items():
+        path = await coordinator.export_plan_analysis()
+        _LOGGER.info(
+            "Exported plan analysis for %s %s",
+            entry_id, f"-> {path}" if path else "(no snapshot / failed)",
+        )
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     """Register battery_optimizer services."""
     if hass.services.has_service(DOMAIN, SERVICE_RUN_OPTIMIZER):
@@ -70,11 +86,17 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def handle_clear_schedule(call: ServiceCall) -> None:
         await async_handle_clear_schedule(hass, call)
 
+    async def handle_export_plan(call: ServiceCall) -> None:
+        await async_handle_export_plan(hass, call)
+
     hass.services.async_register(
         DOMAIN, SERVICE_RUN_OPTIMIZER, handle_run_optimizer, schema=SCHEMA_RUN_OPTIMIZER
     )
     hass.services.async_register(
         DOMAIN, SERVICE_CLEAR_SCHEDULE, handle_clear_schedule, schema=SCHEMA_CLEAR_SCHEDULE
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_EXPORT_PLAN, handle_export_plan, schema=SCHEMA_EXPORT_PLAN
     )
     _LOGGER.info("Battery optimizer services registered")
 
@@ -83,3 +105,4 @@ def async_unregister_services(hass: HomeAssistant) -> None:
     """Unregister battery_optimizer services when last entry is removed."""
     hass.services.async_remove(DOMAIN, SERVICE_RUN_OPTIMIZER)
     hass.services.async_remove(DOMAIN, SERVICE_CLEAR_SCHEDULE)
+    hass.services.async_remove(DOMAIN, SERVICE_EXPORT_PLAN)

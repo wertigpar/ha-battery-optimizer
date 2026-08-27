@@ -171,6 +171,7 @@ class OptimizationResult:
     emaldo_import_commission: float = 0.0
     emaldo_export_energy: float = 0.0
     emaldo_export_commission: float = 0.0
+    trace: dict | None = None   # decision trace — populated on main runs only
 
     @property
     def slot_values(self) -> list[int]:
@@ -1204,6 +1205,7 @@ def optimize(
     n = SLOTS_PER_DAY
     soc_min_kwh = cfg.capacity_kwh * cfg.soc_min / 100.0
     soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
+    night_drain_plan: dict[int, str] | None = None  # bound in the drain guard below
 
     if initial_soc_pct is not None:
         current_soc_kwh = cfg.capacity_kwh * initial_soc_pct / 100.0
@@ -2055,6 +2057,31 @@ def optimize(
     )
     baseline_export_revenue = bl_export_energy - bl_export_commission
 
+    trace: dict | None = None
+    if not _probe:
+        trace = {
+            "initial_soc_pct": initial_soc_pct,
+            "soc_floor_target_pct": cfg.soc_floor_target_pct,
+            "case_a_floor": round(case_a_floor, 6),
+            "solar_regime_engaged": solar_regime_engaged,
+            "future_min_buy": future_min_buy,
+            "refill_fraction": round(refill_fraction, 4),
+            "solar_full_recharge": solar_full_recharge,
+            "first_solar_slot": first_solar_slot,
+            "initial_usable_kwh": round(initial_usable_kwh, 3),
+            "post_solar_usable_kwh": round(post_solar_usable_kwh, 3),
+            "total_discharge_budget": round(total_discharge_budget, 3),
+            "night_reserve_kwh": round(night_reserve_kwh, 3),
+            "n_profitable_discharge": len(profitable_discharge),
+            "n_profitable_charge": len(profitable_charge),
+            "mode": "split" if solar_full_recharge else "combined",
+            "night_drain_applied": night_drain_plan is not None,
+            "grid_charge_needed": round(grid_charge_needed, 3),
+        }
+        if night_drain_plan is not None and initial_soc_pct is not None:
+            trace["edge_pct"] = edge_pct
+            trace["excess_kwh"] = round(excess_kwh, 3)
+
     result = OptimizationResult(
         slots=result_slots,
         total_profit=gross_profit,
@@ -2098,6 +2125,7 @@ def optimize(
         emaldo_import_commission=e_import_commission,
         emaldo_export_energy=e_export_energy,
         emaldo_export_commission=e_export_commission,
+        trace=trace,
     )
 
     if enable_pv_strategy:

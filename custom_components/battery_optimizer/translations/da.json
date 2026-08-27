@@ -95,6 +95,9 @@
       },
       "clear_schedule": {
         "name": "Ryd tidsplan"
+      },
+      "export_plan_analysis": {
+        "name": "Eksporter plananalyse"
       }
     },
     "sensor": {

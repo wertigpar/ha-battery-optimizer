@@ -91,7 +91,8 @@
   "entity": {
     "button": {
       "run_optimizer": { "name": "Run Optimizer" },
-      "clear_schedule": { "name": "Clear Schedule" }
+      "clear_schedule": { "name": "Clear Schedule" },
+      "export_plan_analysis": { "name": "Export Plan Analysis" }
     },
     "sensor": {
       "status": { "name": "Optimizer Status" },

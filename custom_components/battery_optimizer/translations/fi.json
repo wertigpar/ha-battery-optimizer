@@ -95,6 +95,9 @@
       },
       "clear_schedule": {
         "name": "Tyhjennä aikataulu"
+      },
+      "export_plan_analysis": {
+        "name": "Vie suunnitelma-analyysi"
       }
     },
     "sensor": {
