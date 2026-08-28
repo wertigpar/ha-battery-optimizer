@@ -285,6 +285,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "battery_optimizer_run_snapshot.json"
         )
         self._last_snapshot: dict | None = None
+        # Last snapshot that actually contained a plan (skip checkpoints never
+        # touch this — export renders it first so a manual run is not hidden
+        # by the next periodic skip).
+        self._last_planned_snapshot: dict | None = None
         # Last successfully read battery SoC — fallback if a later read fails.
         self._last_known_soc: float | None = None
         # PV sell strategy
@@ -1512,6 +1516,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Persist the last optimizer-run snapshot (last write wins)."""
         snapshot["_written"] = dt_util.now().isoformat(timespec="seconds")
         self._last_snapshot = snapshot
+        if snapshot.get("planned"):
+            # Keep a separate copy so a later skip checkpoint can overwrite
+            # _last_snapshot without hiding the plan the exporter should use.
+            self._last_planned_snapshot = snapshot
         try:
             await self.hass.async_add_executor_job(
                 _write_json, self._snapshot_path, snapshot
@@ -1524,14 +1532,23 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def export_plan_analysis(self) -> str | None:
         """Render the last run snapshot to a markdown analysis file.
 
-        Returns the written path, or None when no snapshot exists / write fails.
+        Prefers the most recent *planned* snapshot, falling back to the last
+        snapshot of any kind. Returns the written path, or None when no
+        snapshot exists / write fails.
         """
-        if self._last_snapshot is None:
+        snapshot = self._last_planned_snapshot or self._last_snapshot
+        if snapshot is None:
             _LOGGER.warning(
                 "No run snapshot available yet — run the optimizer first"
             )
             return None
-        md = render_analysis(self._last_snapshot)
+        if not snapshot.get("planned"):
+            _LOGGER.warning(
+                "Last snapshot was a %s run with no schedule; press Run "
+                "Optimizer first if you want the plan rendered",
+                snapshot.get("state", "skipped"),
+            )
+        md = render_analysis(snapshot)
         path = self.hass.config.path("battery_optimizer_analysis.md")
         try:
             await self.hass.async_add_executor_job(_write_text, path, md)

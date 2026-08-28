@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- **Export Plan Analysis no longer hides a manual run behind the next skip checkpoint** — the exporter rendered `_last_snapshot`, which is overwritten by every run including periodic skips, so a fresh manual run could be masked by the following checkpoint. A separate `_last_planned_snapshot` is now kept on planned runs only; export prefers it and only falls back to the last snapshot of any kind, warning when the best available run produced no schedule. Files: `coordinator.py`.
+
 - **Unreadable battery SoC no longer silently degrades the plan (issue #16)** —
   when the battery SoC read fails or returns `unknown`/`unavailable` at plan
   time, `run_optimizer` previously fell back to `soc_min`, which zeroed the
