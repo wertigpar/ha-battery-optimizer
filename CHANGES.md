@@ -19,6 +19,16 @@
 
 ### Fixed
 
+- **Baseline prices solar the same way as the plan scenarios** — the no-battery
+  baseline imported the full base load while *also* crediting surplus export,
+  which is physically impossible (a kWh covering the load is neither imported
+  nor sold) and inflated the baseline by ~€1.20/day. It now self-consumes first
+  — net deficit imported, net surplus exported — matching `actual_cost` and
+  `emaldo_cost`, so the three are directly comparable. The report also shows
+  the three costs side by side instead of a single net figure, since the
+  optimizer banks solar in the battery rather than selling it. Files:
+  `optimizer.py`, `plan_export.py`, `README.md`.
+
 - **Export Plan Analysis no longer hides a manual run behind the next skip checkpoint** — the exporter rendered `_last_snapshot`, which is overwritten by every run including periodic skips, so a fresh manual run could be masked by the following checkpoint. A separate `_last_planned_snapshot` is now kept on planned runs only; export prefers it and only falls back to the last snapshot of any kind, warning when the best available run produced no schedule. Files: `coordinator.py`.
 
 ## v0.3.8

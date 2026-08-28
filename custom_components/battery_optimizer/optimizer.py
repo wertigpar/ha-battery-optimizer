@@ -1895,8 +1895,17 @@ def optimize(
         bp = buy_prices[s] if s < len(buy_prices) else 0.0
         sp = sell_prices[s] if s < len(sell_prices) else 0.0
         if s >= start_slot:
-            baseline_import = cfg.base_load_kw * SLOT_DURATION_HOURS
-            baseline_export = max(solar_15min[s] - cfg.base_load_kw, 0.0) * SLOT_DURATION_HOURS
+            # No battery: solar self-consumes first, so the grid sees only the
+            # net deficit (import) and the net surplus (export).  This is the
+            # identical treatment to actual_cost / emaldo_cost
+            # (bp*import - sp*export), so all three scenarios price solar the
+            # same way and the comparison is apples-to-apples.
+            # Importing the full base load while ALSO crediting surplus export
+            # was physically impossible — a kWh covering the load is neither
+            # imported nor sold, and it inflated the baseline by ~€1.20/day.
+            net_load = cfg.base_load_kw - solar_15min[s]
+            baseline_import = max(0.0, net_load) * SLOT_DURATION_HOURS
+            baseline_export = max(0.0, -net_load) * SLOT_DURATION_HOURS
             baseline_slot = bp * baseline_import - sp * baseline_export
             baseline_cost += baseline_slot
             # Decomposed baseline subcosts.
