@@ -33,6 +33,14 @@
   buffer); user-set and pre-hedge evening discharges are kept. File:
   `coordinator.py`.
 
+- **Tomorrow prices no longer wait for the periodic re-run (issue #18)** — the
+  price watcher subscribed only to `sensor.emaldo_schedule_chart` *state* changes,
+  but that entity's state is a constant `-1` (next-day data lives in the
+  `slot_count` attribute, 96 → 192). So the "tomorrow arrived" trigger never fired
+  and the tomorrow cost-sensors / schedule only updated on the next interval. The
+  watcher now also tracks the `slot_count` attribute, so the optimizer re-runs as
+  soon as next-day prices publish. File: `coordinator.py`.
+
 ## v0.3.9
 
 ### Added

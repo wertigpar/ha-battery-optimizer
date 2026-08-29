@@ -2656,6 +2656,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._nordpool_state_change,
                 )
                 self._unsub_listeners.append(unsub)
+                # The Emaldo chart entity's state is a constant -1; next-day
+                # prices arrive as a `slot_count` attribute change (96 -> 192),
+                # which a state-only watcher never sees. Track that attribute so
+                # the optimizer reacts when tomorrow publishes instead of waiting
+                # for the next periodic re-run. See issue #18.
+                unsub = async_track_state_change_event(
+                    self.hass,
+                    [emaldo_chart],
+                    self._nordpool_state_change,
+                    attribute="slot_count",
+                )
+                self._unsub_listeners.append(unsub)
                 price_watcher_label = emaldo_chart
             else:
                 price_watcher_label = "(emaldo chart not found)"
