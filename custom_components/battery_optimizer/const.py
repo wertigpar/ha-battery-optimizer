@@ -58,6 +58,7 @@ CONF_PRECHARGE_MAX_KWH_FRAC = "precharge_max_kwh_frac"
 CONF_PRECHARGE_LOW_SOLAR_FRAC = "precharge_low_solar_frac"
 CONF_PRECHARGE_REQUIRE_LOW_SOLAR = "precharge_require_low_solar"
 CONF_PRECHARGE_HORIZON_DAYS = "precharge_horizon_days"
+CONF_PRECHARGE_PUBLISH_HOUR = "precharge_publish_hour"
 
 # ── Solar forecast mode options ──────────────────────────────────────
 SOLAR_FORECAST_P50 = "p50"  # Solcast median (optimistic, current legacy)
@@ -110,6 +111,7 @@ DEFAULT_PRECHARGE_MAX_KWH_FRAC = 0.40        # cap speculative energy = 40% of b
 DEFAULT_PRECHARGE_LOW_SOLAR_FRAC = 0.25      # P10 solar < 25% of band ⇒ "bad solar"
 DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR = True   # gate on solar signal
 DEFAULT_PRECHARGE_HORIZON_DAYS = 1           # 1 = pre-publish only; 2 = also day+2
+DEFAULT_PRECHARGE_PUBLISH_HOUR = None        # None = auto (Nord Pool publish converted to HA timezone)
 
 # ── Solar forecast scale (over-forecast compensation) ────────────────
 DEFAULT_SOLAR_FORECAST_SCALE = 0.0   # 0.0 = auto-tune sentinel (0 = auto)
@@ -168,8 +170,18 @@ SLOT_DURATION_HOURS = 0.25  # 15 minutes
 # Fixed midnight checkpoint (always runs regardless of interval)
 MIDNIGHT_CHECKPOINT = (0, 1)
 
-# Nordpool tomorrow-price publish ~14:00 CET → slot index (00:00 + 14h, 15min slots)
+# Fallback pre-publish cutoff (slot index from local midnight). 56 = 14:00, the
+# Nord Pool next-day publish time in the EET market. Only used when the HA timezone
+# is unavailable; otherwise the cutoff is derived from NORD_POOL_PUBLISH_TZ/HOUR.
 PUBLISH_CUTOFF_SLOT = 56
+
+# Nord Pool publishes next-day prices at ~13:00 in its operational (CET/CEST)
+# timezone, year-round. Converting that instant to the HA timezone yields the
+# correct pre-publish cutoff slot for any market (EET → 14:00 local / slot 56,
+# CET/CEST → 13:00 local / slot 52; all shift DST together, so the relation holds
+# across seasons — a fixed UTC hour would drift by 1h in summer).
+NORD_POOL_PUBLISH_TZ = "Europe/Stockholm"
+NORD_POOL_PUBLISH_HOUR = 13
 
 # ── Config subentries ────────────────────────────────────────────────
 SUBENTRY_TYPE_RULE = "rule"
@@ -191,6 +203,6 @@ def currency_for_timezone(tz_name: str) -> str:
     """ISO 4217 currency code for a Nord Pool timezone.
 
     Returns SEK/NOK/DKK for the Scandinavian timezones, EUR otherwise
-    (Finland and the rest of the Nord Pool area trade in euro).
+    (the remaining Nord Pool markets trade in euro).
     """
     return _TZ_CURRENCY.get(tz_name, "EUR")

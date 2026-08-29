@@ -4,17 +4,17 @@
 
 ### Added
 
-- **Speculative grid pre-charge (Strategy B safety fill)** — when enabled, the
+- **Speculative grid pre-charge** — when enabled, the
   optimizer may charge from the grid to a configurable safety SoC during cheap
-  slots whose cheap window ends before next-day prices publish (~14:00), so the
+  slots whose cheap window ends before next-day prices publish, so the
   battery is never left empty on a weak-solar day before the plan can react.
   Pure planner fn `speculative_precharge_slots()` selects idle slots below an
   effective-price ceiling with a hard energy cap; `_apply_speculative_precharge()`
   mirrors the user-mask path (force `charge` to safety target, re-sim SoC,
-  back off if slot already `discharge`). 7 options: enable, safety_soc,
+  back off if slot already `discharge`). 8 options: enable, safety_soc,
   price_ceiling (effective €/kWh), max_kwh_frac, low_solar_frac,
-  require_low_solar, horizon_days (1–2). Files: `const.py`, `optimizer.py`,
-  `coordinator.py`, `config_flow.py`, `translations/en.json` (+ fi.json).
+  require_low_solar, horizon_days (1–2), publish_hour. Files: `const.py`,
+  `optimizer.py`, `coordinator.py`, `config_flow.py`, `translations/*.json`.
 
 ### Fixed
 
@@ -38,8 +38,24 @@
   but that entity's state is a constant `-1` (next-day data lives in the
   `slot_count` attribute, 96 → 192). So the "tomorrow arrived" trigger never fired
   and the tomorrow cost-sensors / schedule only updated on the next interval. The
-  watcher now also tracks the `slot_count` attribute, so the optimizer re-runs as
-  soon as next-day prices publish. File: `coordinator.py`.
+   watcher now also tracks the `slot_count` attribute, so the optimizer re-runs as
+   soon as next-day prices publish. File: `coordinator.py`.
+
+- **Timezone-correct pre-publish cutoff** — the pre-charge pre-publish window used a
+  hardcoded 14:00 local `PUBLISH_CUTOFF_SLOT`, so in Nord Pool markets whose local
+  publish time is earlier (~13:00 CET/CEST) cheap slots just after the real publish
+  could be precharged unnecessarily. The cutoff is now derived by converting Nord
+  Pool's nominal publish time (~13:00 in its CET/CEST operational timezone,
+  year-round) to the Home Assistant timezone, so it is correct for every market and
+  season with no config; an optional `precharge_publish_hour` (local hour) override
+  covers non-Nord Pool sources. Only affects `horizon_days == 1` mode. Files:
+  `const.py`, `coordinator.py`, `config_flow.py`, `translations/*.json`.
+
+- **Pre-charge translations for all languages** — the pre-charge options
+  (including the publish-hour option) are translated for en/fi/sv/da/nb, along
+  with the `battery_wear_cost` sensor name, the `rule_enabled` switch name, and
+  the pv-sell / weekday selector labels. Files: `translations/*.json`,
+  `strings.json`.
 
 ## v0.3.9
 

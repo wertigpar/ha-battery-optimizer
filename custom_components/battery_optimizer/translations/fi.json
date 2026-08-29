@@ -89,7 +89,7 @@
           "precharge_safety_soc": "Turvallisuus-SoC-tavoite (käyttökelpoisen kaistan murto-osa)",
           "precharge_safety_soc_description": "Kuinka täyteen pyritään, lukuna käyttökelpoisesta akun kaistasta (Min→Max SoC). 0,70 = täytä 70 % kaistasta. Akkua ei koskaan ladata yli Max SoC:n.",
           "precharge_price_ceiling": "Halvan sähkön hintakatto (€/kWh, efektiivinen)",
-          "precharge_price_ceiling_description": "Esilataus vain, kun efektiivinen ostohinta (spot + siirtomaksu + ALV + provisio) on tämän suuruinen tai alle. 0,07 € on tyypillinen 'erittäin halpa' raja Suomessa.",
+          "precharge_price_ceiling_description": "Esilataus vain, kun efektiivinen ostohinta (spot + siirtomaksu + ALV + provisio) on tämän suuruinen tai alle. 0,07 € on tyypillinen 'erittäin halpa' raja.",
           "precharge_max_kwh_frac": "Enimmäis-spekulatiivinen energia (kaistan murto-osa)",
           "precharge_max_kwh_frac_description": "Kova katto sille, kuinka paljon energiaa yksi esilataus saa lisätä, käyttökelpoisen kaistan murto-osana. Estää yliostamisen, kun hinnat ovat vain vähän halpoja. 0,40 = enintään 40 % kaistasta.",
           "precharge_low_solar_frac": "Heikon aurinko - raja (kaistan murto-osa)",
@@ -97,7 +97,9 @@
           "precharge_require_low_solar": "Vaadi heikko aurinko ennen esilatausta",
           "precharge_require_low_solar_description": "Kun päällä, esilataus vain heikon aurinkoisina päivinä. Kytke pois ladataksesi aina, kun halpa energia loppuu ennen hintojen julkaisua, aurinkoisuudesta riippumatta.",
           "precharge_horizon_days": "Katse eteenpäin (päiviä)",
-          "precharge_horizon_days_description": "1 = esilataus vain ennen seuraavan päivän hintojen julkaisua (halpa ikkuna sulkeutuu n. klo 14). 2 = varaa myös mahdollista ylihuomisen hintapiikkiä: jos huomisen optimoitu suunnitelma jättäisi akun matalaksi, lataa varovasti tänä iltana halvalla sähköllä, jotta tuntematon ylihuominen alkaa turvallisesta puskurista."
+          "precharge_horizon_days_description": "1 = esilataus vain ennen seuraavan päivän hintojen julkaisua (halpa ikkuna sulkeutuu hintojen julkaisuun mennessä). 2 = varaa myös mahdollista ylihuomisen hintapiikkiä: jos huomisen optimoitu suunnitelma jättäisi akun matalaksi, lataa varovasti tänä iltana halvalla sähköllä, jotta tuntematon ylihuominen alkaa turvallisesta puskurista.",
+          "precharge_publish_hour": "Seuraavan päivän hintojen julkaisuhetki (paikallinen, 0–23)",
+          "precharge_publish_hour_description": "Tunti (paikallinen aika, 24h), jolloin Nord Pool yleensä julkaisee seuraavan päivän hinnat. Jätä tyhjäksi automatiikkaa varten: rajahaarukka lasketaan Home Assistant -aikavyöhykkeestä, joten se on oikein kaikille Nord Pool -markkinoille. Aseta vain, jos hintälähteesi julkaisee eri hetkenä."
         }
       }
     }
@@ -183,6 +185,9 @@
       },
       "realized_cost_today": {
         "name": "Toteutunut kustannus tänään"
+      },
+      "battery_wear_cost": {
+        "name": "Akun kulumiskustannus"
       }
     },
     "switch": {

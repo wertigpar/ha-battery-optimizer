@@ -83,7 +83,23 @@
           "solar_forecast_scale": "Skalering av solprognosen (0 = automatisk eller manuell 0,3–1,2)",
           "solar_actual_sensor": "Måler for faktisk solenergi (akkumulert, Wh eller kWh). Tom = Emaldos interne estimat",
           "grid_import_sensor": "Nettoimport-energiteller (kumulativ, Wh eller kWh). Tom = auto-oppdages fra tilknyttet Emaldo-enhet.",
-          "grid_export_sensor": "Nettoexport-energiteller (kumulativ, Wh eller kWh). Tom = auto-oppdages fra tilknyttet Emaldo-enhet."
+          "grid_export_sensor": "Nettoexport-energiteller (kumulativ, Wh eller kWh). Tom = auto-oppdages fra tilknyttet Emaldo-enhet.",
+          "precharge_enabled": "Aktiver spekulativ forhåndslading fra strømnettet",
+          "precharge_enabled_description": "Som standard av. Når den er på, kan optimalisatoren lade batteriet fra nettet opp til en sikkerhets-SoC i billige perioder.",
+          "precharge_safety_soc": "Sikkerhets-SoC-mål (andel av bruksbandet)",
+          "precharge_safety_soc_description": "Hvor fullt batteriet skal bli, som andel av bruksbandet (Min→Max SoC). 0,70 = fyll til 70 % av bandet. Batteriet lades aldri over sin maks-SoC.",
+          "precharge_price_ceiling": "Pristak for billig energi (€/kWh effektivt)",
+          "precharge_price_ceiling_description": "Forhåndslad bare når effektiv kjøpspris (spot + overføringsavgift + mva + provisjon) er på eller under dette. 0,07 € er en typisk 'svært billig' terskel.",
+          "precharge_max_kwh_frac": "Maks spekulativ energi (andel av bandet)",
+          "precharge_max_kwh_frac_description": "Hard tak for hvor mye energi én forhåndslading kan tilføre, som andel av bruksbandet. Forhindrer overkjøp når prisene bare er marginalt billige. 0,40 = maks 40 % av bandet.",
+          "precharge_low_solar_frac": "Terskel for svak sol (andel av bandet)",
+          "precharge_low_solar_frac_description": "Solen er 'svak' når dagens prognose ligger under denne andelen av bruksbandet. 0,25 = under 25 % av bandet regnes som en dårlig soldag.",
+          "precharge_require_low_solar": "Krev svak sol før forhåndslading",
+          "precharge_require_low_solar_description": "Når på, forhåndslad bare på dager med svak sol. Skru av for å forhåndslade når billig energi tar slutt før prisene publiseres, uansett sol.",
+          "precharge_horizon_days": "Fremoverhorisont (dager)",
+          "precharge_horizon_days_description": "1 = forhåndslad bare før publisering av neste dags priser (det billige vinduet lukkes ved prispubliseringen). 2 = sikre også mot en sannsynlig dag+2-pristopp: hvis morgendagens optimaliserte plan ville etterlate batteriet lavt, lad forsiktig opp i kveld med billig nettenergi, så den ukjente dag+2 starter med en sikkerhetsbuffer.",
+          "precharge_publish_hour": "Publiseringstime for neste dags priser (lokal, 0–23)",
+          "precharge_publish_hour_description": "Time (lokal tid, 24t) da Nord Pool vanligvis publiserer neste dags priser. La stå tom for automatikk: grensen beregnes fra Home Assistant-tidssonen din og blir riktig for alle Nord Pool-markeder. Sett bare hvis priskilden din publiserer på et annet tidspunkt."
         }
       }
     }
@@ -169,6 +185,9 @@
       },
       "realized_cost_today": {
         "name": "Reell kostnad i dag"
+      },
+      "battery_wear_cost": {
+        "name": "Batterislitasjekostnad"
       }
     },
     "switch": {
@@ -323,6 +342,12 @@
         "4": "Fredag",
         "5": "Lørdag",
         "6": "Søndag"
+      }
+    },
+    "precharge_horizon_days": {
+      "options": {
+        "1": "1 dag — forhåndslad bare før neste dags prispublisering",
+        "2": "2 dager — forhåndslad også når morgendagens plan er ukjent"
       }
     }
   }

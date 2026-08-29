@@ -89,7 +89,7 @@
               "precharge_safety_soc": "Safety SoC target (fraction of usable band)",
               "precharge_safety_soc_description": "How full to aim for, as a fraction of the usable battery band (Min→Max SoC). 0.70 = fill to 70% of the band. The battery never charges above its Max SoC.",
               "precharge_price_ceiling": "Cheap-energy price ceiling (€/kWh effective)",
-              "precharge_price_ceiling_description": "Only pre-charge when the effective buy price (spot + transfer fee + VAT + commission) is at or below this. 0.07 € is a typical 'very cheap' threshold for Finland.",
+              "precharge_price_ceiling_description": "Only pre-charge when the effective buy price (spot + transfer fee + VAT + commission) is at or below this. 0.07 € is a typical 'very cheap' threshold.",
               "precharge_max_kwh_frac": "Max speculative energy (fraction of band)",
               "precharge_max_kwh_frac_description": "Hard cap on how much energy a single pre-charge may add, as a fraction of the usable band. Prevents over-buying when prices are only marginally cheap. 0.40 = at most 40% of the band.",
               "precharge_low_solar_frac": "Weak-solar threshold (fraction of band)",
@@ -97,7 +97,9 @@
               "precharge_require_low_solar": "Require weak solar before pre-charging",
               "precharge_require_low_solar_description": "When on, pre-charge only on weak-solar days. Turn off to pre-charge whenever cheap energy ends before prices publish, regardless of solar.",
               "precharge_horizon_days": "Look-ahead horizon (days)",
-              "precharge_horizon_days_description": "1 = only pre-charge before the next-day price publish (cheap window closes by ~14:00). 2 = also hedge a likely day+2 price spike: if tomorrow's optimized plan would leave the battery low, top up gently tonight using cheap grid energy so you enter the unknown day+2 with a safety buffer."
+              "precharge_horizon_days_description": "1 = only pre-charge before the next-day price publish (cheap window closes at the price publish). 2 = also hedge a likely day+2 price spike: if tomorrow's optimized plan would leave the battery low, top up gently tonight using cheap grid energy so you enter the unknown day+2 with a safety buffer.",
+              "precharge_publish_hour": "Next-day price publish hour (local, 0–23)",
+              "precharge_publish_hour_description": "Hour (local time, 24h) at which Nord Pool typically publishes next-day prices. Leave empty for automatic: the cutoff slot is derived from your Home Assistant timezone so it is correct for any Nord Pool market. Set only if your price source publishes at a different hour."
         }
       }
     }
@@ -262,6 +264,24 @@
         "1": "Next day",
         "7": "After 1 week",
         "30": "After 30 days"
+      }
+    },
+    "pv_sell": {
+      "options": {
+        "inherit": "Inherit default",
+        "sell": "Sell to grid",
+        "charge": "Charge battery"
+      }
+    },
+    "weekday": {
+      "options": {
+        "0": "Monday",
+        "1": "Tuesday",
+        "2": "Wednesday",
+        "3": "Thursday",
+        "4": "Friday",
+        "5": "Saturday",
+        "6": "Sunday"
       }
     },
     "precharge_horizon_days": {

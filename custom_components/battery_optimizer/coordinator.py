@@ -85,6 +85,7 @@ from .const import (
     CONF_PRECHARGE_LOW_SOLAR_FRAC,
     CONF_PRECHARGE_REQUIRE_LOW_SOLAR,
     CONF_PRECHARGE_HORIZON_DAYS,
+    CONF_PRECHARGE_PUBLISH_HOUR,
     DEFAULT_PRECHARGE_ENABLED,
     DEFAULT_PRECHARGE_SAFETY_SOC,
     DEFAULT_PRECHARGE_PRICE_CEILING,
@@ -92,7 +93,10 @@ from .const import (
     DEFAULT_PRECHARGE_LOW_SOLAR_FRAC,
     DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR,
     DEFAULT_PRECHARGE_HORIZON_DAYS,
-    SOLAR_FORECAST_P10,
+    DEFAULT_PRECHARGE_PUBLISH_HOUR,
+    NORD_POOL_PUBLISH_TZ,
+    NORD_POOL_PUBLISH_HOUR,
+    PUBLISH_CUTOFF_SLOT,    SOLAR_FORECAST_P10,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
@@ -2053,6 +2057,48 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result.discharge_slots = n_discharge
         result.idle_slots = n_idle
 
+    def _precharge_publish_cutoff_slot(self) -> int:
+        """Local 15-min slot at which next-day prices are expected to publish.
+
+        Nord Pool publishes next-day prices at ~13:00 in its operational
+        (CET/CEST) timezone year-round; converting that instant to the HA
+        timezone yields the correct slot for any market (EET → 14:00
+        local / slot 56, CET/CEST → 13:00 local / slot 52 — DST shifts
+        together, so the relation holds across seasons). A per-install
+        override (precharge_publish_hour, local hour) takes precedence.
+        Falls back to PUBLISH_CUTOFF_SLOT (14:00 EET) if timezones fail.
+        """
+        override = self.config.get(
+            CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
+        )
+        local_hour: float | None = None
+        if override is not None:
+            try:
+                local_hour = float(override)
+            except (TypeError, ValueError):
+                local_hour = None
+        if local_hour is None:
+            tz = (
+                dt_util.get_time_zone(self.hass.config.time_zone)
+                if self.hass.config.time_zone
+                else None
+            )
+            if tz is None:
+                return PUBLISH_CUTOFF_SLOT
+            np_tz = dt_util.get_time_zone(NORD_POOL_PUBLISH_TZ)
+            if np_tz is None:
+                np_tz = tz
+            ref = dt_util.now(np_tz).replace(
+                hour=NORD_POOL_PUBLISH_HOUR,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            local = ref.astimezone(tz)
+            local_hour = local.hour + local.minute / 60.0
+        slot = int(local_hour * 4)  # 4 slots per hour
+        return max(0, min(SLOTS_PER_DAY - 1, slot))
+
     def _apply_speculative_precharge(
         self,
         result: OptimizationResult,
@@ -2095,6 +2141,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 CONF_PRECHARGE_REQUIRE_LOW_SOLAR,
                 DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR)),
             regime_engaged=regime_engaged,
+            publish_cutoff_slot=self._precharge_publish_cutoff_slot(),
         )
         if not slots:
             return

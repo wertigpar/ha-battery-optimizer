@@ -83,46 +83,123 @@
           "solar_forecast_scale": "Solar forecast scale (0 = auto-tune, or manual 0.3–1.2)",
           "solar_actual_sensor": "Actual solar energy counter (cumulative, Wh or kWh). Empty = Emaldo-internal estimate",
           "grid_import_sensor": "Grid import energy counter (cumulative, Wh or kWh). Leave empty to auto-detect from the linked Emaldo unit.",
-          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh). Leave empty to auto-detect from the linked Emaldo unit."
+          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh). Leave empty to auto-detect from the linked Emaldo unit.",
+          "precharge_enabled": "Enable speculative grid pre-charge",
+          "precharge_enabled_description": "Off by default. When on, the optimizer may charge from the grid to a safety SoC during cheap slots.",
+          "precharge_safety_soc": "Safety SoC target (fraction of usable band)",
+          "precharge_safety_soc_description": "How full to aim for, as a fraction of the usable battery band (Min→Max SoC). 0.70 = fill to 70% of the band. The battery never charges above its Max SoC.",
+          "precharge_price_ceiling": "Cheap-energy price ceiling (€/kWh effective)",
+          "precharge_price_ceiling_description": "Only pre-charge when the effective buy price (spot + transfer fee + VAT + commission) is at or below this. 0.07 € is a typical 'very cheap' threshold.",
+          "precharge_max_kwh_frac": "Max speculative energy (fraction of band)",
+          "precharge_max_kwh_frac_description": "Hard cap on how much energy a single pre-charge may add, as a fraction of the usable band. Prevents over-buying when prices are only marginally cheap. 0.40 = at most 40% of the band.",
+          "precharge_low_solar_frac": "Weak-solar threshold (fraction of band)",
+          "precharge_low_solar_frac_description": "Solar is 'weak' when the day's forecast is below this fraction of the usable band. 0.25 = below 25% of the band counts as a bad-solar day.",
+          "precharge_require_low_solar": "Require weak solar before pre-charging",
+          "precharge_require_low_solar_description": "When on, pre-charge only on weak-solar days. Turn off to pre-charge whenever cheap energy ends before prices publish, regardless of solar.",
+          "precharge_horizon_days": "Look-ahead horizon (days)",
+          "precharge_horizon_days_description": "1 = only pre-charge before the next-day price publish (cheap window closes at the price publish). 2 = also hedge a likely day+2 price spike: if tomorrow's optimized plan would leave the battery low, top up gently tonight using cheap grid energy so you enter the unknown day+2 with a safety buffer.",
+          "precharge_publish_hour": "Next-day price publish hour (local, 0–23)",
+          "precharge_publish_hour_description": "Hour (local time, 24h) at which Nord Pool typically publishes next-day prices. Leave empty for automatic: the cutoff slot is derived from your Home Assistant timezone so it is correct for any Nord Pool market. Set only if your price source publishes at a different hour."
         }
       }
     }
   },
   "entity": {
     "button": {
-      "run_optimizer": { "name": "Run Optimizer" },
-      "clear_schedule": { "name": "Clear Schedule" },
-      "export_plan_analysis": { "name": "Export Plan Analysis" }
+      "run_optimizer": {
+        "name": "Run Optimizer"
+      },
+      "clear_schedule": {
+        "name": "Clear Schedule"
+      },
+      "export_plan_analysis": {
+        "name": "Export Plan Analysis"
+      }
     },
     "sensor": {
-      "status": { "name": "Optimizer Status" },
-      "last_run": { "name": "Last Optimization" },
-      "current_action": { "name": "Current Slot Action" },
-      "estimated_savings": { "name": "Rest of Day Estimated Savings" },
-      "baseline_cost": { "name": "Rest of Day Baseline Cost" },
-      "emaldo_plan_cost": { "name": "Rest of Day Emaldo Cost" },
-      "optimizer_plan_cost": { "name": "Rest of Day Optimizer Cost" },
-      "tomorrow_estimated_savings": { "name": "Tomorrow Estimated Savings" },
-      "tomorrow_baseline_cost": { "name": "Tomorrow Baseline Cost" },
-      "tomorrow_emaldo_plan_cost": { "name": "Tomorrow Emaldo Cost" },
-      "tomorrow_optimizer_plan_cost": { "name": "Tomorrow Optimizer Cost" },
-      "emaldo_schedule_chart": { "name": "Emaldo Schedule" },
-      "schedule_chart": { "name": "Schedule Chart" },
-      "auto_base_load": { "name": "Auto Base Load" },
-      "plan_accuracy": { "name": "Plan Accuracy" },
-      "solar_regime": { "name": "Solar Regime" },
-      "solar_balance": { "name": "Solar Balance" },
-      "user_schedule_chart": { "name": "User Schedule" },
-      "vat_multiplier": { "name": "VAT Multiplier" },
-      "grid_transfer_fee": { "name": "Grid Transfer Fee" },
-      "feed_in_sales_commission": { "name": "Feed-in Sales Commission" },
-      "battery_wear_cost": { "name": "Battery Wear Cost" },
-      "realized_cost_history": { "name": "Realized Cost History" },
-      "realized_cost_today": { "name": "Realized Cost Today" }
+      "status": {
+        "name": "Optimizer Status"
+      },
+      "last_run": {
+        "name": "Last Optimization"
+      },
+      "current_action": {
+        "name": "Current Slot Action"
+      },
+      "estimated_savings": {
+        "name": "Rest of Day Estimated Savings"
+      },
+      "baseline_cost": {
+        "name": "Rest of Day Baseline Cost"
+      },
+      "emaldo_plan_cost": {
+        "name": "Rest of Day Emaldo Cost"
+      },
+      "optimizer_plan_cost": {
+        "name": "Rest of Day Optimizer Cost"
+      },
+      "tomorrow_estimated_savings": {
+        "name": "Tomorrow Estimated Savings"
+      },
+      "tomorrow_baseline_cost": {
+        "name": "Tomorrow Baseline Cost"
+      },
+      "tomorrow_emaldo_plan_cost": {
+        "name": "Tomorrow Emaldo Cost"
+      },
+      "tomorrow_optimizer_plan_cost": {
+        "name": "Tomorrow Optimizer Cost"
+      },
+      "emaldo_schedule_chart": {
+        "name": "Emaldo Schedule"
+      },
+      "schedule_chart": {
+        "name": "Schedule Chart"
+      },
+      "auto_base_load": {
+        "name": "Auto Base Load"
+      },
+      "plan_accuracy": {
+        "name": "Plan Accuracy"
+      },
+      "solar_regime": {
+        "name": "Solar Regime"
+      },
+      "solar_balance": {
+        "name": "Solar Balance"
+      },
+      "user_schedule_chart": {
+        "name": "User Schedule"
+      },
+      "vat_multiplier": {
+        "name": "VAT Multiplier"
+      },
+      "grid_transfer_fee": {
+        "name": "Grid Transfer Fee"
+      },
+      "feed_in_sales_commission": {
+        "name": "Feed-in Sales Commission"
+      },
+      "battery_wear_cost": {
+        "name": "Battery Wear Cost"
+      },
+      "realized_cost_history": {
+        "name": "Realized Cost History"
+      },
+      "realized_cost_today": {
+        "name": "Realized Cost Today"
+      }
     },
     "switch": {
-      "pv_strategy": { "name": "PV Sell Strategy" },
-      "emaldo_control_enable": { "name": "Emaldo Control" }
+      "pv_strategy": {
+        "name": "PV Sell Strategy"
+      },
+      "emaldo_control_enable": {
+        "name": "Emaldo Control"
+      },
+      "rule_enabled": {
+        "name": "Schedule Rule Enabled"
+      }
     }
   },
   "config_subentries": {
@@ -265,6 +342,12 @@
         "4": "Friday",
         "5": "Saturday",
         "6": "Sunday"
+      }
+    },
+    "precharge_horizon_days": {
+      "options": {
+        "1": "1 day — pre-charge only before next-day price publish",
+        "2": "2 days — also pre-charge when tomorrow's plan is unknown"
       }
     }
   }

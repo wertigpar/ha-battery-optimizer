@@ -73,6 +73,7 @@ from .const import (
     CONF_PRECHARGE_LOW_SOLAR_FRAC,
     CONF_PRECHARGE_REQUIRE_LOW_SOLAR,
     CONF_PRECHARGE_HORIZON_DAYS,
+    CONF_PRECHARGE_PUBLISH_HOUR,
     DEFAULT_PRECHARGE_ENABLED,
     DEFAULT_PRECHARGE_SAFETY_SOC,
     DEFAULT_PRECHARGE_PRICE_CEILING,
@@ -80,6 +81,7 @@ from .const import (
     DEFAULT_PRECHARGE_LOW_SOLAR_FRAC,
     DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR,
     DEFAULT_PRECHARGE_HORIZON_DAYS,
+    DEFAULT_PRECHARGE_PUBLISH_HOUR,
     SOLAR_FORECAST_P50,
     SOLAR_FORECAST_P10,
     DEFAULT_VAT_MULTIPLIER,
@@ -411,6 +413,12 @@ def _build_schema(
                     translation_key="precharge_horizon_days",
                 )
             ),
+            vol.Optional(
+                CONF_PRECHARGE_PUBLISH_HOUR,
+                default=d.get(
+                    CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=23.0)),
         }
     )
 
