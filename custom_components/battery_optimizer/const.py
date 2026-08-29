@@ -170,16 +170,16 @@ SLOT_DURATION_HOURS = 0.25  # 15 minutes
 # Fixed midnight checkpoint (always runs regardless of interval)
 MIDNIGHT_CHECKPOINT = (0, 1)
 
-# Fallback pre-publish cutoff (slot index from local midnight). 56 = 14:00, the
-# Nord Pool next-day publish time in the EET market. Only used when the HA timezone
-# is unavailable; otherwise the cutoff is derived from NORD_POOL_PUBLISH_TZ/HOUR.
+# Fallback pre-publish cutoff (slot index from local midnight), used only when
+# the HA timezone is unavailable; otherwise the cutoff is derived from
+# NORD_POOL_PUBLISH_TZ/HOUR. Value matches the publish slot in the easternmost
+# Nord Pool timezone.
 PUBLISH_CUTOFF_SLOT = 56
 
 # Nord Pool publishes next-day prices at ~13:00 in its operational (CET/CEST)
 # timezone, year-round. Converting that instant to the HA timezone yields the
-# correct pre-publish cutoff slot for any market (EET → 14:00 local / slot 56,
-# CET/CEST → 13:00 local / slot 52; all shift DST together, so the relation holds
-# across seasons — a fixed UTC hour would drift by 1h in summer).
+# correct pre-publish cutoff slot for any market and season (all Nord Pool
+# markets shift DST together — a fixed UTC hour would drift by 1h in summer).
 NORD_POOL_PUBLISH_TZ = "Europe/Stockholm"
 NORD_POOL_PUBLISH_HOUR = 13
 

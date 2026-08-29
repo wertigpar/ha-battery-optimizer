@@ -370,9 +370,9 @@ def speculative_precharge_slots(
       2. Weak-solar signal (unless require_low_solar is off) — low forecast
          OR the durable solar_regime detector is engaged.
       3. Cheap slots (effective buy <= ceiling) exist today.
-      4. horizon_days == 1  -> the cheap window closes *before* the ~14:00
-         Nordpool publish (max cheap slot < publish_cutoff_slot).  Otherwise
-         the post-publish optimizer handles it (Case 2, no waste).
+      4. horizon_days == 1  -> the cheap window closes *before* the
+         next-day price publish (max cheap slot < publish_cutoff_slot).
+         Otherwise the post-publish optimizer handles it (Case 2, no waste).
          horizon_days == 2  -> fire whenever tomorrow is unknown, regardless
          of when the cheap window closes (charge ahead of a possible day+2
          spike).
@@ -386,7 +386,7 @@ def speculative_precharge_slots(
     Fire conditions (all must hold):
       1. SoC below the safety target (T0).
       2. tomorrow_end_soc_pct is known and below the safety target (drain risk).
-      3. Cheap slots exist tonight (no 14:00 cutoff — we hedge day+2).
+      3. Cheap slots exist tonight (no publish cutoff — we hedge day+2).
 
     Selected slots are the cheapest `n`, where `n` is sized so cumulative
     charge reaches the smaller of: energy-to-safety, headroom to Max SoC, and

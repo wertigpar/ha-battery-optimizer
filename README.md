@@ -1064,8 +1064,8 @@ The coordinator cancels and rebuilds the `async_call_later` transition callbacks
 ## Speculative Grid Pre-Charge
 
 A safety feature that tops the battery up from the grid when **cheap energy is available, solar
-looks weak, and the cheap window is about to close before tomorrow's prices are published (~14:00
-CET)**. Without it, the battery can sit nearly empty and miss the cheap energy — then face high
+looks weak, and the cheap window is about to close before tomorrow's prices are published (the
+Nord Pool day-ahead publish)**. Without it, the battery can sit nearly empty and miss the cheap energy — then face high
 prices or a hidden sun the next day.
 
 It is **opt-in** (off by default) and appears as a set of *Speculative grid pre-charge* fields on
@@ -1074,7 +1074,7 @@ the Options screen (flat list — collapsible section grouping is unsupported in
 ### Why it exists
 
 The optimizer only plans **today + tomorrow**. If tomorrow's prices are not yet known and the
-cheapest grid slots end before the ~14:00 Nordpool publish, there is no normal path that buys that
+cheapest grid slots end before the next-day price publish, there is no normal path that buys that
 cheap energy. This feature fills that gap by charging to a **safety level** during the cheap slots.
 
 ### How it works
@@ -1085,7 +1085,7 @@ cheap energy. This feature fills that gap by charging to a **safety level** duri
    - Battery SoC is below the safety target.
    - Solar looks **weak** (forecast below a threshold *or* the durable solar-regime detector is engaged).
    - Effective buy price (spot + fees + tax + commission) is at or below the **price ceiling**.
-   - The cheap window **closes before the ~14:00 publish** (otherwise it defers to the post-publish run).
+   - The cheap window **closes before the next-day price publish** (otherwise it defers to the post-publish run).
 3. Picks the **cheapest** eligible slots and charges them up to the safety target, capped by a
    maximum energy share so it never over-buys.
 4. A re-run after the price publish can top up further if tomorrow justifies it (this is a floor,

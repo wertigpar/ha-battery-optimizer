@@ -41,13 +41,13 @@
    watcher now also tracks the `slot_count` attribute, so the optimizer re-runs as
    soon as next-day prices publish. File: `coordinator.py`.
 
-- **Timezone-correct pre-publish cutoff** — the pre-charge pre-publish window used a
-  hardcoded 14:00 local `PUBLISH_CUTOFF_SLOT`, so in Nord Pool markets whose local
-  publish time is earlier (~13:00 CET/CEST) cheap slots just after the real publish
-  could be precharged unnecessarily. The cutoff is now derived by converting Nord
-  Pool's nominal publish time (~13:00 in its CET/CEST operational timezone,
-  year-round) to the Home Assistant timezone, so it is correct for every market and
-  season with no config; an optional `precharge_publish_hour` (local hour) override
+- **Timezone-correct pre-publish cutoff** — the pre-charge pre-publish window
+  previously assumed a single hardcoded publish slot, so in markets whose local
+  publish time differs from it, cheap slots just after the real publish could be
+  precharged unnecessarily. The cutoff is now derived by converting Nord Pool's
+  nominal publish time (~13:00 in its CET/CEST operational timezone, year-round)
+  to the Home Assistant timezone, so it is correct for every market and season
+  with no config; an optional `precharge_publish_hour` (local hour) override
   covers non-Nord Pool sources. Only affects `horizon_days == 1` mode. Files:
   `const.py`, `coordinator.py`, `config_flow.py`, `translations/*.json`.
 
@@ -745,7 +745,7 @@
 
 - **Tomorrow cost sensors** — New sensors (`Tomorrow Estimated Savings`,
   `Tomorrow Baseline Cost`, `Tomorrow Emaldo Cost`, `Tomorrow Optimizer Cost`)
-  showing tomorrow's estimates after Nordpool publishes (~14:00). Read
+  showing tomorrow's estimates after Nordpool publishes next-day prices. Read
   `coordinator.last_result_tomorrow`; show `unknown` before data is available.
 
 ### Fixed

@@ -2062,11 +2062,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Nord Pool publishes next-day prices at ~13:00 in its operational
         (CET/CEST) timezone year-round; converting that instant to the HA
-        timezone yields the correct slot for any market (EET → 14:00
-        local / slot 56, CET/CEST → 13:00 local / slot 52 — DST shifts
-        together, so the relation holds across seasons). A per-install
-        override (precharge_publish_hour, local hour) takes precedence.
-        Falls back to PUBLISH_CUTOFF_SLOT (14:00 EET) if timezones fail.
+        timezone yields the correct slot for any market and season (all
+        Nord Pool markets shift DST together). A per-install override
+        (precharge_publish_hour, local hour) takes precedence. Falls back
+        to PUBLISH_CUTOFF_SLOT (the easternmost-market slot) if timezones
+        fail.
         """
         override = self.config.get(
             CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
