@@ -50,6 +50,15 @@ CONF_GRID_IMPORT_SENSOR = "grid_import_sensor"
 CONF_GRID_EXPORT_SENSOR = "grid_export_sensor"
 CONF_RULE_RETENTION_DAYS = "rule_retention_days"
 
+# ── Speculative grid pre-charge (low-price / bad-solar safety fill) ──
+CONF_PRECHARGE_ENABLED = "precharge_enabled"
+CONF_PRECHARGE_SAFETY_SOC = "precharge_safety_soc"
+CONF_PRECHARGE_PRICE_CEILING = "precharge_price_ceiling"
+CONF_PRECHARGE_MAX_KWH_FRAC = "precharge_max_kwh_frac"
+CONF_PRECHARGE_LOW_SOLAR_FRAC = "precharge_low_solar_frac"
+CONF_PRECHARGE_REQUIRE_LOW_SOLAR = "precharge_require_low_solar"
+CONF_PRECHARGE_HORIZON_DAYS = "precharge_horizon_days"
+
 # ── Solar forecast mode options ──────────────────────────────────────
 SOLAR_FORECAST_P50 = "p50"  # Solcast median (optimistic, current legacy)
 SOLAR_FORECAST_P10 = "p10"  # Solcast 10th-percentile (pessimistic, weather-aware)
@@ -92,6 +101,15 @@ DEFAULT_ENABLE_PV_STRATEGY = False
 DEFAULT_ENABLE_EMALDO_CONTROL = True
 DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH = 10.0  # kWh; below this, cloudy day → skip
 DEFAULT_SOLAR_FORECAST_MODE = SOLAR_FORECAST_P10  # conservative planning by default
+
+# ── Speculative grid pre-charge defaults ───────────────────────────
+DEFAULT_PRECHARGE_ENABLED = False           # opt-in feature
+DEFAULT_PRECHARGE_SAFETY_SOC = 0.70          # fill to 70% of usable band
+DEFAULT_PRECHARGE_PRICE_CEILING = 0.07       # €/kWh effective buy ceiling
+DEFAULT_PRECHARGE_MAX_KWH_FRAC = 0.40        # cap speculative energy = 40% of band
+DEFAULT_PRECHARGE_LOW_SOLAR_FRAC = 0.25      # P10 solar < 25% of band ⇒ "bad solar"
+DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR = True   # gate on solar signal
+DEFAULT_PRECHARGE_HORIZON_DAYS = 1           # 1 = pre-publish only; 2 = also day+2
 
 # ── Solar forecast scale (over-forecast compensation) ────────────────
 DEFAULT_SOLAR_FORECAST_SCALE = 0.0   # 0.0 = auto-tune sentinel (0 = auto)
@@ -149,6 +167,9 @@ SLOT_DURATION_HOURS = 0.25  # 15 minutes
 
 # Fixed midnight checkpoint (always runs regardless of interval)
 MIDNIGHT_CHECKPOINT = (0, 1)
+
+# Nordpool tomorrow-price publish ~14:00 CET → slot index (00:00 + 14h, 15min slots)
+PUBLISH_CUTOFF_SLOT = 56
 
 # ── Config subentries ────────────────────────────────────────────────
 SUBENTRY_TYPE_RULE = "rule"

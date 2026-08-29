@@ -78,6 +78,20 @@ from .const import (
     CONF_GRID_IMPORT_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
     CONF_RULE_RETENTION_DAYS,
+    CONF_PRECHARGE_ENABLED,
+    CONF_PRECHARGE_SAFETY_SOC,
+    CONF_PRECHARGE_PRICE_CEILING,
+    CONF_PRECHARGE_MAX_KWH_FRAC,
+    CONF_PRECHARGE_LOW_SOLAR_FRAC,
+    CONF_PRECHARGE_REQUIRE_LOW_SOLAR,
+    CONF_PRECHARGE_HORIZON_DAYS,
+    DEFAULT_PRECHARGE_ENABLED,
+    DEFAULT_PRECHARGE_SAFETY_SOC,
+    DEFAULT_PRECHARGE_PRICE_CEILING,
+    DEFAULT_PRECHARGE_MAX_KWH_FRAC,
+    DEFAULT_PRECHARGE_LOW_SOLAR_FRAC,
+    DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR,
+    DEFAULT_PRECHARGE_HORIZON_DAYS,
     SOLAR_FORECAST_P10,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
@@ -104,7 +118,9 @@ from .optimizer import (
     compute_prices,
     interpolate_solar_to_15min,
     optimize,
+    speculative_precharge_slots,
     _simulate_soc_trajectory,
+    _soc_to_charge_target,
 )
 from .rules import (
     UserRule,
@@ -1772,28 +1788,29 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_result = result
         self._last_run = dt_util.now()
         self._last_reason = reason
-        # Retain the scale THIS plan ran under — the next run's accuracy
-        # comparison attributes the solar error to it (raw-basis recovery).
-        self._last_result_solar_scale = self._solar_scale
 
-        # Snapshot actual values for next accuracy comparison
-        self._last_run_slot = now_slot
-        self._last_run_initial_soc = soc
-        self._last_run_actual_snapshot = {
-            "discharge": self._read_emaldo_sensor_float("battery_discharged_today"),
-            "charge": self._read_emaldo_sensor_float("battery_charged_today"),
-            "solar": self._read_emaldo_sensor_float("solar_energy_today"),
-        }
-        if self.config.get(CONF_SOLAR_ACTUAL_SENSOR, ""):
-            # None when unavailable → accuracy skips the record rather than
-            # mixing the Emaldo estimate into the external-source series.
-            self._last_run_actual_snapshot["solar_ext"] = (
-                self._read_external_solar_kwh()
+        # ── Speculative grid pre-charge (cheap-energy safety fill) ──
+        # Runs BEFORE tomorrow's optimization on purpose: the day+2 hedge reads
+        # LAST run's _last_result_tomorrow (not the current one), so order here
+        # only affects the current run's result_tomorrow. Computing tomorrow
+        # AFTER pre-charge makes it start from today's TOPPED-UP end-SoC, so the
+        # pushed forecast is continuous across the midnight handoff (no fake
+        # "deep gap" where charged energy appears to vanish).
+        if self.config.get(CONF_PRECHARGE_ENABLED, DEFAULT_PRECHARGE_ENABLED):
+            self._apply_speculative_precharge(
+                result, buy_prices, solar, cfg, soc, now_slot,
+                tomorrow_available=bool(prices_tomorrow),
+                tomorrow_end_soc_pct=(
+                    self._last_result_tomorrow.slots[-1].soc_after
+                    if self._last_result_tomorrow and self._last_result_tomorrow.slots
+                    else None
+                ),
             )
 
-        await self.hass.async_add_executor_job(self._save_runtime_state)
-
-        # Optimize tomorrow if prices available
+        # Tomorrow's plan — computed AFTER pre-charge so it starts from today's
+        # actual (post-precharge) end-SoC.  The hedge's drain-risk signal comes
+        # from the PREVIOUS run's _last_result_tomorrow (read above), so this
+        # reorder does not change the hedge's decision.
         if prices_tomorrow is not None:
             solar_tomorrow = self._get_solcast_forecast("tomorrow")
             end_soc = result.slots[-1].soc_after if result.slots else None
@@ -1830,6 +1847,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         else:
             self._last_result_tomorrow = None
+        # Retain the scale THIS plan ran under — the next run's accuracy
+        # comparison attributes the solar error to it (raw-basis recovery).
+        self._last_result_solar_scale = self._solar_scale
+
+        # Snapshot actual values for next accuracy comparison
+        self._last_run_slot = now_slot
+        self._last_run_initial_soc = soc
+        self._last_run_actual_snapshot = {
+            "discharge": self._read_emaldo_sensor_float("battery_discharged_today"),
+            "charge": self._read_emaldo_sensor_float("battery_charged_today"),
+            "solar": self._read_emaldo_sensor_float("solar_energy_today"),
+        }
+        if self.config.get(CONF_SOLAR_ACTUAL_SENSOR, ""):
+            # None when unavailable → accuracy skips the record rather than
+            # mixing the Emaldo estimate into the external-source series.
+            self._last_run_actual_snapshot["solar_ext"] = (
+                self._read_external_solar_kwh()
+            )
+
+        await self.hass.async_add_executor_job(self._save_runtime_state)
 
         # Push today (+ tomorrow if available) to Emaldo
         push_overrides = await self._push_schedule(result, self._last_result_tomorrow)
@@ -2015,6 +2052,130 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result.charge_slots = n_charge
         result.discharge_slots = n_discharge
         result.idle_slots = n_idle
+
+    def _apply_speculative_precharge(
+        self,
+        result: OptimizationResult,
+        buy_prices: list[float],
+        solar_15min: list[float],
+        cfg: BatteryConfig,
+        current_soc_pct: float,
+        start_slot: int,
+        *,
+        tomorrow_available: bool,
+        tomorrow_end_soc_pct: float | None = None,
+    ) -> None:
+        """Force a safety grid-charge on selected cheap slots, in place.
+
+        Mirrors _apply_user_mask: selects slots via the pure
+        speculative_precharge_slots(), sets their action to 'charge' with a
+        charge target byte (safety SoC%), re-simulates the SoC trajectory so
+        soc_after / dashboard forecast stay consistent, and backs off if the
+        slot already carries a user discharge rule.
+        """
+        regime_engaged = bool(
+            self._solar_regime and self._solar_regime["engaged"]
+        )
+        slots = speculative_precharge_slots(
+            buy_prices, solar_15min, cfg, current_soc_pct,
+            now_slot=start_slot,
+            tomorrow_available=tomorrow_available,
+            tomorrow_end_soc_pct=tomorrow_end_soc_pct,
+            horizon_days=int(self.config.get(
+                CONF_PRECHARGE_HORIZON_DAYS, DEFAULT_PRECHARGE_HORIZON_DAYS)),
+            safety_soc_frac=float(self.config.get(
+                CONF_PRECHARGE_SAFETY_SOC, DEFAULT_PRECHARGE_SAFETY_SOC)),
+            price_ceiling=float(self.config.get(
+                CONF_PRECHARGE_PRICE_CEILING, DEFAULT_PRECHARGE_PRICE_CEILING)),
+            max_kwh_frac=float(self.config.get(
+                CONF_PRECHARGE_MAX_KWH_FRAC, DEFAULT_PRECHARGE_MAX_KWH_FRAC)),
+            low_solar_frac=float(self.config.get(
+                CONF_PRECHARGE_LOW_SOLAR_FRAC, DEFAULT_PRECHARGE_LOW_SOLAR_FRAC)),
+            require_low_solar=bool(self.config.get(
+                CONF_PRECHARGE_REQUIRE_LOW_SOLAR,
+                DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR)),
+            regime_engaged=regime_engaged,
+        )
+        if not slots:
+            return
+
+        # Suppress optimizer discharges from the first precharge slot onward so
+        # the hedge's safety top-up isn't immediately drained back down by the
+        # optimizer's "end the day low" plan (cheap-tomorrow case).  This removes
+        # the charge/discharge bounce in the night forecast.  User-set discharges
+        # and any pre-hedge evening discharges are preserved.
+        hold_from = min(slots)
+        sources = self._last_sources
+        suppress: set[int] = set()
+        for sp in result.slots:
+            if sp.index < hold_from or sp.action != "discharge":
+                continue
+            if (
+                sources is not None
+                and sp.index < len(sources)
+                and sources[sp.index] == "user"
+            ):
+                continue
+            suppress.add(sp.index)
+
+        safety_target = (
+            cfg.soc_min
+            + float(self.config.get(
+                CONF_PRECHARGE_SAFETY_SOC, DEFAULT_PRECHARGE_SAFETY_SOC))
+            * (cfg.soc_max - cfg.soc_min)
+        )
+        charge_byte = _soc_to_charge_target(safety_target)
+
+        n_charge = n_discharge = n_idle = 0
+        charge_targets: dict[int, int] = {}
+        discharge_targets: dict[int, int] = {}
+        for sp in result.slots:
+            if sp.index < start_slot:
+                if sp.action == "discharge":
+                    n_discharge += 1
+                elif sp.action == "charge":
+                    n_charge += 1
+                else:
+                    n_idle += 1
+                continue
+            if sp.index in slots and sp.action != "discharge":
+                sp.action = "charge"
+                sp.slot_value = charge_byte
+                charge_targets[sp.index] = charge_byte
+                n_charge += 1
+            elif sp.index in suppress:
+                sp.action = "idle"
+                sp.slot_value = SLOT_IDLE
+                n_idle += 1
+            elif sp.action == "discharge":
+                n_discharge += 1
+                if sp.slot_value > 0x80:
+                    discharge_targets[sp.index] = 256 - sp.slot_value
+            elif sp.action == "charge":
+                n_charge += 1
+            else:
+                n_idle += 1
+
+        plan_actions = {sp.index: sp.action for sp in result.slots}
+        net_loads = [cfg.base_load_kw - solar_15min[i] for i in range(SLOTS_PER_DAY)]
+        traj_kwh = _simulate_soc_trajectory(
+            plan_actions, net_loads, solar_15min, cfg,
+            start_slot=start_slot,
+            initial_soc_kwh=cfg.capacity_kwh * current_soc_pct / 100.0,
+            charge_targets=charge_targets,
+            discharge_targets=discharge_targets,
+            pv_slots=result.thirdparty_pv_slots,
+        )
+        for sp in result.slots:
+            if sp.index < len(traj_kwh):
+                sp.soc_after = round(traj_kwh[sp.index] / cfg.capacity_kwh * 100.0, 1)
+        result.charge_slots = n_charge
+        result.discharge_slots = n_discharge
+        result.idle_slots = n_idle
+        _LOGGER.info(
+            "Speculative pre-charge: forcing charge on %d slot(s) to %.1f%% SoC",
+            len(slots), safety_target,
+        )
 
     @property
     def last_sources(self) -> list[str] | None:

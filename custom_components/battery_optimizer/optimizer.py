@@ -12,6 +12,7 @@ equals the grid buy price avoided, not the sell/export price.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 from .const import (
@@ -19,6 +20,7 @@ from .const import (
     SLOT_IDLE,
     SLOTS_PER_DAY,
     SLOT_DURATION_HOURS,
+    PUBLISH_CUTOFF_SLOT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -335,6 +337,139 @@ def _soc_to_discharge_target(soc_min: float) -> int:
     """
     target = max(int(soc_min), 0)
     return (256 - target) & 0xFF
+
+
+def speculative_precharge_slots(
+    buy_prices: list[float],
+    solar_15min: list[float],
+    cfg: BatteryConfig,
+    current_soc_pct: float,
+    *,
+    now_slot: int,
+    tomorrow_available: bool,
+    horizon_days: int,
+    safety_soc_frac: float,
+    price_ceiling: float,
+    max_kwh_frac: float,
+    low_solar_frac: float,
+    require_low_solar: bool,
+    regime_engaged: bool = False,
+    publish_cutoff_slot: int = PUBLISH_CUTOFF_SLOT,
+    tomorrow_end_soc_pct: float | None = None,
+) -> set[int]:
+    """Select today's slots to speculatively grid-charge for safety.
+
+    Pure / side-effect-free: returns slot indices to force-charge.  The
+    coordinator merges the result into the optimizer plan *after* optimize(),
+    mirroring how user rules override actions.
+
+    Two modes:
+
+    Pre-publish (tomorrow unknown) — fire conditions (all must hold):
+      1. SoC below the safety target.
+      2. Weak-solar signal (unless require_low_solar is off) — low forecast
+         OR the durable solar_regime detector is engaged.
+      3. Cheap slots (effective buy <= ceiling) exist today.
+      4. horizon_days == 1  -> the cheap window closes *before* the ~14:00
+         Nordpool publish (max cheap slot < publish_cutoff_slot).  Otherwise
+         the post-publish optimizer handles it (Case 2, no waste).
+         horizon_days == 2  -> fire whenever tomorrow is unknown, regardless
+         of when the cheap window closes (charge ahead of a possible day+2
+         spike).
+
+    Day+2 hedge (tomorrow known, horizon_days >= 2) — hedge a likely day+2
+    price spike.  Tomorrow's optimized plan already exists (the coordinator
+    passes its projected end-SoC as `tomorrow_end_soc_pct`); if that plan would
+    leave the battery low — because tomorrow is cheap so the optimizer does no
+    grid top-up and self-consumption drains it — top up gently tonight using
+    cheap grid energy, entering the unknown day+2 with a safety buffer.
+    Fire conditions (all must hold):
+      1. SoC below the safety target (T0).
+      2. tomorrow_end_soc_pct is known and below the safety target (drain risk).
+      3. Cheap slots exist tonight (no 14:00 cutoff — we hedge day+2).
+
+    Selected slots are the cheapest `n`, where `n` is sized so cumulative
+    charge reaches the smaller of: energy-to-safety, headroom to Max SoC, and
+    max_kwh_frac of the usable band.
+    """
+    band_kwh = cfg.capacity_kwh * (cfg.soc_max - cfg.soc_min) / 100.0
+    safety_target = cfg.soc_min + safety_soc_frac * (cfg.soc_max - cfg.soc_min)
+
+    if current_soc_pct >= safety_target:
+        return set()
+
+    if tomorrow_available:
+        # Tomorrow's prices are known, so the optimizer already plans tomorrow.
+        # With horizon_days < 2 there is nothing to speculate: the normal
+        # optimizer handles tomorrow.  With horizon_days >= 2 we additionally
+        # hedge a day+2 spike when tomorrow's own plan would leave us low.
+        if horizon_days < 2:
+            return set()
+        if tomorrow_end_soc_pct is None:
+            return set()
+        if tomorrow_end_soc_pct >= safety_target:
+            return set()
+        candidates = _cheap_slots(buy_prices, now_slot, price_ceiling)
+        if not candidates:
+            return set()
+        return _size_charge(
+            candidates, buy_prices, cfg, current_soc_pct,
+            safety_target, band_kwh, max_kwh_frac,
+        )
+
+    # ---- Pre-publish (tomorrow unknown) ----
+    solar_sum = sum(solar_15min[:SLOTS_PER_DAY])
+    weak_solar = (solar_sum < band_kwh * low_solar_frac) or regime_engaged
+    if require_low_solar and not weak_solar:
+        return set()
+
+    candidates = _cheap_slots(buy_prices, now_slot, price_ceiling)
+    if not candidates:
+        return set()
+
+    if horizon_days <= 1 and max(candidates) >= publish_cutoff_slot:
+        # Cheap window extends past publish → let the post-publish optimizer
+        # decide (Case 2).  Avoids buying now then topping up again later.
+        return set()
+
+    return _size_charge(
+        candidates, buy_prices, cfg, current_soc_pct,
+        safety_target, band_kwh, max_kwh_frac,
+    )
+
+
+def _cheap_slots(
+    buy_prices: list[float], now_slot: int, price_ceiling: float
+) -> list[int]:
+    """Slot indices from now until end of day where effective buy <= ceiling."""
+    return [
+        s
+        for s in range(max(now_slot, 0), SLOTS_PER_DAY)
+        if s < len(buy_prices) and buy_prices[s] <= price_ceiling
+    ]
+
+
+def _size_charge(
+    candidates: list[int],
+    buy_prices: list[float],
+    cfg: BatteryConfig,
+    current_soc_pct: float,
+    safety_target: float,
+    band_kwh: float,
+    max_kwh_frac: float,
+) -> set[int]:
+    """Size the charge to safety (capped) and return the cheapest slots."""
+    needed_kwh = (safety_target - current_soc_pct) / 100.0 * cfg.capacity_kwh
+    headroom_kwh = (cfg.soc_max - current_soc_pct) / 100.0 * cfg.capacity_kwh
+    needed_kwh = min(needed_kwh, headroom_kwh, max_kwh_frac * band_kwh)
+    if needed_kwh <= 0:
+        return set()
+    per_slot_kwh = cfg.max_charge_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
+    if per_slot_kwh <= 0:
+        return set()
+    n_slots = max(1, math.ceil(needed_kwh / per_slot_kwh))
+    cheapest = sorted(candidates, key=lambda s: (buy_prices[s], s))
+    return set(cheapest[:n_slots])
 
 
 def _simulate_soc_trajectory(

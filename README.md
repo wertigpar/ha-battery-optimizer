@@ -1061,6 +1061,58 @@ The coordinator cancels and rebuilds the `async_call_later` transition callbacks
 
 ---
 
+## Speculative Grid Pre-Charge
+
+A safety feature that tops the battery up from the grid when **cheap energy is available, solar
+looks weak, and the cheap window is about to close before tomorrow's prices are published (~14:00
+CET)**. Without it, the battery can sit nearly empty and miss the cheap energy — then face high
+prices or a hidden sun the next day.
+
+It is **opt-in** (off by default) and appears as a set of *Speculative grid pre-charge* fields on
+the Options screen (flat list — collapsible section grouping is unsupported in some HA builds).
+
+### Why it exists
+
+The optimizer only plans **today + tomorrow**. If tomorrow's prices are not yet known and the
+cheapest grid slots end before the ~14:00 Nordpool publish, there is no normal path that buys that
+cheap energy. This feature fills that gap by charging to a **safety level** during the cheap slots.
+
+### How it works
+
+1. Only runs when tomorrow's prices are **not yet known** (pre-publish). Once tomorrow is published,
+   the normal optimizer handles charging — so this never double-buys.
+2. Fires only when **all** of these hold:
+   - Battery SoC is below the safety target.
+   - Solar looks **weak** (forecast below a threshold *or* the durable solar-regime detector is engaged).
+   - Effective buy price (spot + fees + tax + commission) is at or below the **price ceiling**.
+   - The cheap window **closes before the ~14:00 publish** (otherwise it defers to the post-publish run).
+3. Picks the **cheapest** eligible slots and charges them up to the safety target, capped by a
+   maximum energy share so it never over-buys.
+4. A re-run after the price publish can top up further if tomorrow justifies it (this is a floor,
+   not a ceiling).
+
+> **Negative spot prices:** these are treated as "very cheap", not "fill to max". The battery charges
+> to the safety level (not 100%) because solar is still free/cheaper and a transfer fee + tax usually
+> make the effective price small-positive. Solar keeps priority.
+
+### Settings (Options → Speculative pre-charge)
+
+| Setting | Default | What it does |
+|---|---|---|
+| Enable speculative grid pre-charge | Off | Master switch for the whole feature. |
+| Safety SoC target | 0.70 | How full to aim for, as a fraction of the usable band (Min→Max SoC). Never above Max SoC. |
+| Cheap-energy price ceiling | 0.07 €/kWh | Only pre-charge when effective buy is at or below this. |
+| Max speculative energy | 0.40 | Cap on how much energy one pre-charge may add, as a fraction of the band. |
+| Weak-solar threshold | 0.25 | Solar below this fraction of the band counts as "weak". |
+| Require weak solar | On | Only pre-charge on weak-solar days. Turn off to act on price alone. |
+| Look-ahead horizon | 1 day | 1 = only pre-publish. 2 = also pre-charge when tomorrow's plan is still unknown (e.g. ahead of a possible day-after spike). |
+
+**Everyday guidance:** leave the defaults and just turn the feature on if you often see cheap
+mornings but high evening prices and weak solar. Raise *Safety SoC* for a bigger buffer; lower the
+*price ceiling* if you only want to act on genuinely negative/near-zero prices.
+
+---
+
 #### Dashboard chart — Third-Party PV Schedule
 
 Requires [apexcharts-card](https://github.com/RomRider/apexcharts-card) from HACS.

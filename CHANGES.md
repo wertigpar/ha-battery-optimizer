@@ -1,5 +1,38 @@
 # Changes
 
+## v0.3.10
+
+### Added
+
+- **Speculative grid pre-charge (Strategy B safety fill)** — when enabled, the
+  optimizer may charge from the grid to a configurable safety SoC during cheap
+  slots whose cheap window ends before next-day prices publish (~14:00), so the
+  battery is never left empty on a weak-solar day before the plan can react.
+  Pure planner fn `speculative_precharge_slots()` selects idle slots below an
+  effective-price ceiling with a hard energy cap; `_apply_speculative_precharge()`
+  mirrors the user-mask path (force `charge` to safety target, re-sim SoC,
+  back off if slot already `discharge`). 7 options: enable, safety_soc,
+  price_ceiling (effective €/kWh), max_kwh_frac, low_solar_frac,
+  require_low_solar, horizon_days (1–2). Files: `const.py`, `optimizer.py`,
+  `coordinator.py`, `config_flow.py`, `translations/en.json` (+ fi.json).
+
+### Fixed
+
+- **Midnight SoC discontinuity in pushed forecast** — `result_tomorrow` was
+  optimized *before* the speculative pre-charge was applied, so tomorrow's plan
+  started from the pre-precharge end-SoC while the pushed today plan ended at the
+  topped-up SoC; charged energy looked like it vanished at 00:00. Tomorrow is now
+  optimized *after* pre-charge, starting from the post-precharge end-SoC; the
+  hedge's drain-risk signal still comes from the previous run's snapshot, so the
+  decision is unchanged. File: `coordinator.py`.
+
+- **Night charge/discharge oscillation** — when the hedge fired at night, the
+  optimizer's "end-the-day-low" discharges immediately drained the safety top-up,
+  making the forecast bounce (charge→discharge→charge). Discharge slots from the
+  first precharge slot onward are now neutralized to idle (preserving the safety
+  buffer); user-set and pre-hedge evening discharges are kept. File:
+  `coordinator.py`.
+
 ## v0.3.9
 
 ### Added

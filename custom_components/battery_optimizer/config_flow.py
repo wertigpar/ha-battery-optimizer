@@ -66,6 +66,20 @@ from .const import (
     CONF_GRID_IMPORT_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
     CONF_RULE_RETENTION_DAYS,
+    CONF_PRECHARGE_ENABLED,
+    CONF_PRECHARGE_SAFETY_SOC,
+    CONF_PRECHARGE_PRICE_CEILING,
+    CONF_PRECHARGE_MAX_KWH_FRAC,
+    CONF_PRECHARGE_LOW_SOLAR_FRAC,
+    CONF_PRECHARGE_REQUIRE_LOW_SOLAR,
+    CONF_PRECHARGE_HORIZON_DAYS,
+    DEFAULT_PRECHARGE_ENABLED,
+    DEFAULT_PRECHARGE_SAFETY_SOC,
+    DEFAULT_PRECHARGE_PRICE_CEILING,
+    DEFAULT_PRECHARGE_MAX_KWH_FRAC,
+    DEFAULT_PRECHARGE_LOW_SOLAR_FRAC,
+    DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR,
+    DEFAULT_PRECHARGE_HORIZON_DAYS,
     SOLAR_FORECAST_P50,
     SOLAR_FORECAST_P10,
     DEFAULT_VAT_MULTIPLIER,
@@ -340,6 +354,61 @@ def _build_schema(
                 SelectSelectorConfig(
                     options=[str(v) for v in RULE_RETENTION_OPTIONS],
                     translation_key="rule_retention",
+                )
+            ),
+            # ── Speculative grid pre-charge (flat list; HA's SECTION grouping
+            #    helper is unavailable in this HA build, so fields are flat) ──
+            vol.Optional(
+                CONF_PRECHARGE_ENABLED,
+                default=d.get(
+                    CONF_PRECHARGE_ENABLED, DEFAULT_PRECHARGE_ENABLED
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_PRECHARGE_SAFETY_SOC,
+                default=d.get(
+                    CONF_PRECHARGE_SAFETY_SOC, DEFAULT_PRECHARGE_SAFETY_SOC
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_PRECHARGE_PRICE_CEILING,
+                default=d.get(
+                    CONF_PRECHARGE_PRICE_CEILING,
+                    DEFAULT_PRECHARGE_PRICE_CEILING,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0)),
+            vol.Optional(
+                CONF_PRECHARGE_MAX_KWH_FRAC,
+                default=d.get(
+                    CONF_PRECHARGE_MAX_KWH_FRAC,
+                    DEFAULT_PRECHARGE_MAX_KWH_FRAC,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_PRECHARGE_LOW_SOLAR_FRAC,
+                default=d.get(
+                    CONF_PRECHARGE_LOW_SOLAR_FRAC,
+                    DEFAULT_PRECHARGE_LOW_SOLAR_FRAC,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_PRECHARGE_REQUIRE_LOW_SOLAR,
+                default=d.get(
+                    CONF_PRECHARGE_REQUIRE_LOW_SOLAR,
+                    DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR,
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_PRECHARGE_HORIZON_DAYS,
+                default=str(
+                    _int_default(
+                        CONF_PRECHARGE_HORIZON_DAYS, DEFAULT_PRECHARGE_HORIZON_DAYS
+                    )
+                ),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=["1", "2"],
+                    translation_key="precharge_horizon_days",
                 )
             ),
         }
