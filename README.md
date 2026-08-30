@@ -87,7 +87,32 @@ The optimizer compares its plan against the battery's internal AI schedule (read
 
 ### Manual
 
-1. Copy the `battery_optimizer` folder into your Home Assistant `custom_components/` directory.
+1. Copy the `battery_optimizer` folder into your Home Assistant `custom_components/` directory:
+
+   ```
+   custom_components/
+   ├── battery_optimizer/
+   │   ├── __init__.py
+   │   ├── brand/                  # logos + icons (HACS branding)
+   │   ├── button.py
+   │   ├── config_flow.py
+   │   ├── const.py
+   │   ├── coordinator.py
+   │   ├── manifest.json
+   │   ├── optimizer.py
+   │   ├── rules.py
+   │   ├── runtime_state.py
+   │   ├── sensor.py
+   │   ├── services.py
+   │   ├── services.yaml
+   │   ├── solar_actual.py
+   │   ├── solar_scale.py
+   │   ├── strings.json
+   │   ├── switch.py
+   │   └── translations/           # da, en, fi, nb, sv
+   └── emaldo/
+       └── ...
+   ```
 
 2. Restart Home Assistant.
 
@@ -1606,6 +1631,23 @@ battery_optimizer/
 ├── strings.json         # Translation strings
 └── translations/        # Localized strings (da, en, fi, nb, sv)
 ```
+
+## Changelog
+
+Full release history: [CHANGES.md](CHANGES.md).
+
+### v0.3.11
+- **Added** — cross-day charge arbitrage: when tomorrow's confirmed grid-charge need is known, today pre-charges cheap solar-surplus slots with headroom instead of re-buying that energy tomorrow at a higher price. Byte-identical without the signal.
+- **Fixed** — HA-restart SoC guard: the startup watcher no longer gets defeated by the restored `_last_result` (it now keys on `_ran_this_session`), so the optimizer auto-waits for the first live battery SoC reading and runs automatically once Emaldo publishes. On a fresh restart the guard no longer reuses the stale projected SoC; it suppresses the per-trigger waiting message and emits a single warning once the wait exceeds 60s.
+
+### v0.3.8
+- **Fixed** — unreadable battery SoC no longer degrades the plan to all-idle over the profitable window (issue #16): last-known-SoC fallback + skip-run with no history.
+
+### v0.3.7
+- **Fixed** — disabling a schedule rule in the rule editor now persists (`enabled` flag was dropped from the saved subentry data).
+
+### v0.3.6b1
+- **Fixed** — Emaldo plan-cost breakdown doc/attribute now reports grid cost **plus** wear, consistent with the optimizer plan-cost sensor (`emaldo_cost = emaldo_grid_cost + emaldo_wear_total`).
 
 ## Support
 
