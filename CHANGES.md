@@ -23,9 +23,13 @@
   state (only `_last_run_initial_soc` was), so the SoC guard had no fallback
   and skipped the run ("Battery SoC unreadable and no last-known value",
   keeping a stale prior schedule). `_restore_runtime_state` now restores
-  `_last_known_soc` from the last plan slot's projected end-SoC; the next
-  successful read overwrites it with the measured value. File: `coordinator.py`.
-  Guard: `tests/test_optimizer_soc_guard.py` (2 new tests).
+  `_last_known_soc` from the last plan slot's projected end-SoC.
+
+  **Refined (follow-up):** a restored value is only a stale projection, so the
+  guard now *waits* for a live reading on a fresh restart (`_soc_live_read_done`
+  flag) instead of pushing a plan from it. Once a live read has succeeded this
+  session, a later transient failure reuses the last measured value. File:
+  `coordinator.py`. Guard: `tests/test_optimizer_soc_guard.py` (4 new tests).
 
 ## v0.3.10
 

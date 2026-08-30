@@ -311,6 +311,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_planned_snapshot: dict | None = None
         # Last successfully read battery SoC — fallback if a later read fails.
         self._last_known_soc: float | None = None
+        # True once a live SoC read has succeeded THIS session.  Distinguishes a
+        # transient mid-day read failure (reuse last-known) from a fresh restart
+        # where the restored value is only a stale projection — in the latter
+        # case the guard waits for a real reading instead of pushing a plan.
+        self._soc_live_read_done: bool = False
         # PV sell strategy
         self._pv_strategy_enabled: bool = self.config.get(
             CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY
@@ -1326,6 +1331,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # initial reading at an HA restart (Optimizer boots faster).  The next
         # successful read overwrites it with the measured value.
         self._last_known_soc = restored["plan_slots"][-1][2]
+        self._soc_live_read_done = False  # fresh session — no live read yet
         _LOGGER.info(
             "Restored last-run runtime state: slot %d, %d plan slots, scale %.3f",
             self._last_run_slot,
@@ -1623,11 +1629,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Battery SoC guard (issue #16): a failed/unavailable SoC read must
         # never degrade into an all-idle plan pushed over a profitable window.
-        # Fall back to the last known good value; with no history at all,
-        # skip the run entirely and keep the previously pushed schedule.
+        # On a fresh restart the restored value is only a stale projection, so
+        # wait for a live reading instead of running (the startup watcher
+        # retries until Emaldo publishes).  Once a live read has succeeded this
+        # session, a later transient failure can reuse the last measured value.
         soc = self._get_battery_soc()
         if soc is None:
-            if self._last_known_soc is not None:
+            if self._soc_live_read_done and self._last_known_soc is not None:
                 soc = self._last_known_soc
                 soc_input_flag = "last_known"
                 _LOGGER.warning(
@@ -1635,9 +1643,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     soc,
                 )
             else:
-                _LOGGER.error(
-                    "Battery SoC unreadable and no last-known value — "
-                    "skipping optimization (prior schedule kept)"
+                _LOGGER.warning(
+                    "Battery SoC unreadable — waiting for first live reading "
+                    "(retrying on next trigger)"
                 )
                 await self._capture_run_snapshot(
                     {
@@ -1651,6 +1659,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return None
         else:
             self._last_known_soc = soc
+            self._soc_live_read_done = True
             soc_input_flag = "read"
 
         # Gather data
