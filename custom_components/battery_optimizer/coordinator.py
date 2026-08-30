@@ -316,6 +316,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # where the restored value is only a stale projection — in the latter
         # case the guard waits for a real reading instead of pushing a plan.
         self._soc_live_read_done: bool = False
+        # True once run_optimizer has completed a full run THIS session.  The
+        # startup watcher uses this (not _last_result) to avoid being defeated
+        # by a restored yesterday plan — _last_result is set by state
+        # restoration, but no run has happened yet this session.
+        self._ran_this_session: bool = False
+        # When the SoC guard first skipped waiting for a live reading; used to
+        # emit a single warning once the wait exceeds 60s.
+        self._soc_wait_start = dt_util.now()
         # PV sell strategy
         self._pv_strategy_enabled: bool = self.config.get(
             CONF_ENABLE_PV_STRATEGY, DEFAULT_ENABLE_PV_STRATEGY
@@ -1332,6 +1340,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # successful read overwrites it with the measured value.
         self._last_known_soc = restored["plan_slots"][-1][2]
         self._soc_live_read_done = False  # fresh session — no live read yet
+        self._ran_this_session = False     # no run completed this session yet
         _LOGGER.info(
             "Restored last-run runtime state: slot %d, %d plan slots, scale %.3f",
             self._last_run_slot,
@@ -1643,10 +1652,23 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     soc,
                 )
             else:
-                _LOGGER.warning(
-                    "Battery SoC unreadable — waiting for first live reading "
-                    "(retrying on next trigger)"
-                )
+                # Fresh restart with no live read yet: wait for a real SoC
+                # instead of pushing a plan from the stale restored projection.
+                # The startup watcher retries until Emaldo publishes.  Keep the
+                # noise down — no per-trigger warning — and emit a single
+                # warning once the wait exceeds 60s.
+                now = dt_util.now()
+                if self._soc_wait_start is None:
+                    self._soc_wait_start = now
+                    _LOGGER.debug(
+                        "Battery SoC unreadable — waiting for first live reading"
+                    )
+                elif (now - self._soc_wait_start).total_seconds() > 60:
+                    _LOGGER.warning(
+                        "Battery SoC still unreadable after 1 minute — Emaldo has "
+                        "not published a reading; optimization will retry on the "
+                        "next trigger"
+                    )
                 await self._capture_run_snapshot(
                     {
                         "state": "soc_guard_skip",
@@ -1660,6 +1682,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             self._last_known_soc = soc
             self._soc_live_read_done = True
+            self._soc_wait_start = None  # live reading acquired — wait over
             soc_input_flag = "read"
 
         # Gather data
@@ -1976,6 +1999,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             },
         })
 
+        self._ran_this_session = True
         return result
 
     def _device_subentry_id(self) -> str | None:
@@ -2891,8 +2915,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         it gives up — the checkpoint interval / price watcher take over.
         """
         self._unsub_startup = None
-        if self._last_result is not None:
-            return  # Already ran (e.g. Nordpool triggered first)
+        if self._ran_this_session:
+            return  # Already ran this session (e.g. Nordpool triggered first)
         self._startup_attempts += 1
         if self._startup_attempts > self._STARTUP_MAX_ATTEMPTS:
             _LOGGER.warning(

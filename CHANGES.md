@@ -26,10 +26,18 @@
   `_last_known_soc` from the last plan slot's projected end-SoC.
 
   **Refined (follow-up):** a restored value is only a stale projection, so the
-  guard now *waits* for a live reading on a fresh restart (`_soc_live_read_done`
-  flag) instead of pushing a plan from it. Once a live read has succeeded this
-  session, a later transient failure reuses the last measured value. File:
-  `coordinator.py`. Guard: `tests/test_optimizer_soc_guard.py` (4 new tests).
+  guard now *waits* for a live reading on a fresh restart instead of pushing a
+  plan from it.  Two more fixes make the wait automatic and quiet:
+
+  - The startup watcher keyed on `_last_result`, which state restoration sets,
+    so an early trigger (Nordpool/checkpoint) defeated the retry and the user
+    had to trigger manually.  It now keys on `_ran_this_session`, which is only
+    set by a run that actually completed this session.
+  - The first "waiting" warning is suppressed (debug only); a single warning
+    is emitted once the wait exceeds 60s.
+
+  File: `coordinator.py`. Guard: `tests/test_optimizer_soc_guard.py`
+  (7 new tests).
 
 ## v0.3.10
 
