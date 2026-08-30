@@ -1,5 +1,18 @@
 # Changes
 
+## v0.3.12
+
+### Fixed
+
+- **Tomorrow cost sensors stayed `unknown` after Emaldo published (issue #18)** —
+  the `slot_count` attribute watcher (96 -> 192) missed the transition and the
+  periodic checkpoint called `run_optimizer(force=False)`, which `_should_reoptimize`
+  skipped when SoC was stable, so the tomorrow plan was never rebuilt and all four
+  `tomorrow_*` sensors stayed `unknown` until a manual press. `_checkpoint_callback`
+  now forces a re-run whenever Emaldo has tomorrow's prices but
+  `_last_result_tomorrow` is still None; once built, force returns to False.
+  File: `coordinator.py`. Guard: `tests/test_optimizer_soc_guard.py` (3 tests).
+
 ## v0.3.11
 
 ### Added
@@ -16,15 +29,6 @@
   Guard: `tests/test_crossday_charge.py` (5 tests).
 
 ### Fixed
-
-- **Tomorrow cost sensors stayed `unknown` after Emaldo published (issue #18)** —
-  the `slot_count` attribute watcher (96 -> 192) missed the transition and the
-  periodic checkpoint called `run_optimizer(force=False)`, which `_should_reoptimize`
-  skipped when SoC was stable, so the tomorrow plan was never rebuilt and all four
-  `tomorrow_*` sensors stayed `unknown` until a manual press. `_checkpoint_callback`
-  now forces a re-run whenever Emaldo has tomorrow's prices but
-  `_last_result_tomorrow` is still None; once built, force returns to False.
-  File: `coordinator.py`. Guard: `tests/test_optimizer_soc_guard.py` (3 tests).
 
 - **HA-restart SoC guard skipped optimization** — at a same-day restart the
   Optimizer sometimes booted before Emaldo published its initial battery SoC
