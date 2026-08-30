@@ -2939,9 +2939,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @callback
     def _checkpoint_callback(self, now: datetime) -> None:
-        """Checkpoint trigger — conditional re-optimization."""
+        """Checkpoint trigger — conditional re-optimization.
+
+        Force a re-run when Emaldo now has tomorrow's prices but the tomorrow
+        plan is not yet built.  The periodic checkpoint is the reliable,
+        interval-bounded path: the ``slot_count`` attribute watcher can miss
+        the 96 -> 192 transition (element state is a constant -1), leaving
+        the tomorrow sensors `unknown` until the next manual press.  Holding
+        ``force=False`` otherwise lets ``_should_reoptimize`` skip the rebuild
+        when SoC is stable.
+        """
+        force_tomorrow = (
+            self._last_result_tomorrow is None
+            and self._has_tomorrow_prices()
+        )
+        _LOGGER.debug(
+            "Checkpoint: force_tomorrow=%s (tomorrow planned=%s)",
+            force_tomorrow, self._last_result_tomorrow is not None,
+        )
         self.hass.async_create_task(
-            self.run_optimizer(reason="checkpoint", force=False)
+            self.run_optimizer(reason="checkpoint", force=force_tomorrow)
         )
 
     @callback
