@@ -1635,6 +1635,10 @@ battery_optimizer/
 
 Full release history: [CHANGES.md](CHANGES.md).
 
+### v0.3.11
+- **Added** — cross-day charge arbitrage: when tomorrow's confirmed grid-charge need is known, today pre-charges cheap solar-surplus slots with headroom instead of re-buying that energy tomorrow at a higher price. Byte-identical without the signal.
+- **Fixed** — HA-restart SoC guard: the startup watcher no longer gets defeated by the restored `_last_result` (it now keys on `_ran_this_session`), so the optimizer auto-waits for the first live battery SoC reading and runs automatically once Emaldo publishes. On a fresh restart the guard no longer reuses the stale projected SoC; it suppresses the per-trigger waiting message and emits a single warning once the wait exceeds 60s.
+
 ### v0.3.8
 - **Fixed** — unreadable battery SoC no longer degrades the plan to all-idle over the profitable window (issue #16): last-known-SoC fallback + skip-run with no history.
 
