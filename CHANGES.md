@@ -15,6 +15,18 @@
   unchanged (byte-identical). Files: `optimizer.py`, `coordinator.py`.
   Guard: `tests/test_crossday_charge.py` (5 tests).
 
+### Fixed
+
+- **HA-restart SoC guard skipped optimization** — at a same-day restart the
+  Optimizer sometimes booted before Emaldo published its initial battery SoC
+  reading, and `_last_known_soc` was never restored from the persisted runtime
+  state (only `_last_run_initial_soc` was), so the SoC guard had no fallback
+  and skipped the run ("Battery SoC unreadable and no last-known value",
+  keeping a stale prior schedule). `_restore_runtime_state` now restores
+  `_last_known_soc` from the last plan slot's projected end-SoC; the next
+  successful read overwrites it with the measured value. File: `coordinator.py`.
+  Guard: `tests/test_optimizer_soc_guard.py` (2 new tests).
+
 ## v0.3.10
 
 ### Added

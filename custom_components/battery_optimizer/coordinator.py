@@ -1320,6 +1320,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 for e in restored["plan_slots"]
             ]
         )
+        # Last-known SoC guard: the last plan slot's projected end-SoC is the
+        # most recent value the optimizer has.  Restoring it lets the SoC guard
+        # fall back instead of skipping when Emaldo has not yet published its
+        # initial reading at an HA restart (Optimizer boots faster).  The next
+        # successful read overwrites it with the measured value.
+        self._last_known_soc = restored["plan_slots"][-1][2]
         _LOGGER.info(
             "Restored last-run runtime state: slot %d, %d plan slots, scale %.3f",
             self._last_run_slot,
