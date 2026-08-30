@@ -87,32 +87,7 @@ The optimizer compares its plan against the battery's internal AI schedule (read
 
 ### Manual
 
-1. Copy the `battery_optimizer` folder into your Home Assistant `custom_components/` directory:
-
-   ```
-   custom_components/
-   ├── battery_optimizer/
-   │   ├── __init__.py
-   │   ├── brand/                  # logos + icons (HACS branding)
-   │   ├── button.py
-   │   ├── config_flow.py
-   │   ├── const.py
-   │   ├── coordinator.py
-   │   ├── manifest.json
-   │   ├── optimizer.py
-   │   ├── rules.py
-   │   ├── runtime_state.py
-   │   ├── sensor.py
-   │   ├── services.py
-   │   ├── services.yaml
-   │   ├── solar_actual.py
-   │   ├── solar_scale.py
-   │   ├── strings.json
-   │   ├── switch.py
-   │   └── translations/           # da, en, fi, nb, sv
-   └── emaldo/
-       └── ...
-   ```
+1. Copy the `battery_optimizer` folder into your Home Assistant `custom_components/` directory.
 
 2. Restart Home Assistant.
 
