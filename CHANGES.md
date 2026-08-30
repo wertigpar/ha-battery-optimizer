@@ -1,5 +1,20 @@
 # Changes
 
+## v0.3.11
+
+### Added
+
+- **Cross-day charge arbitrage** — `optimize()` gains an optional
+  `future_grid_charge_needed` (kWh) argument. When tomorrow's confirmed
+  grid-charge need is known, today pre-charges cheap solar-surplus slots
+  with headroom instead of deferring the purchase to tomorrow at a higher
+  price. The coordinator derives the signal from the previous run's tomorrow
+  plan (sum of tomorrow's `charge` slots × per-slot kWh); tomorrow is
+  re-planned from today's actual end-SoC, so the signal is only an estimate
+  and never feeds the final tomorrow plan. Without the signal the pool is
+  unchanged (byte-identical). Files: `optimizer.py`, `coordinator.py`.
+  Guard: `tests/test_crossday_charge.py` (5 tests).
+
 ## v0.3.10
 
 ### Added

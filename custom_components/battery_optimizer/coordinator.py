@@ -1758,6 +1758,20 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if prices_tomorrow is not None:
             buy_tom, sell_tom = compute_prices(prices_tomorrow, cfg)
         emaldo_modes = self._read_emaldo_internal_modes()
+        # Cross-day charge signal: tomorrow's confirmed grid-charge need (from
+        # the previous run's tomorrow plan) lets today pre-charge cheap surplus
+        # slots instead of deferring the purchase to tomorrow at a higher price.
+        # Tomorrow is re-planned below from today's actual end-SoC, so this
+        # signal is only an estimate and never feeds the final tomorrow plan.
+        future_charge_need = None
+        if prices_tomorrow is not None and self._last_result_tomorrow:
+            _need = sum(
+                cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
+                for sp in self._last_result_tomorrow.slots
+                if sp.action == "charge"
+            )
+            if _need > 0.0:
+                future_charge_need = _need
         result = optimize(
             buy_prices,
             sell_prices,
@@ -1771,6 +1785,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._solar_regime and self._solar_regime["engaged"]
             ),
             future_min_buy=min(buy_tom) if buy_tom else None,
+            future_grid_charge_needed=future_charge_need,
         )
         result.reason = reason
 

@@ -1313,6 +1313,7 @@ def optimize(
     _probe: bool = False,
     solar_regime_engaged: bool = False,
     future_min_buy: float | None = None,
+    future_grid_charge_needed: float | None = None,
     case_a_floor: float | None = None,
 ) -> OptimizationResult:
     """Run greedy optimization over 96 slots.
@@ -1547,6 +1548,7 @@ def optimize(
     # Case B: round-trip charge/discharge pairs — buy cheap grid energy,
     # store it, discharge later to avoid expensive grid purchases.
     # Profitable when: buy_saved > buy_charged / round_trip + wear.
+    max_buy_for_profit = 0.0  # safe default; only raised when a discharge home exists
     if charge_candidates and discharge_candidates:
         best_buy_saved = buy_prices[discharge_candidates[0]]
         max_buy_for_profit = (best_buy_saved - wear_cost) * cfg.round_trip_factor
@@ -1761,6 +1763,10 @@ def optimize(
     for s in solar_surplus_slots:
         if s in plan_actions:
             continue
+        # Cross-day carry: leave cheap surplus slots for the grid-charge pass
+        # when tomorrow's confirmed need is known (solar alone won't fill them).
+        if future_grid_charge_needed and buy_prices[s] < max_buy_for_profit:
+            continue
         surplus_kw = -net_loads[s]  # positive surplus
         charge_kw = min(surplus_kw, cfg.max_charge_kw)
         charge_kwh = charge_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
@@ -1805,10 +1811,33 @@ def optimize(
         current_soc_kwh - soc_min_kwh - discharge_reserve_kwh, 0.0
     )
     grid_charge_needed = max(0.0, total_discharge_battery_kwh - solar_actual - existing_usable)
+    # Cross-day carry: when tomorrow's confirmed grid-charge need is known,
+    # today's deficit must also cover it, so cheap surplus slots with headroom
+    # can be grid-charged now instead of re-buying that energy tomorrow at a
+    # higher price.  Without the signal the pool is unchanged (byte-identical).
+    if future_grid_charge_needed:
+        grid_charge_needed += float(future_grid_charge_needed)
 
     soc_sim = available_soc
     grid_charged = 0.0
-    for s in profitable_charge:
+    # Charge pool: profitable grid slots, plus -- for cross-day carry -- cheap
+    # solar-surplus slots with headroom (the idle pass below skips them so this
+    # pass can charge them).  Sorted cheapest first, same as profitable_charge.
+    grid_charge_slots = list(profitable_charge)
+    if future_grid_charge_needed:
+        for s in solar_surplus_slots:
+            if buy_prices[s] < max_buy_for_profit:
+                # Re-assign wasteful discharge safety-nets on cheap surplus
+                # slots to grid charge (cheaper than re-buying tomorrow).
+                # Discharging a surplus slot is redundant with idle (the
+                # firmware charges from solar either way), so this only ADDS
+                # stored energy for the carry — coverage is never lost.
+                if plan_actions.get(s) == "discharge":
+                    del plan_actions[s]
+                if s not in plan_actions:
+                    grid_charge_slots.append(s)
+        grid_charge_slots.sort(key=lambda s: buy_prices[s])
+    for s in grid_charge_slots:
         if s in plan_actions:
             continue
         if grid_charged >= grid_charge_needed:
