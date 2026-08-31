@@ -4,7 +4,7 @@ Pure module (no Home Assistant imports), standalone-loadable via importlib.
 Consumes the integration's own persisted accuracy history
 (``battery_optimizer_accuracy.json`` records): every record carries the
 external solar counter delta for the window since the previous run
-(``actual_solar_kwh``) and the run timestamp (``last_run``).  Consecutive
+(``actual_solar_kwh``) and the run timestamp (``ts``).  Consecutive
 records partition time, so summing ``actual_solar_kwh`` per calendar date
 approximates that date's total solar production (periods without optimizer
 runs are simply not counted).
@@ -29,8 +29,8 @@ def _is_number(value) -> bool:
 
 
 def _record_date(record: dict) -> date | None:
-    """Calendar date of a record from its ``last_run`` ISO timestamp."""
-    raw = record.get("last_run")
+    """Calendar date of a record from its ``ts`` ISO timestamp."""
+    raw = record.get("ts")
     if not isinstance(raw, str):
         return None
     try:
@@ -66,7 +66,7 @@ def solar_balance_report(
                              alone covers the base load
     ``usable_band_kwh``      passed-through band for display
 
-    A record is valid when ``actual_solar_kwh`` is numeric and ``last_run``
+    A record is valid when ``actual_solar_kwh`` is numeric and ``ts``
     parses; garbage records are skipped, never fatal.
     """
     if not records:

@@ -1,5 +1,16 @@
 # Changes
 
+## v0.3.13
+
+### Fixed
+
+- **`sensor.solar_balance` stayed `unknown` (issue #19)** — `_record_date()`
+  read the accuracy records' timestamp from the `last_run` key, but the records
+  are written with `ts` (`coordinator.py` `_record_accuracy`), so every record
+  parsed as no-date, `by_day` stayed empty, the `< min_days` guard always fired
+  and the report always returned None. `_record_date()` now reads `ts`.
+  File: `solar_balance.py`. Guard: `tests/test_solar_balance.py` (9 tests).
+
 ## v0.3.12
 
 ### Fixed
