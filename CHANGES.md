@@ -11,6 +11,17 @@
   and the report always returned None. `_record_date()` now reads `ts`.
   File: `solar_balance.py`. Guard: `tests/test_solar_balance.py` (9 tests).
 
+- **Integration crashed at setup with the Emaldo price source (issue #20)** —
+  `async_setup_listeners` registered a second watcher on the Emaldo schedule
+  chart passing `attribute="slot_count"` to `async_track_state_change_event`,
+  which does not accept that kwarg (`TypeError` at `async_setup_entry` → whole
+  config entry fails to load, no sensors/switches/buttons). The duplicate
+  watcher is removed; the Emaldo chart is watched once, state-only. The
+  `slot_count` 96->192 transition it was meant to catch is now covered by the
+  periodic checkpoint, which forces a rebuild whenever tomorrow's prices are
+  available but the tomorrow plan is missing (issue #18). File: `coordinator.py`.
+  Guard: `tests/test_optimizer_soc_guard.py` (1 test).
+
 ## v0.3.12
 
 ### Fixed
