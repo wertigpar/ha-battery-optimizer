@@ -22,6 +22,15 @@
   available but the tomorrow plan is missing (issue #18). File: `coordinator.py`.
   Guard: `tests/test_optimizer_soc_guard.py` (1 test).
 
+- **Pre-publish cutoff fallback was DST-blind and market-specific** —
+  `_precharge_publish_cutoff_slot` fell back to a hardcoded slot when the HA
+  timezone was unavailable, which only fits one market and drifts across DST.
+  The publish is a single UTC instant (a fixed hour in the Nord Pool
+  operational timezone), so the cutoff is now derived from that timezone
+  (DST-correct, any market) and converted via the HA timezone, falling back
+  to the system local timezone, and only then to the hardcoded slot. File:
+  `coordinator.py`, `const.py`. Guard: `tests/test_optimizer_soc_guard.py` (2 tests).
+
 ## v0.3.12
 
 ### Fixed

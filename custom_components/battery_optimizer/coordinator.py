@@ -2116,11 +2116,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Nord Pool publishes next-day prices at ~13:00 in its operational
         (CET/CEST) timezone year-round; converting that instant to the HA
-        timezone yields the correct slot for any market and season (all
-        Nord Pool markets shift DST together). A per-install override
-        (precharge_publish_hour, local hour) takes precedence. Falls back
-        to PUBLISH_CUTOFF_SLOT (the easternmost-market slot) if timezones
-        fail.
+        timezone yields the correct slot for any market and season (all Nord
+        Pool markets shift DST together — a fixed UTC hour would drift by 1h
+        in summer).  A per-install override (precharge_publish_hour, local
+        hour) takes precedence.  Falls back to the system local timezone when
+        HA has no timezone configured, and only then to PUBLISH_CUTOFF_SLOT
+        if even that is unavailable.
         """
         override = self.config.get(
             CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
@@ -2132,23 +2133,35 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except (TypeError, ValueError):
                 local_hour = None
         if local_hour is None:
-            tz = (
-                dt_util.get_time_zone(self.hass.config.time_zone)
-                if self.hass.config.time_zone
-                else None
-            )
-            if tz is None:
-                return PUBLISH_CUTOFF_SLOT
+            # Nord Pool publishes at a single UTC instant — a fixed hour in
+            # its operational timezone.  Derive that instant from the Nord
+            # Pool timezone (always loadable, independent of the HA config
+            # timezone) so the DST offset is correct, then convert to local
+            # time.  A fixed slot would only be right for one market and
+            # would drift across DST.
             np_tz = dt_util.get_time_zone(NORD_POOL_PUBLISH_TZ)
             if np_tz is None:
-                np_tz = tz
+                return PUBLISH_CUTOFF_SLOT
             ref = dt_util.now(np_tz).replace(
                 hour=NORD_POOL_PUBLISH_HOUR,
                 minute=0,
                 second=0,
                 microsecond=0,
             )
-            local = ref.astimezone(tz)
+            publish_utc = ref.astimezone(dt_util.UTC)
+            tz = (
+                dt_util.get_time_zone(self.hass.config.time_zone)
+                if self.hass.config.time_zone
+                else None
+            )
+            if tz is None:
+                # HA has no timezone configured — fall back to the system
+                # local timezone (DST-correct) rather than a hardcoded
+                # easternmost-market slot that only fits Finland.
+                tz = datetime.now().astimezone().tzinfo
+                if tz is None:
+                    return PUBLISH_CUTOFF_SLOT
+            local = publish_utc.astimezone(tz)
             local_hour = local.hour + local.minute / 60.0
         slot = int(local_hour * 4)  # 4 slots per hour
         return max(0, min(SLOTS_PER_DAY - 1, slot))
