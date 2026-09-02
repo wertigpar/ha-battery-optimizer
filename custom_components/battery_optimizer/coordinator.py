@@ -294,6 +294,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._grid_export_effective: str | None = None
         self._cost_import_snap: float | None = None
         self._cost_export_snap: float | None = None
+        self._cost_slot_written: int | None = None
         self._cost_buy_prices: list[float] | None = None
         self._cost_sell_prices: list[float] | None = None
         self._cost_day = dt_util.now().date()
@@ -1496,6 +1497,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._cost_day = today
             self._cost_import_snap = None
             self._cost_export_snap = None
+            self._cost_slot_written = None
 
         if self._cost_history is None:
             self._cost_history = await self.hass.async_add_executor_job(
@@ -1526,6 +1528,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         slot = local_slot_index(now)
+        if slot == self._cost_slot_written:
+            # Already recorded this 15-min slot (e.g. a duplicate tick or a
+            # restart within the same slot). Never double-write — a second
+            # record would both bloat the sensor attribute and double-count
+            # the slot's realized cost in day_totals().
+            _LOGGER.debug(
+                "Cost capture skipped: slot %d already recorded", slot
+            )
+            return
         if self._cost_buy_prices is None or self._cost_sell_prices is None:
             _LOGGER.debug(
                 "Cost capture skipped: no cached prices for slot %d", slot
@@ -1548,6 +1559,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 **cost,
             }
         )
+        self._cost_slot_written = slot
         self._cost_history = prune_history(self._cost_history, now)
         await self.hass.async_add_executor_job(self._save_cost_history)
         # Push the new record to all coordinator-backed entities (incl. cost sensors).
