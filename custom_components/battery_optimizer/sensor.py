@@ -20,10 +20,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_WEAR_COST,
     CONF_SALES_COMMISSION,
     CONF_TRANSFER_FEE_BUY,
     CONF_VAT_MULTIPLIER,
+    DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_WEAR_COST,
     DEFAULT_SALES_COMMISSION,
     DEFAULT_TRANSFER_FEE_BUY,
@@ -306,11 +308,45 @@ class RealizedCostTodaySensor(_RealizedCostBaseSensor):
         records = self.coordinator.realized_cost_today_records
         import_kwh = sum(r.get("import_kwh", 0.0) for r in records)
         export_kwh = sum(r.get("export_kwh", 0.0) for r in records)
+
+        # Energy breakdown from per-slot SoC deltas + action classification.
+        # soc_delta is in percent (from the SoC sensor); convert to kWh via
+        # the configured battery capacity.
+        capacity = self.coordinator.config.get(
+            CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
+
+        grid_charge = 0.0
+        solar_charge = 0.0
+        discharge = 0.0
+        idle_drain = 0.0
+
+        for r in records:
+            act = r.get("action", "")
+            sd = r.get("soc_delta", 0.0)
+            ik = r.get("import_kwh", 0.0)
+            sd_kwh = sd / 100.0 * capacity
+
+            if act in ("charge", "charge_floor"):
+                if ik > 0.001:
+                    grid_charge += ik
+                elif sd_kwh > 0:
+                    solar_charge += sd_kwh
+            elif act == "discharge":
+                if sd_kwh < 0:
+                    discharge += abs(sd_kwh)
+            elif act == "idle":
+                if sd_kwh < 0:
+                    idle_drain += abs(sd_kwh)
+
         return {
             "buy_total": today["buy"],
             "sell_total": today["sell"],
             "import_kwh": round(import_kwh, 3),
             "export_kwh": round(export_kwh, 3),
+            "grid_charge_kwh": round(grid_charge, 3),
+            "solar_charge_kwh": round(solar_charge, 3),
+            "discharge_kwh": round(discharge, 3),
+            "idle_drain_kwh": round(idle_drain, 3),
         }
 
 
