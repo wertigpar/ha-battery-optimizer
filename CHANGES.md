@@ -37,6 +37,14 @@
   and skips a re-write of the same slot, resetting on midnight. File:
   `coordinator.py`.
 
+- **`export_plan_analysis` hardcoded the euro sign throughout, even for
+  instances configured in SEK/NOK/DKK (issue #15)** — `render_analysis()`
+  wrote `€` in every monetary table header and value, so non-euro users saw a
+  currency that didn't match their setup. The renderer now takes a `currency`
+  code and the coordinator passes `currency_for_timezone()` derived from the
+  HA timezone (SEK/NOK/DKK for Scandinavian Nord Pool zones, EUR otherwise).
+  File: `plan_export.py`, `coordinator.py`.
+
 ## v0.3.13
 
 ### Fixed

@@ -115,6 +115,7 @@ from .const import (
     IDLE_SOLAR_GUARD,
     IDLE_SMART_OVERRIDE,
 )
+from .const import currency_for_timezone
 from .optimizer import (
     BatteryConfig,
     OptimizationResult,
@@ -1619,7 +1620,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Optimizer first if you want the plan rendered",
                 snapshot.get("state", "skipped"),
             )
-        md = render_analysis(snapshot)
+        md = render_analysis(
+            snapshot,
+            currency=currency_for_timezone(self.hass.config.time_zone),
+        )
         path = self.hass.config.path("battery_optimizer_analysis.md")
         try:
             await self.hass.async_add_executor_job(_write_text, path, md)

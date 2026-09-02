@@ -24,8 +24,13 @@ def _table(headers: list[str], rows: list[list]) -> str:
     return "\n".join(out)
 
 
-def render_analysis(snapshot: dict) -> str:
-    """Render the snapshot as one markdown document."""
+def render_analysis(snapshot: dict, *, currency: str = "EUR") -> str:
+    """Render the snapshot as one markdown document.
+
+    Args:
+        snapshot: Run snapshot dict from the coordinator.
+        currency: ISO 4217 code (e.g. "EUR", "SEK", "NOK").
+    """
     lines: list[str] = []
     lines.append("# Battery Optimizer Run Analysis")
     lines.append("")
@@ -121,7 +126,7 @@ def render_analysis(snapshot: dict) -> str:
     )
     lines.append("")
     lines.append(_table(
-        ["metric", "value (€)", "meaning"],
+        ["metric", f"value ({currency})", "meaning"],
         [
             ["baseline_cost", _fmt(baseline_cost),
              "No battery: grid imports only the net deficit, exports the net surplus"],
@@ -152,7 +157,7 @@ def render_analysis(snapshot: dict) -> str:
                       "Battery charged from solar; load covered by solar+battery"])
     lines.append("## Plan cost comparison")
     lines.append("")
-    lines.append(_table(["Scenario", "Cost (€)", "What it does"], scenarios))
+    lines.append(_table(["Scenario", f"Cost ({currency})", "What it does"], scenarios))
     lines.append("")
     lines.append(
         "**Reading the ordering:** the internal plan costs most (it imports "
@@ -211,12 +216,12 @@ def render_analysis(snapshot: dict) -> str:
     lines.append("")
     lines.append(
         "Grouped metrics for judging plan quality. Like is compared with "
-        "like: money rows are in euros, percentages always name their "
+        f"like: money rows are in {currency}, percentages always name their "
         "denominator."
     )
     lines.append("")
 
-    # Group 1 — monetary benchmarks: € compared with €, each percentage
+    # Group 1 — monetary benchmarks: currency compared with currency, each
     # states its own denominator so no cross-unit mixing happens.
     lines.append("### Benchmarks — money saved")
     lines.append("")
@@ -224,12 +229,12 @@ def render_analysis(snapshot: dict) -> str:
     if emaldo_plan is not None and emaldo_grid is not None and emaldo_grid > 0:
         savings = emaldo_grid - actual_cost
         money_rows.append([
-            "savings_vs_emaldo", f"{savings:.4f} €",
+            "savings_vs_emaldo", f"{savings:.4f} {currency}",
             "Internal-plan grid cost minus optimizer grid cost (wear excluded on both sides); positive = optimizer cheaper than the device's own AI",
         ])
         money_rows.append([
             "improvement_over_emaldo", f"{savings / emaldo_grid * 100:.1f}%",
-            "The euro saving above, divided by the internal-plan cost; can exceed 100% when the plan turns a net profit",
+            f"The {currency} saving above, divided by the internal-plan cost; can exceed 100% when the plan turns a net profit",
         ])
     lines.append(_table(["metric", "value", "meaning"], money_rows))
     lines.append("")
@@ -243,11 +248,11 @@ def render_analysis(snapshot: dict) -> str:
     lines.append("")
     order_rows = []
     if emaldo_cost is not None:
-        order_rows.append(["Internal plan", f"{emaldo_cost:.4f} €",
+        order_rows.append(["Internal plan", f"{emaldo_cost:.4f} {currency}",
                            "Highest — imports from the grid even while the sun is up"])
-    order_rows.append(["Baseline (no battery)", f"{baseline_cost:.4f} €",
+    order_rows.append(["Baseline (no battery)", f"{baseline_cost:.4f} {currency}",
                        "Middle — grid imports only after sunset; surplus solar sold"])
-    order_rows.append(["Optimizer plan", f"{actual_cost:.4f} €",
+    order_rows.append(["Optimizer plan", f"{actual_cost:.4f} {currency}",
                        "Lowest — battery charged from solar; load covered by solar+battery"])
     lines.append(_table(["Scenario", "Cost", "Why"], order_rows))
     lines.append("")
