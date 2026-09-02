@@ -45,6 +45,14 @@
   HA timezone (SEK/NOK/DKK for Scandinavian Nord Pool zones, EUR otherwise).
   File: `plan_export.py`, `coordinator.py`.
 
+- **Plan analysis "Cost ordering" labels hardcoded to scenario names, so they
+  could contradict the real numbers (issue #15)** — the table always wrote
+  Highest/Middle/Lowest attached to fixed scenario names, even when the
+  actual costs ranked differently (e.g. a sunny banked-energy day where the
+  optimizer's stored-solar plan is cheapest). The scenarios are now sorted
+  by numeric cost and labeled Cheapest/Middle/Costliest; the "Reading the
+  ordering" prose no longer asserts a fixed ranking. File: `plan_export.py`.
+
 ## v0.3.13
 
 ### Fixed
