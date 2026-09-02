@@ -1,5 +1,21 @@
 # Changes
 
+## Unreleased
+
+### Added
+
+- **Daily energy breakdown on `sensor.realized_cost_today`** — new
+  `grid_charge_kwh`, `solar_charge_kwh`, `discharge_kwh`, and
+  `idle_drain_kwh` attributes classify each per-slot action and sum the
+  day's energy, converting SoC deltas to kWh with the configured
+  `battery_capacity_kwh`. This distinguishes grid-charged from
+  solar-charged energy and isolates real idle drain (previously idle slip
+  was buried in the total drop). Each cost record now carries `action` and
+  `soc_delta` (per-slot `soc` is derivable from the initial SoC plus
+  cumulative deltas, and is dropped from the compacted `slots` attribute to
+  stay under the 16384-byte recorder cap). File: `coordinator.py`,
+  `cost_history.py`, `sensor.py`.
+
 ## v0.3.14
 
 ### Fixed
