@@ -38,6 +38,7 @@ from .const import (
 )
 from .solar_balance import solar_balance_report
 from .coordinator import BatteryOptimizerCoordinator, _current_slot_index
+from .cost_history import compact_records
 from .optimizer import (
     OptimizationResult,
     baseline_cost_breakdown,
@@ -279,8 +280,13 @@ class RealizedCostHistorySensor(_RealizedCostBaseSensor):
             attrs["sell_price"] = latest.get("sell")
             attrs["import_kwh"] = latest.get("import_kwh")
             attrs["export_kwh"] = latest.get("export_kwh")
-        # Today's per-slot records for an ApexCharts history card.
-        attrs["slots"] = json.dumps(self.coordinator.realized_cost_today_records)
+        # Today's per-slot records for an ApexCharts history card, compacted
+        # and bounded so the attribute stays under the recorder's 16384-byte
+        # per-attribute cap (a full day near that cap would otherwise get the
+        # attribute dropped from long-term statistics).
+        attrs["slots"] = json.dumps(
+            compact_records(self.coordinator.realized_cost_today_records)
+        )
         return attrs
 
 

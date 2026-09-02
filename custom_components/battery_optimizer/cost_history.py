@@ -83,6 +83,36 @@ def day_totals(records: list[dict]) -> dict[str, float]:
     }
 
 
+def compact_records(records: list[dict]) -> list[dict]:
+    """Bounded, compact per-slot records for a sensor attribute.
+
+    The full record set is far too heavy to serialize wholesale into a single
+    HA sensor attribute: a full day's 96 slots (each with ts/slot/buy/sell/
+    import_kwh/export_kwh/bill/refund/net) lands at ~15 KB, right at the
+    recorder's 16384-byte per-attribute cap, so even a single duplicate slot
+    drops the attribute (and its cost history) from long-term statistics.
+
+    Returns a copy keeping only the keys the cost chart needs and capping the
+    list to the most recent SLOTS_PER_DAY records, so the serialized attribute
+    stays comfortably under the recorder cap on any day.
+    """
+    if not records:
+        return []
+    keep = (
+        "ts",
+        "slot",
+        "buy",
+        "sell",
+        "import_kwh",
+        "export_kwh",
+        "net",
+    )
+    return [
+        {k: r[k] for k in keep if k in r}
+        for r in records[-SLOTS_PER_DAY:]
+    ]
+
+
 __all__ = [
     "SLOTS_PER_DAY",
     "SLOT_DURATION_HOURS",
@@ -91,4 +121,5 @@ __all__ = [
     "prune_history",
     "today_records",
     "day_totals",
+    "compact_records",
 ]

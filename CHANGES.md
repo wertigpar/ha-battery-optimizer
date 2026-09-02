@@ -1,5 +1,28 @@
 # Changes
 
+## v0.3.14
+
+### Fixed
+
+- **`sensor.realized_cost_history` attribute exceeded the 16384-byte recorder
+  cap, dropping cost history from long-term statistics** — the `slots`
+  attribute serialized every per-slot record of the current day (ts/slot/buy/
+  sell/import_kwh/export_kwh/bill/refund/net). A full day's 96 slots lands at
+  ~15 KB — right at the recorder's per-attribute cap — so any excess pushed it
+  over, HA dropped the attribute from storage, and the `unit {None, 'EUR'}`
+  mismatch suppressed long-term statistics. The `slots` attribute is now
+  compacted (derivable `bill`/`refund` dropped) and bounded to the most recent
+  96 slots, keeping it comfortably under the cap. File: `cost_history.py`,
+  `sensor.py`. Guard: `tests/test_cost_history.py` (4 tests).
+
+- **Duplicate 15-minute cost records after a restart / duplicate tick, which
+  both bloated the `slots` attribute and double-counted the day's realized
+  cost** — `_capture_cost_slot` appended a record unconditionally with no
+  per-slot guard, so a restart within a slot (or a caught-up `/15` timer tick)
+  wrote a second record for the same slot. It now tracks the last slot written
+  and skips a re-write of the same slot, resetting on midnight. File:
+  `coordinator.py`.
+
 ## v0.3.13
 
 ### Fixed
