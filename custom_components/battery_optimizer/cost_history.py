@@ -106,6 +106,8 @@ def compact_records(records: list[dict]) -> list[dict]:
         "import_kwh",
         "export_kwh",
         "net",
+        "action",
+        "soc_delta",
     )
     return [
         {k: r[k] for k in keep if k in r}
