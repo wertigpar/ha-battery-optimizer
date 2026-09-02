@@ -293,6 +293,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._grid_import_effective: str | None = None
         self._grid_export_effective: str | None = None
         self._cost_import_snap: float | None = None
+        self._cost_prev_soc: float | None = None
         self._cost_export_snap: float | None = None
         self._cost_slot_written: int | None = None
         self._cost_buy_prices: list[float] | None = None
@@ -1498,6 +1499,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._cost_import_snap = None
             self._cost_export_snap = None
             self._cost_slot_written = None
+            self._cost_prev_soc = None
 
         if self._cost_history is None:
             self._cost_history = await self.hass.async_add_executor_job(
@@ -1547,6 +1549,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         buy = self._cost_buy_prices[slot]
         sell = self._cost_sell_prices[slot]
 
+        # SoC and planned action for this slot
+        soc = self._get_battery_soc()
+        action = "unknown"
+        if self._last_result is not None and 0 <= slot < len(self._last_result.slots):
+            action = self._last_result.slots[slot].action
+
+        # SoC delta (seed on first sample, same pattern as import/export snaps)
+        soc_delta = 0.0
+        if soc is not None:
+            if self._cost_prev_soc is not None:
+                soc_delta = round(soc - self._cost_prev_soc, 2)
+            self._cost_prev_soc = soc
+
         cost = slot_cost(import_delta, export_delta, buy, sell)
         self._cost_history.append(
             {
@@ -1556,6 +1571,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "sell": round(sell, 4),
                 "import_kwh": round(import_delta, 4),
                 "export_kwh": round(export_delta, 4),
+                "action": action,
+                "soc": round(soc, 1) if soc is not None else None,
+                "soc_delta": soc_delta,
                 **cost,
             }
         )
