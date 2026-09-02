@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## v0.3.14
 
 ### Added
 
@@ -15,8 +15,6 @@
   cumulative deltas, and is dropped from the compacted `slots` attribute to
   stay under the 16384-byte recorder cap). File: `coordinator.py`,
   `cost_history.py`, `sensor.py`.
-
-## v0.3.14
 
 ### Fixed
 
