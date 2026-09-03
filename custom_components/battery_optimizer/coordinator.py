@@ -449,7 +449,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             name="Battery Optimizer Configuration",
             manufacturer="Emaldo",
             model="Optimized Battery",
-            via_device=(EMALDO_DOMAIN, self._emaldo_device_id),
+            via_device_id=self._emaldo_device_id,
         )
 
     @property
