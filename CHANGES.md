@@ -53,6 +53,18 @@
   by numeric cost and labeled Cheapest/Middle/Costliest; the "Reading the
   ordering" prose no longer asserts a fixed ranking. File: `plan_export.py`.
 
+- **`via_device_id` passed the Emaldo device *identifier* instead of the
+  registry *device_id*, rejecting all battery_optimizer entities at
+  registration** — `device_info` set `via_device_id=self._emaldo_device_id`,
+  which is the Emaldo unique identifier string (e.g. `cIvGOhvWjZTXc4Cj`),
+  not the device-registry UUID that `DeviceInfo.via_device_id` requires. HA
+  rejected every entity with `via_device_id ... is not a registered device
+  id`. The identifier is now resolved to the registry UUID via
+  `dr.async_get_device_by_identifier`, scoped to the owning Emaldo config
+  entry. A `hass.helpers.device_registry` accessor bug (wrong attribute path)
+  and the related `async_get_device` deprecation (removal HA 2027.8) were
+  also fixed in the same helper. File: `coordinator.py`.
+
 ## v0.3.13
 
 ### Fixed

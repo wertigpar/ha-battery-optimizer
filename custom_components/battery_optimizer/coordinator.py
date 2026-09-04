@@ -23,6 +23,7 @@ from homeassistant.helpers.event import (
     async_track_time_change,
     async_track_time_interval,
 )
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -449,8 +450,41 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             name="Battery Optimizer Configuration",
             manufacturer="Emaldo",
             model="Optimized Battery",
-            via_device_id=self._emaldo_device_id,
+            via_device_id=self._resolve_emaldo_registry_device_id(),
         )
+
+    def _resolve_emaldo_registry_device_id(self) -> str | None:
+        """Registry ``device_id`` of the linked Emaldo device, or None.
+
+        ``self._emaldo_device_id`` is the Emaldo device's *unique
+        identifier* (used to build its entity unique_ids, e.g.
+        ``cIvGOhvWjZTXc4Cj``) — NOT the Home Assistant device-registry
+        ``device_id`` (a separate UUID). ``DeviceInfo.via_device_id``
+        requires the registry ``device_id``, so resolve it via the device
+        registry using the Emaldo device's identifiers.
+
+        Returns ``None`` when the Emaldo device is not yet registered,
+        which is a valid ``via_device_id`` (no parent) — never an error —
+        so entities are always added even if Emaldo is slow to appear.
+        """
+        dev_reg = dr.async_get(self.hass)
+        if self._emaldo_entry_id is None:
+            _LOGGER.warning(
+                "Emaldo config entry not resolved; "
+                "battery_optimizer device info will have no parent",
+            )
+            return None
+        device = dev_reg.async_get_device_by_identifier(
+            (EMALDO_DOMAIN, self._emaldo_device_id), self._emaldo_entry_id
+        )
+        if device is None:
+            _LOGGER.warning(
+                "Emaldo device %s not yet in device registry; "
+                "battery_optimizer device info will have no parent",
+                self._emaldo_device_id,
+            )
+            return None
+        return device.id
 
     @property
     def soc_guard_marker(self) -> int | None:
