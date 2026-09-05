@@ -65,6 +65,27 @@
   and the related `async_get_device` deprecation (removal HA 2027.8) were
   also fixed in the same helper. File: `coordinator.py`.
 
+- **Battery Optimizer's own device identity coupled to Emaldo runtime
+  resolution, detaching every entity from the "Optimizer Configuration"
+  device on cold boots where Emaldo loaded late** — `device_info` built the
+  device `identifiers` from `_emaldo_device_id` (a lazily-resolved value) and
+  returned `None` before it resolved, so entities registered with no device
+  whenever `async_setup_entry` ran before Emaldo populated `hass.data`.
+  The device identity is now stable per config entry
+  (`identifiers={(DOMAIN, entry_id)}`) — never `None`, deterministic from the
+  first registered entity on every boot — and only the optional
+  `via_device_id` parent link depends on Emaldo resolution (None-safe, and
+  repaired by the existing `homeassistant_started` → reload path when Emaldo
+  loads late). The device-subentry binding previously re-created the old
+  `(battery_optimizer, <emaldo-id>)` device on every setup, so on the 0.3.14
+  upgrade the registry briefly held TWO "Optimizer Configuration" devices —
+  one empty leftover that the config-entry removal API cannot delete
+  (`supports_remove_device` is False).  `async_setup_entry` now prunes any
+  device owned by this entry that is not the canonical one and has no
+  entities, so the duplicate is removed on the first setup after upgrade and
+  no upgrade can ever leave a leftover again. File: `coordinator.py`,
+  `__init__.py`.
+
 ## v0.3.13
 
 ### Fixed

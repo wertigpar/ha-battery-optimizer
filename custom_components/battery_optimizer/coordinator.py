@@ -432,21 +432,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self._emaldo_device_id is not None
 
     @property
-    def device_info(self) -> "DeviceInfo | None":
+    def device_info(self) -> "DeviceInfo":
         """Return device info for the virtual Battery Optimizer device.
 
-        Lazily resolves the Emaldo device identity on first access,
-        since Battery Optimizer's ``async_setup_entry`` may run before
-        the Emaldo integration has stored its data in ``hass.data``.
+        The device identity is stable per config entry (``entry_id``), so
+        entities always attach to the same device regardless of whether
+        the Emaldo integration has loaded yet. The Emaldo parent link is
+        resolved lazily and is optional (None-safe).
         """
         from homeassistant.helpers.device_registry import DeviceInfo  # noqa: PLC0415
 
-        if self._emaldo_device_id is None:
-            self.resolve_emaldo_device()
-        if self._emaldo_device_id is None:
-            return None
+        self.resolve_emaldo_device()
         return DeviceInfo(
-            identifiers={(DOMAIN, self._emaldo_device_id)},
+            identifiers={(DOMAIN, self._entry.entry_id)},
             name="Battery Optimizer Configuration",
             manufacturer="Emaldo",
             model="Optimized Battery",
@@ -471,6 +469,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._emaldo_entry_id is None:
             _LOGGER.warning(
                 "Emaldo config entry not resolved; "
+                "battery_optimizer device info will have no parent",
+            )
+            return None
+        if self._emaldo_device_id is None:
+            _LOGGER.warning(
+                "Emaldo device identifier not resolved; "
                 "battery_optimizer device info will have no parent",
             )
             return None

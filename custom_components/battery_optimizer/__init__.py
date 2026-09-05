@@ -185,7 +185,7 @@ async def _ensure_device_subentry(
     dev_reg = dr.async_get(hass)
     device = dev_reg.async_get_or_create(
         config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, coordinator._emaldo_device_id)},
+        identifiers={(DOMAIN, entry.entry_id)},
         name=DEVICE_SUBENTRY_LABEL,
         manufacturer="Emaldo",
         model="Optimized Battery",
@@ -217,8 +217,47 @@ async def _ensure_device_subentry(
         )
 
 
+def _cleanup_orphaned_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove entity-less Battery Optimizer devices that are not canonical.
+
+    Pre-0.3.14 versions keyed the "Optimizer Configuration" device by the
+    Emaldo device unique id, and 0.3.14 moved to the stable per-entry
+    identity ``(DOMAIN, entry_id)``.  Upgrading therefore left an empty
+    duplicate that the config-entry removal API cannot delete
+    (``supports_remove_device`` is False for this entry).  Remove any
+    device owned by this entry whose identifier is not canonical and which
+    still has no entities — the only safe target, so a device that ever
+    gains entities again is never touched.  Idempotent across setups.
+    """
+    from homeassistant.helpers import device_registry as dr  # noqa: PLC0415
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    dev_reg = dr.async_get(hass)
+    entity_reg = er.async_get(hass)
+    for device in dev_reg.devices.get_devices_for_config_entry_id(entry.entry_id):
+        if (DOMAIN, entry.entry_id) in device.identifiers:
+            continue  # canonical device — never remove
+        if any(e.device_id == device.id for e in entity_reg.entities.values()):
+            continue  # do not orphan a device that still has entities
+        _LOGGER.info(
+            "Battery Optimizer: removing orphaned empty device %s (%s)",
+            device.id,
+            device.identifiers,
+        )
+        dev_reg.async_remove_device(device.id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Battery Optimizer from a config entry."""
+    # Prune entity-less devices left behind by earlier versions that used
+    # a volatile (Emaldo unique id) device identifier.  The canonical
+    # device is keyed (DOMAIN, entry_id); anything else under this entry
+    # with no entities is a leftover that cannot be removed through the
+    # config-entry removal API (supports_remove_device is False), so the
+    # integration removes its own orphans directly.  Idempotent: once the
+    # stray is gone this loop finds nothing.
+    _cleanup_orphaned_devices(hass, entry)
+
     coordinator = BatteryOptimizerCoordinator(hass, entry)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
@@ -247,9 +286,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # After HA fully starts, resolve Emaldo device and reload to link entities.
     # Battery Optimizer may set up before Emaldo stores its data in hass.data,
-    # so device_info returns None on first setup.  This listener fires once
-    # HA is fully started (all integrations loaded), resolves the link, and
-    # triggers a clean entry reload so entities get their device association.
+    # so the via_device_id parent link is unavailable on first setup.  Entities
+    # always attach to the stable per-entry device (entry_id identifier) from
+    # the first poll — this listener fires once HA is fully started (all
+    # integrations loaded), resolves the Emaldo parent link, and triggers a
+    # clean entry reload so the device gets its via_device_id association.
     # Tracks the one-time listener; cleared once homeassistant_started fires.
     # Defs MUST precede the listener registration: Python binds `def` names
     # to the enclosing function scope, so a reference before the def raises
