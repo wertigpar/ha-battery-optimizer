@@ -1817,9 +1817,22 @@ def optimize(
     # higher price.  Without the signal the pool is unchanged (byte-identical).
     if future_grid_charge_needed:
         grid_charge_needed += float(future_grid_charge_needed)
+    # Round-trip headroom (Case B): discharge budgets above already claim
+    # soc_max - peak when profitable_charge is non-empty, but solar-only
+    # charging parks the battery at the solar peak - the claimed headroom
+    # was never grid-funded, so the discharge starves.  Fund the
+    # profitable round-trip slots by filling from current SoC toward
+    # soc_max (already cheapest-sorted).  On cloudy days the pass charges
+    # at most up to soc_max (check below), so this cannot over-fill.
+    if profitable_charge:
+        grid_charge_needed += max(0.0, soc_max_kwh - current_soc_kwh)
 
-    soc_sim = available_soc
+    # Forward-sim from the true current SoC (not the solar-only end-state).
+    # Morning cheap slots charge from where the battery actually is, noon
+    # solar caps it at soc_max, so the headroom check below works per-slot.
+    soc_sim = current_soc_kwh
     grid_charged = 0.0
+    prev_slot = start_slot
     # Charge pool: profitable grid slots, plus -- for cross-day carry -- cheap
     # solar-surplus slots with headroom (the idle pass below skips them so this
     # pass can charge them).  Sorted cheapest first, same as profitable_charge.
@@ -1842,11 +1855,26 @@ def optimize(
             continue
         if grid_charged >= grid_charge_needed:
             break  # Enough energy from solar + existing SoC
+        # Advance the trajectory through the intervening slots (up to s,
+        # exclusive — the charged slot itself is only grid-charged by the
+        # loop, never double-credited with solar): surplus slots absorb
+        # solar, all slots drain idle power.
+        for k in range(prev_slot, s):
+            if net_loads[k] < 0:
+                surplus_kw = -net_loads[k]
+                cred_kwh = (
+                    min(surplus_kw, cfg.max_charge_kw)
+                    * SLOT_DURATION_HOURS
+                    * cfg.charge_efficiency
+                )
+                soc_sim = min(soc_sim + cred_kwh, soc_max_kwh)
+            soc_sim = max(soc_sim - idle_drain, soc_min_kwh)
         charge_kwh = cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
         if soc_sim + charge_kwh <= soc_max_kwh:
             plan_actions[s] = "charge"
             soc_sim += charge_kwh
             grid_charged += charge_kwh
+            prev_slot = s + 1
         else:
             break  # Battery full
 

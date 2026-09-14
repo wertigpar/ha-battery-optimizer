@@ -1,5 +1,26 @@
 # Changes
 
+## v0.3.15
+
+### Added
+
+- **Arbitrage grid-charging from current SoC (Case B round-trip funding)** —
+  when a profitable round-trip exists (cheap buy earlier vs a later known
+  discharge price, per the existing `max_buy_for_profit` gate), the
+  grid-charge pass now funds the shortfall from the *current* SoC toward
+  `soc_max` instead of the solar-only peak. Previously a strong-solar day sat
+  the battery at 100% by mid-day, so the headroom add was zero, no cheap
+  morning charge happened, and the profitable round-trip was never funded —
+  the noon surplus was absorbed into an already-full battery instead of being
+  exported. Now the morning cheap slots charge the battery from where it
+  actually is, so cheap energy fills it early, the noon solar surplus is
+  exported, and the evening peak is served from a full battery. The charge
+  trajectory is forward-simulated from the true current SoC (solar credits
+  plus idle drain advanced per intervening slot), so the per-slot max-SoC
+  check reflects the real trajectory rather than the solar-only end-state.
+  Cloudy days: peak ≈ current, behavior unchanged. Output is byte-identical
+  whenever no profitable round-trip exists. File: `optimizer.py`.
+
 ## v0.3.14
 
 ### Added
