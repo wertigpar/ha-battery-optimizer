@@ -234,7 +234,7 @@ def _cleanup_orphaned_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     dev_reg = dr.async_get(hass)
     entity_reg = er.async_get(hass)
-    for device in dev_reg.devices.get_devices_for_config_entry_id(entry.entry_id):
+    for device in dev_reg.async_entries_for_config_entry(entry.entry_id):
         if (DOMAIN, entry.entry_id) in device.identifiers:
             continue  # canonical device — never remove
         if any(e.device_id == device.id for e in entity_reg.entities.values()):
@@ -313,6 +313,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # FIRST setup is live, firing _async_options_updated -> run_optimizer
             # mid-startup on a half-set-up entry.
             await hass.config_entries.async_reload(entry.entry_id)
+        else:
+            _LOGGER.warning(
+                "Battery Optimizer: Emaldo device NOT resolved after startup "
+                "— via_device_id link deferred to next restart"
+            )
 
     def _unload_ha_started() -> None:
         nonlocal unsub_ha_started
@@ -321,10 +326,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             unsub_ha_started = None
 
     if not coordinator.resolve_emaldo_device():
-        unsub_ha_started = hass.bus.async_listen_once(
-            "homeassistant_started", _on_home_assistant_started
-        )
-        entry.async_on_unload(_unload_ha_started)
+        if hass.is_running:
+            _LOGGER.warning(
+                "Battery Optimizer: Emaldo device NOT resolved after startup "
+                "— via_device_id link deferred to next restart"
+            )
+        else:
+            unsub_ha_started = hass.bus.async_listen_once(
+                "homeassistant_started", _on_home_assistant_started
+            )
+            entry.async_on_unload(_unload_ha_started)
     else:
         await _ensure_device_subentry(hass, entry, coordinator)
 
