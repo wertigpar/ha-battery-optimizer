@@ -831,8 +831,6 @@ class ManualSellChartSensor(_BaseOptimizerSensor):
         if self._result is None:
             return {}
         sell_slots = self._result.sell_slots
-        if not sell_slots:
-            return {}
         now_ha = dt_util.now()
         today_midnight = now_ha.replace(
             hour=0, minute=0, second=0, microsecond=0

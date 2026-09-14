@@ -813,8 +813,10 @@ series:
 Shows the forced-sell (price-peak arbitrage) window: **battery**-tier slots
 (service-driven discharge via emaldo manual selling) vs **pv**-tier slots
 (solar surplus released to idle so the inverter auto-exports). Only present
-when forced sell is enabled and a profitable window clears the gate; otherwise
-`manual_sell` is empty and no series renders.
+when forced sell is enabled and a profitable window clears the gate. Otherwise
+`manual_sell` is empty and the chart draws a clean empty (zero) area — the
+zero-fallback point keeps apexcharts-card from hanging on its `Loading...`
+overlay.
 
 ```yaml
 type: custom:apexcharts-card
@@ -842,7 +844,7 @@ yaxis:
     min: 0
     max: 1.1
 series:
-  - entity: sensor.battery_optimizer_manual_sell_chart
+  - entity: sensor.battery_optimizer_configuration_manual_sell_schedule
     name: Battery sell
     type: column
     color: "#e67e22"
@@ -851,11 +853,13 @@ series:
       in_header: false
       legend_value: false
     data_generator: |
-      const sell = entity.attributes.manual_sell || [];
-      return sell
-        .filter(s => s.source === 'battery')
-        .map(s => [new Date(s.t).getTime(), 1]);
-  - entity: sensor.battery_optimizer_manual_sell_chart
+      const schedule = entity.attributes.manual_sell || [];
+      if (schedule.length === 0) return [[new Date().getTime(), 0]];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'battery' ? 1 : null
+      ]);
+  - entity: sensor.battery_optimizer_configuration_manual_sell_schedule
     name: PV sell
     type: column
     color: "#f1c40f"
@@ -864,10 +868,12 @@ series:
       in_header: false
       legend_value: false
     data_generator: |
-      const sell = entity.attributes.manual_sell || [];
-      return sell
-        .filter(s => s.source === 'pv')
-        .map(s => [new Date(s.t).getTime(), 1]);
+      const schedule = entity.attributes.manual_sell || [];
+      if (schedule.length === 0) return [[new Date().getTime(), 0]];
+      return schedule.map(s => [
+        new Date(s.t).getTime(),
+        s.source === 'pv' ? 1 : null
+      ]);
 ```
 
 - **Orange** = battery-tier sell (emaldo manual-selling service, wear + round-trip priced in)
