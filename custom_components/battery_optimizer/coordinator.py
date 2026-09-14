@@ -123,12 +123,6 @@ from .const import (
     DEFAULT_FORCED_SELL_MAX_KWH_PD,
 DEFAULT_FORCED_SELL_MIN_PROFIT,
     DEFAULT_FORCED_SELL_MIN_PRICE,
-    CONF_PV_SELL_SURPLUS_WHEN_FULL,
-    CONF_PV_SELL_BELOW_FULL,
-    CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
-    DEFAULT_PV_SELL_SURPLUS_WHEN_FULL,
-    DEFAULT_PV_SELL_BELOW_FULL,
-    DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD,
 )
 from .const import currency_for_timezone
 from .optimizer import (
@@ -674,16 +668,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             forced_sell_min_price=c.get(
                 CONF_FORCED_SELL_MIN_PRICE, DEFAULT_FORCED_SELL_MIN_PRICE
-            ),
-            pv_sell_surplus_when_full=c.get(
-                CONF_PV_SELL_SURPLUS_WHEN_FULL, DEFAULT_PV_SELL_SURPLUS_WHEN_FULL
-            ),
-            pv_sell_below_full=c.get(
-                CONF_PV_SELL_BELOW_FULL, DEFAULT_PV_SELL_BELOW_FULL
-            ),
-            pv_sell_below_full_min_spread=c.get(
-                CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
-                DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD,
             ),
         )
 

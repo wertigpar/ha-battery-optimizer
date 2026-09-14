@@ -20,12 +20,6 @@
   (slot, time, source battery/pv, kWh, sell/buy price, profit estimate),
   `sell_target_kwh`, `sell_revenue`, `sell_profit`, and `sources` split.
   Files: `sensor.py`, `strings.json`, translations.
-- **PV-sell extension** — two opt-in triggers extending the morning PV
-  export: sell surplus at any price > 0 once projected SoC reaches
-  `soc_max` before noon, and sell below-full solar when the sell price
-  beats the cheapest replacement buy by `pv_sell_below_full_min_spread`
-  (default off ⇒ byte-identical). Files: `optimizer.py`, `config_flow.py`,
-  `coordinator.py`, `const.py`, translations.
 
 ## v0.3.15
 

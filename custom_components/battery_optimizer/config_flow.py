@@ -125,12 +125,6 @@ from .const import (
     DEFAULT_FORCED_SELL_MAX_KWH_PD,
     DEFAULT_FORCED_SELL_MIN_PROFIT,
     DEFAULT_FORCED_SELL_MIN_PRICE,
-    CONF_PV_SELL_SURPLUS_WHEN_FULL,
-    CONF_PV_SELL_BELOW_FULL,
-    CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
-    DEFAULT_PV_SELL_SURPLUS_WHEN_FULL,
-    DEFAULT_PV_SELL_BELOW_FULL,
-    DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD,
 )
 from .rules import (
     UserRule,
@@ -461,28 +455,7 @@ def _build_schema(
                     DEFAULT_FORCED_SELL_MIN_PRICE,
                 ),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            # ── PV-sell override (below-full + surplus; default-off) ──
-            vol.Optional(
-                CONF_PV_SELL_SURPLUS_WHEN_FULL,
-                default=d.get(
-                    CONF_PV_SELL_SURPLUS_WHEN_FULL,
-                    DEFAULT_PV_SELL_SURPLUS_WHEN_FULL,
-                ),
-            ): bool,
-            vol.Optional(
-                CONF_PV_SELL_BELOW_FULL,
-                default=d.get(
-                    CONF_PV_SELL_BELOW_FULL,
-                    DEFAULT_PV_SELL_BELOW_FULL,
-                ),
-            ): bool,
-            vol.Optional(
-                CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
-                default=d.get(
-                    CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
-                    DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD,
-                ),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+
         }
     )
 
