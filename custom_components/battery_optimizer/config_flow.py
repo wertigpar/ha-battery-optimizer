@@ -117,6 +117,20 @@ from .const import (
     DEFAULT_RULE_RETENTION_DAYS,
     RULE_RETENTION_OPTIONS,
     SOLAR_SCALE_MAX,
+    CONF_FORCED_SELL_ENABLED,
+    CONF_FORCED_SELL_MAX_KWH_PD,
+    CONF_FORCED_SELL_MIN_PROFIT,
+    CONF_FORCED_SELL_MIN_PRICE,
+    DEFAULT_FORCED_SELL_ENABLED,
+    DEFAULT_FORCED_SELL_MAX_KWH_PD,
+    DEFAULT_FORCED_SELL_MIN_PROFIT,
+    DEFAULT_FORCED_SELL_MIN_PRICE,
+    CONF_PV_SELL_SURPLUS_WHEN_FULL,
+    CONF_PV_SELL_BELOW_FULL,
+    CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
+    DEFAULT_PV_SELL_SURPLUS_WHEN_FULL,
+    DEFAULT_PV_SELL_BELOW_FULL,
+    DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD,
 )
 from .rules import (
     UserRule,
@@ -419,6 +433,56 @@ def _build_schema(
                     CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
                 ),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=23.0)),
+            # ── Forced sell (manual sell arbitrage; default-off) ──
+            vol.Optional(
+                CONF_FORCED_SELL_ENABLED,
+                default=d.get(
+                    CONF_FORCED_SELL_ENABLED, DEFAULT_FORCED_SELL_ENABLED
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_FORCED_SELL_MAX_KWH_PD,
+                default=d.get(
+                    CONF_FORCED_SELL_MAX_KWH_PD,
+                    DEFAULT_FORCED_SELL_MAX_KWH_PD,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1000.0)),
+            vol.Optional(
+                CONF_FORCED_SELL_MIN_PROFIT,
+                default=d.get(
+                    CONF_FORCED_SELL_MIN_PROFIT,
+                    DEFAULT_FORCED_SELL_MIN_PROFIT,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_FORCED_SELL_MIN_PRICE,
+                default=d.get(
+                    CONF_FORCED_SELL_MIN_PRICE,
+                    DEFAULT_FORCED_SELL_MIN_PRICE,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            # ── PV-sell override (below-full + surplus; default-off) ──
+            vol.Optional(
+                CONF_PV_SELL_SURPLUS_WHEN_FULL,
+                default=d.get(
+                    CONF_PV_SELL_SURPLUS_WHEN_FULL,
+                    DEFAULT_PV_SELL_SURPLUS_WHEN_FULL,
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_PV_SELL_BELOW_FULL,
+                default=d.get(
+                    CONF_PV_SELL_BELOW_FULL,
+                    DEFAULT_PV_SELL_BELOW_FULL,
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
+                default=d.get(
+                    CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
+                    DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD,
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
         }
     )
 

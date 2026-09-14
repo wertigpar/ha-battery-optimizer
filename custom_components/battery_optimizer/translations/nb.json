@@ -34,7 +34,21 @@
           "solar_forecast_mode": "Solprognosemodus for ladeplanlegging (p10 = pessimistisk/væravhengig, p50 = median/optimistisk)",
           "solar_forecast_scale": "Skalering av solprognosen (0 = automatisk justering fra nøyaktighetshistorikk; 0,8 skalerer prognosen ned 20 %)",
           "grid_import_sensor": "Nettoimport-energiteller (kumulativ, Wh eller kWh). La stå tom for å auto-oppdages fra den tilknyttede Emaldo-enheten; eller oppgi en livstidsteller (f.eks. en EM24 `_total`-teller) for en sky-fri installasjon.",
-          "grid_export_sensor": "Nettoexport-energiteller (kumulativ, Wh eller kWh). La stå tom for å auto-oppdages fra den tilknyttede Emaldo-enheten; eller oppgi en livstidsteller (f.eks. en EM24 `_total`-teller) for en sky-fri installasjon."
+          "grid_export_sensor": "Nettoexport-energiteller (kumulativ, Wh eller kWh). La stå tom for å auto-oppdages fra den tilknyttede Emaldo-enheten; eller oppgi en livstidsteller (f.eks. en EM24 `_total`-teller) for en sky-fri installasjon.",
+          "pv_sell_surplus_when_full": "Selg overskuddssol når batteriet er fullt",
+          "pv_sell_surplus_when_full_description": "Når på, selges overskuddssol til en positiv pris når batteriet når Max SoC før middag.",
+          "pv_sell_below_full": "Selg sol selv når batteriet ikke er fullt",
+          "pv_sell_below_full_description": "Når på, selges sol om morgenen selvom batteriet ikke fylles, så snart salgsprisen slår det billigste erstatningskjøpet med minimum-spreaden.",
+          "pv_sell_below_full_min_spread": "Min. spread mellom salg og erstatningskjøp (€/kWh)",
+          "pv_sell_below_full_min_spread_description": "Påkrevd premium for salgsprisen over det billigste senere kjøpsprisen. 0 = ingen premium påkrevd.",
+          "forced_sell_enabled": "Aktiver tvangssalg (manuell salgsarbitrasje)",
+          "forced_sell_enabled_description": "To-nivå eksport ved pristopper: batterinivået selger lagret energi via emaldos manuelle salgsbryter; PV-nivået frigjør soloverskudd til idle for automatisk eksport. Av som standard.",
+          "forced_sell_max_kwh_pd": "Maks. energi for tvangssalg (kWh/dag)",
+          "forced_sell_max_kwh_pd_description": "Daglig energibudsjett for tvangssalg (batteri + PV-nivå). 0 = tvangssalg deaktivert.",
+          "forced_sell_min_profit": "Min. fortjeneste per solgt kWh (€/kWh)",
+          "forced_sell_min_profit_description": "Batterinivå: (salg − slitasje) × rundtur − erstatningskjøp må overstige dette. PV-nivå: salg − erstatningskjøp × rundtur (ingen slitasje).",
+          "forced_sell_min_price": "Min. salgspris (€/kWh)",
+          "forced_sell_min_price_description": "Absolutt salgsprisgulv. Slots under dette selges aldri."
         }
       }
     },
@@ -99,7 +113,21 @@
           "precharge_horizon_days": "Fremoverhorisont (dager)",
           "precharge_horizon_days_description": "1 = forhåndslad bare før publisering av neste dags priser (det billige vinduet lukkes ved prispubliseringen). 2 = sikre også mot en sannsynlig dag+2-pristopp: hvis morgendagens optimaliserte plan ville etterlate batteriet lavt, lad forsiktig opp i kveld med billig nettenergi, så den ukjente dag+2 starter med en sikkerhetsbuffer.",
           "precharge_publish_hour": "Publiseringstime for neste dags priser (lokal, 0–23)",
-          "precharge_publish_hour_description": "Time (lokal tid, 24t) da Nord Pool vanligvis publiserer neste dags priser. La stå tom for automatikk: grensen beregnes fra Home Assistant-tidssonen din og blir riktig for alle Nord Pool-markeder. Sett bare hvis priskilden din publiserer på et annet tidspunkt."
+          "precharge_publish_hour_description": "Time (lokal tid, 24t) da Nord Pool vanligvis publiserer neste dags priser. La stå tom for automatikk: grensen beregnes fra Home Assistant-tidssonen din og blir riktig for alle Nord Pool-markeder. Sett bare hvis priskilden din publiserer på et annet tidspunkt.",
+            "pv_sell_surplus_when_full": "Selg overskuddssol når batteriet er fullt",
+            "pv_sell_surplus_when_full_description": "Når på, selges overskuddssol til en positiv pris når batteriet når Max SoC før middag.",
+            "pv_sell_below_full": "Selg sol selv når batteriet ikke er fullt",
+            "pv_sell_below_full_description": "Når på, selges sol om morgenen selvom batteriet ikke fylles, så snart salgsprisen slår det billigste erstatningskjøpet med minimum-spreaden.",
+            "pv_sell_below_full_min_spread": "Min. spread mellom salg og erstatningskjøp (€/kWh)",
+            "pv_sell_below_full_min_spread_description": "Påkrevd premium for salgsprisen over det billigste senere kjøpsprisen. 0 = ingen premium påkrevd.",
+            "forced_sell_enabled": "Aktiver tvangssalg (manuell salgsarbitrasje)",
+            "forced_sell_enabled_description": "To-nivå eksport ved pristopper: batterinivået selger lagret energi via emaldos manuelle salgsbryter; PV-nivået frigjør soloverskudd til idle for automatisk eksport. Av som standard.",
+            "forced_sell_max_kwh_pd": "Maks. energi for tvangssalg (kWh/dag)",
+            "forced_sell_max_kwh_pd_description": "Daglig energibudsjett for tvangssalg (batteri + PV-nivå). 0 = tvangssalg deaktivert.",
+            "forced_sell_min_profit": "Min. fortjeneste per solgt kWh (€/kWh)",
+            "forced_sell_min_profit_description": "Batterinivå: (salg − slitasje) × rundtur − erstatningskjøp må overstige dette. PV-nivå: salg − erstatningskjøp × rundtur (ingen slitasje).",
+            "forced_sell_min_price": "Min. salgspris (€/kWh)",
+            "forced_sell_min_price_description": "Absolutt salgsprisgulv. Slots under dette selges aldri."
         }
       }
     }
@@ -154,7 +182,10 @@
         "name": "Emaldo-tidsplan"
       },
       "schedule_chart": {
-        "name": "Tidsplandiagram"
+        "name": "Tidsplan"
+      },
+      "manual_sell_chart": {
+        "name": "Manuelt Salgsplan"
       },
       "auto_base_load": {
         "name": "Automatisk grunnlast"

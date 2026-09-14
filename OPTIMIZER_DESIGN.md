@@ -89,12 +89,12 @@ Effective buy and sell prices (€/kWh) are derived from raw Nordpool spot price
 | **1–100** | Charge to N% SoC from any source | **Yes** | Yes |
 | **128** | No override — follow built-in AI schedule | AI decides | AI decides |
 | **129–255** | Discharge to (256 − N)% SoC | **No** — load-matched, covers household load only | N/A |
-| **Battery sell** _(future)_ | Set kWh amount + enable sell mode via Emaldo service | **Yes** — exports stored energy to grid at spot price | N/A |
+| **Battery sell** | Set kWh amount + enable sell mode via Emaldo service | **Yes** — exports stored energy to grid at spot price | N/A |
 
 **Key insights**:
 - IDLE (0x00) is effectively "solar-only charge" — the battery absorbs free solar surplus without drawing from the grid. This makes IDLE the correct command for solar surplus slots.
 - Discharge (129–255) is **load-matched** — the battery automatically adjusts its discharge rate to match household load. It does not export to grid during discharge.
-- **Battery-to-grid sell** is a separate Emaldo API mechanism (not a slot byte). The HA component exposes this as a service: set kWh to sell + enable selling. The optimizer does not yet plan this; see Feature 5 in `FEATURES_PLAN.md`.
+- **Battery-to-grid sell** is a separate Emaldo API mechanism (not a slot byte). The HA component exposes this as entities: `manual_selling` switch + `manual_selling_target` number. The optimizer plans this via the **Forced Sell** window (below), driving `switch.power_store_manual_selling` / `number.power_store_manual_selling_target`.
 
 ---
 
@@ -155,7 +155,7 @@ Effective buy and sell prices (€/kWh) are derived from raw Nordpool spot price
 | Linear battery wear model | Real degradation depends on SoC, temperature, C-rate, cycling depth | Minor for LFP at moderate cycling rates |
 | Solcast forecast is accurate | Clouds cause 50-80% forecast errors on individual 30-min slots. Since v0.2.4 the whole-day forecast is auto-scaled by an EWMA over measured raw-basis accuracy ratios (config `solar_forecast_scale`, default auto) to compensate systematic over-forecast bias. | Mitigated for systematic bias; day-level cloud errors still require `p10` mode + the PV-sell cloudy-day guard |
 | No grid export limits | Some grid connections have export caps | Could lead to curtailment — planned discharge revenue never materializes |
-| Battery-to-grid export not planned | The Emaldo component supports selling stored battery energy to the grid (kWh amount + enable). The optimizer never schedules this. | Arbitrage opportunities that clear round-trip losses and wear cost are missed; see Feature 5 in `FEATURES_PLAN.md` for design |
+| Battery-to-grid export planned since v0.3.16 | The emaldo `manual_selling` switch + `manual_selling_target` number drive battery-to-grid sells; the optimizer plans them in the Forced Sell peak window (two tiers: battery discharge and PV surplus release-to-idle). | Arbitrage is now harvested when peak sell prices clear round-trip + wear; capped by the force-sell energy budget |
 | Today and tomorrow planned independently | Both days are fully planned with their own prices and solar forecast. End-of-day SoC carryover is not *jointly* optimized — today's discharge is still chosen solely on today's prices. One narrow cross-day edge was added (v0.3.11): when tomorrow's confirmed grid-charge need is known, today pre-charges cheap solar-surplus slots with headroom instead of re-buying that energy tomorrow at a higher price (charge-only carry; joint discharge optimization is still not modelled). | Limited cross-day charge arbitrage only; full joint optimization of carryover SoC is still lost |
 
 ---
@@ -168,3 +168,35 @@ Effective buy and sell prices (€/kWh) are derived from raw Nordpool spot price
 - **Implementation**: `_compute_plan_accuracy()` in coordinator compares planned SoC-delta × capacity to actual `battery_charged/discharged_today` cumulative sensor deltas across elapsed slots since the last optimizer run
 - **Attributes**: full planned vs actual breakdown for discharge, charge, and solar
 - **Persisted history**: each run's planned-vs-actual record is appended to `battery_optimizer_accuracy.json` (HA config dir, capped at 1000 records / 60 days) because the HA recorder strips sensor attributes. A rolling `accuracy_history` summary (`runs`, `window_days`, `mean_solar_error_kwh`, `solar_under/over_forecast_runs`, `mean_discharge_error_kwh`) is injected into the sensor's attributes each run. Purpose: long-term solar-forecast bias tracking (P10 vs P50 drift) before any forecast-mode change. Purely observational.
+
+---
+
+## Forced Sell (Manual Sell Arbitrage)
+
+**Default-off.** `forced_sell_max_energy > 0` enables the plan step; the actuator dispatches Emaldo services. Two tiers per slot:
+
+**Battery tier** — discharge stored energy to grid via the emaldo `manual_selling` switch (staged target in `manual_selling_target`). Economics per kWh sold:
+```
+net = (sell_price − wear_cost) × η_rt − replacement_buy
+```
+Condition: `net ≥ forced_sell_min_profit` (default 0.02). `η_rt = η_charge × η_discharge` (0.9025 default). `replacement_buy` = cheapest planned buy price in the remaining day (the energy must be buyable back cheaply later).
+
+**PV tier** — solar surplus slot released to IDLE: inverter auto-exports solar. No service call, no wear. Economics per kWh:
+```
+net = sell_price − replacement_buy × η_rt
+```
+Condition: `net ≥ forced_sell_min_profit`. The round-trip term skips the (absent) wear cost but still requires the solar to be stored-back-worthwhile — selling solar that displaces a cheap future charge is a loss.
+
+**Window construction** (intraday only):
+- Scan remaining slots for the cheapest future buy (`replacement_buy`); only slots with `sell_price ≥ replacement_buy × η_rt` qualify as battery candidates (PV candidates are solar-surplus slots, checked by the PV-gate independently).
+- Walk slots in time order; take the sell price if it clears the gate. Battery tier fills from dischargeable capacity; PV tier marks otherwise-solar-charging slots idle instead.
+- Stop at: energy budget spent (battery capped by `capacity − soc_min − buffer`; PV capped by surplus), no profitable slot remains.
+- Never sells below the SoC floor safeguard; never violates the `soc_min` floor.
+- Result: `result.sell_slots` (set of slot indices), `sell_slots_energy_kwh`, `sell_target_kwh`, `sell_revenue`, `sell_profit`; per-slot `sell_kwh`/`sell_source` on `SlotPlan`. Exposed on `sensor.*_manual_sell_chart`.
+
+**Actuator**: `_manage_manual_selling(result, now)` — on window open, resolves the emaldo `manual_selling` switch + `manual_selling_target` number (via `_resolve_emaldo_entity`, fallback `switch.power_store_manual_selling` / `number.power_store_manual_selling_target`), stages the remaining target with `number.set_value`, then `switch.turn_on`; self-stops via `switch.turn_off` at target or window end. Guards: control disabled, entity resolve failure, `sell_target_kwh ≤ 0` (PV-only — inverter exports automatically), window over. Entity-driven — zero ha-emaldo changes (uses the emaldo entity layer, beta21+).
+
+**Key binds** (keep in sync when editing):
+- `round_trip_factor` = BatteryConfig property (`round_trip_efficiency`, 0.9025)
+- No `soc_min_kwh` — inline `capacity_kwh * soc_min / 100.0`
+- `pv_slots` empty ⇒ all-True PV tier (identity mask); forced-sell emit is AND-merged, so default-off stays byte-identical.

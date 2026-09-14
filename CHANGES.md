@@ -1,5 +1,32 @@
 # Changes
 
+## v0.3.16
+
+### Added
+
+- **Forced sell (manual sell arbitrage)** — opt-in two-tier price-peak
+  arbitrage. `forced_sell_enabled` + `forced_sell_max_kwh_pd` must both be
+  set; default off ⇒ byte-identical plan. **battery** tier discharges
+  stored energy at peak spot via the emaldo `manual_selling` switch +
+  `manual_selling_target` number (wear + round-trip apply, gate
+  `(sell − wear) × η_rt − c_ref ≥ min_profit`);
+  **pv** tier releases solar-surplus slots to idle so the inverter
+  auto-exports (no wear, gate `sell − buy × η_rt ≥ min_profit`). Intraday
+  only (cheaper recharge slot must exist in remaining day); `soc_min` +
+  1.0 kWh floor reserve; Case-A discharge slots and `pv_sell_strategy`
+  slots never double-marked. Files: `optimizer.py`, `models.py`,
+  `coordinator.py`, `config_flow.py`, `const.py`.
+- **New `sensor.*_manual_sell_chart` diagnostic** — per-slot sell window
+  (slot, time, source battery/pv, kWh, sell/buy price, profit estimate),
+  `sell_target_kwh`, `sell_revenue`, `sell_profit`, and `sources` split.
+  Files: `sensor.py`, `strings.json`, translations.
+- **PV-sell extension** — two opt-in triggers extending the morning PV
+  export: sell surplus at any price > 0 once projected SoC reaches
+  `soc_max` before noon, and sell below-full solar when the sell price
+  beats the cheapest replacement buy by `pv_sell_below_full_min_spread`
+  (default off ⇒ byte-identical). Files: `optimizer.py`, `config_flow.py`,
+  `coordinator.py`, `const.py`, translations.
+
 ## v0.3.15
 
 ### Added

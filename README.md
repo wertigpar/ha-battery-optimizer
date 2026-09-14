@@ -134,6 +134,11 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **SoC floor safeguard** | When enabled, the optimizer forces a grid charge back to `soc_min + buffer` whenever the actual SoC drops below that floor (battery would otherwise miss the evening peak after a solar shortfall). | `true` |
 | **SoC recovery buffer** | Percentage of capacity reserved above `soc_min` as the dischargeable bottom edge. A planned run never ends below `soc_min + buffer`, so it never reaches the floor with no idle-drain headroom. | `5.0` |
 | **Optimizer re-run interval** | How often (minutes) the optimizer re-runs to refresh the schedule: 15, 30, 60, or 120. | `120` |
+| **Forced sell enabled** | Enable two-tier forced selling at price peaks (manual-sell arbitrage). Battery-tier drives the emaldo `manual_selling` switch (discharge ~10 kW); PV-tier releases solar-surplus slots to idle so the inverter auto-exports. | `false` |
+| **Forced sell max discharge** | Maximum battery discharge rate during a forced-sell window (kW) — shared with the emaldo manual-selling target. | `10.0` |
+| **Forced sell max energy** | Maximum energy sold per window (kWh). Split between battery and PV tiers; budget 0 disables forced selling. | `0.0` |
+| **Forced sell min profit** | Minimum net profit per kWh sold (€/kWh). Battery tier: `(sell − wear) × round-trip − replacement buy` must clear it; PV tier: `sell − replacement buy × round-trip` must clear it (no wear). Defaults to `0.02` when the budget is enabled. | `0.02` |
+| **Forced sell min price** | Absolute sell-price floor (€/kWh). Slots below this never sell, regardless of profit gate. | `0.0` |
 
 > **Internal PV-sell tuning constants** (not UI-configurable — edit the `BatteryConfig` dataclass defaults in `optimizer.py` to change): `pv_sell_solar_margin` (default `0.95`, minimum fraction of needed solar energy required to allow selling), `pv_sell_min_price_spread` (default `0.0`, absolute sell-price floor in €/kWh — selling also requires the sell price to exceed the slot's stored value), `pv_sell_margin` (default `1.0`, multiplier on the stored-value sell threshold — `1.05` requires a 5% premium over storage before exporting), `solar_forecast_margin` (default `0.85`, fraction of discharge-slot surplus solar credited to the grid-charge balance).
 
@@ -498,6 +503,7 @@ The integration creates 20 sensor entities:
 | **Tomorrow Emaldo Cost** | monetary | Estimated cost for tomorrow following the Emaldo device's own AI schedule (€), netted for its own cycles | `emaldo_grid_cost`, `emaldo_wear_cost`, `emaldo_cycled_kwh`, `emaldo_import_kwh`, `emaldo_export_kwh`, `emaldo_energy`, `emaldo_transfer`, `emaldo_tax`, `emaldo_commission`, `emaldo_export_energy`, `emaldo_export_commission` |
 | **Tomorrow Optimizer Cost** | monetary | Estimated cost for tomorrow following the optimizer's plan (€). Equals `baseline_cost − net_profit` (`grid_cost + wear_cost`) | `grid_cost`, `wear_cost`, `cycled_kwh`, `grid_import_kwh`, `grid_export_kwh`, `grid_energy`, `grid_transfer`, `grid_tax`, `grid_commission`, `grid_export_energy`, `grid_export_commission` |
 | **Schedule Chart** | diagnostic | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `baseline_cost`, `activated_time`, `soc_guard_marker`, `soc_history` |
+| **Manual Sell Schedule** | diagnostic | Forced-sell (price-peak arbitrage) plan window. Summary e.g. `3 slots · 5.2 kWh (battery 4.5 · pv 0.7)`; only present when forced sell is enabled and a profitable window exists | `manual_sell` (per-slot window), `sell_target_kwh`, `sell_revenue`, `sell_profit`, `sources` (`battery`/`pv` slot counts) |
 | **Emaldo Schedule** | diagnostic | Summary string (e.g. `79C 84D 29I`) with Emaldo's internal schedule in attributes. Shows what the battery's own AI planned *before* the optimizer overrides it. | `schedule` (list of 96–192 slots with `mode`, `state`, `buy`, `sell`, `solar`) |
 | **Auto Base Load** | diagnostic | The base load value (kW) currently used by the optimizer | — |
 | **Plan Accuracy** | diagnostic | Signed discharge error in kWh since last optimizer run (positive = more discharge than planned, negative = less) | `elapsed_slots`, `planned_discharge_kwh`, `planned_charge_kwh`, `planned_solar_kwh`, `actual_discharge_kwh`, `discharge_error_kwh`, `actual_charge_kwh`, `charge_error_kwh`, `actual_solar_kwh`, `solar_error_kwh`, `last_run`, `accuracy_history` (rolling summary, persisted to `battery_optimizer_accuracy.json`) |
@@ -802,6 +808,72 @@ series:
 - **Red** = discharge to self-consume (avoid grid purchase)
 - **Gray** = idle — hold battery, excess solar charges naturally
 
+#### Manual Sell Schedule
+
+Shows the forced-sell (price-peak arbitrage) window: **battery**-tier slots
+(service-driven discharge via emaldo manual selling) vs **pv**-tier slots
+(solar surplus released to idle so the inverter auto-exports). Only present
+when forced sell is enabled and a profitable window clears the gate; otherwise
+`manual_sell` is empty and no series renders.
+
+```yaml
+type: custom:apexcharts-card
+header:
+  title: Manual Sell Schedule
+  show: true
+  show_states: false
+graph_span: 24h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+  color: red
+chart:
+  height: 120px
+  stacked: true
+plotOptions:
+  bar:
+    columnWidth: "100%"
+legend:
+  show: true
+yaxis:
+  - show: false
+    min: 0
+    max: 1.1
+series:
+  - entity: sensor.battery_optimizer_manual_sell_chart
+    name: Battery sell
+    type: column
+    color: "#e67e22"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const sell = entity.attributes.manual_sell || [];
+      return sell
+        .filter(s => s.source === 'battery')
+        .map(s => [new Date(s.t).getTime(), 1]);
+  - entity: sensor.battery_optimizer_manual_sell_chart
+    name: PV sell
+    type: column
+    color: "#f1c40f"
+    opacity: 0.9
+    show:
+      in_header: false
+      legend_value: false
+    data_generator: |
+      const sell = entity.attributes.manual_sell || [];
+      return sell
+        .filter(s => s.source === 'pv')
+        .map(s => [new Date(s.t).getTime(), 1]);
+```
+
+- **Orange** = battery-tier sell (emaldo manual-selling service, wear + round-trip priced in)
+- **Yellow** = PV-tier sell (release-to-idle, inverter auto-exports, no wear)
+- State/attributes: `manual_sell` list (slot, time, `source`, `kwh`, `sell`, `buy`, `profit_est`), `sell_target_kwh`, `sell_revenue`, `sell_profit`, `sources` split
+
 #### Price, SoC & Solar
 
 Shows electricity prices, the planned SoC trajectory, and solar forecast to explain *why*
@@ -1033,6 +1105,21 @@ After sell slots are finalised, `SlotPlan.soc_after` values (computed during the
 The strategy is toggled via the **PV Sell Strategy** switch entity. It uses `RestoreEntity` so the state survives HA restarts. Toggling it immediately triggers an optimizer re-run, which recomputes `thirdparty_pv_slots` and re-schedules all PV switch transitions for the rest of the day.
 
 The coordinator cancels and rebuilds the `async_call_later` transition callbacks on every optimizer run, so the physical switch always follows the current plan.
+
+---
+
+## Forced Sell (Manual Sell Arbitrage)
+
+**Default-off.** When enabled, the optimizer looks for a **price-peak window** in the remaining day where selling pays more than storing. Two tiers per slot:
+
+- **Battery tier** — the optimizer drives the emaldo `manual_selling` switch (staging the remaining kWh into the `manual_selling_target` number), forcing a battery **discharge** (up to `forced_sell_max_discharge` kW) directly to the grid at the peak sell price. Full economics apply: battery wear + round-trip loss. Gate: `(sell − wear) × η_rt − replacement_buy ≥ forced_sell_min_profit`.
+- **PV tier** — solar-surplus slots (battery would otherwise charge from solar) are released to **idle**, so the inverter auto-exports that solar to the grid at spot price. No service call, no wear. Gate: `sell − replacement_buy × η_rt ≥ forced_sell_min_profit`.
+
+The window stops at the earliest of: energy target reached (`forced_sell_max_energy` split across tiers), window end (the optimizer's planned re-charge slot — the energy must be buyable back cheaply later today), or the actuator's stop condition. Selling never drops the battery below the SoC floor safeguard. **Intraday only** — no recharge slot left in the remaining day ⇒ no forced selling.
+
+The per-slot plan is exposed on the **Manual Sell Schedule** diagnostic sensor (`manual_sell` attribute: slot, time, `source` `battery`|`pv`, `kwh`, `sell`, `buy`, `profit_est`) plus window totals `sell_target_kwh`, `sell_revenue`, `sell_profit` and a `sources` split. See the [Dashboard card](#manual-sell-schedule).
+
+Battery Optimizer speaks to Emaldo **through its entities** — the same `manual_selling` switch + `manual_selling_target` number (and the `apply_bulk_schedule` service) your own automations can use. The actuator self-stops at the energy target; if the Emaldo device rejects the state change (e.g. its own selling-protection setting), the switch logs an error and the battery simply idles — no damage path.
 
 ---
 

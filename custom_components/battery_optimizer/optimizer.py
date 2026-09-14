@@ -70,6 +70,22 @@ class BatteryConfig:
     # excess overnight to cover the load instead of buying grid power.
     enable_night_drain: bool = True
 
+    # Manual forced-sell arbitrage (two tiers: battery + PV surplus).
+    forced_sell_enabled: bool = False
+    forced_sell_max_kwh_pd: float = 0.0   # daily kWh cap, 0 = unlimited
+    forced_sell_min_profit: float = 0.02  # €/kWh after wear + round-trip
+    forced_sell_min_price: float = 0.0    # absolute sell-price floor (€/kWh)
+
+    # PV sell below-full override (two-tier solar sell; all default-off):
+    #   pv_sell_surplus_when_full  — sell surplus solar at any price > 0 when
+    #                                the battery would reach soc_max by noon.
+    #   pv_sell_below_full         — sell solar even if the battery won't fill,
+    #                                when the sell-vs-replacement-buy spread
+    #                                clears pv_sell_below_full_min_spread.
+    pv_sell_surplus_when_full: bool = False
+    pv_sell_below_full: bool = False
+    pv_sell_below_full_min_spread: float = 0.0  # €/kWh
+
     @property
     def soc_floor_target_pct(self) -> float:
         """Keep-alive charge target: soc_min plus a small recovery buffer."""
@@ -113,6 +129,8 @@ class SlotPlan:
     soc_after: float = 0.0
     profit: float = 0.0  # estimated slot profit/cost in €
     export_kwh: float = 0.0  # solar exported to grid this slot (kWh)
+    sell_kwh: float = 0.0      # kWh force-sold this slot (battery or PV)
+    sell_source: str = ""      # "battery" | "pv"
 
 
 @dataclass
@@ -174,6 +192,11 @@ class OptimizationResult:
     emaldo_export_energy: float = 0.0
     emaldo_export_commission: float = 0.0
     trace: dict | None = None   # decision trace — populated on main runs only
+    # Manual forced-sell (two-tier arbitrage) report.
+    sell_slots: list[int] = field(default_factory=list)
+    sell_target_kwh: float = 0.0   # battery kWh reserved for the sell window
+    sell_revenue: float = 0.0      # gross sell € (battery + PV surpl.)
+    sell_profit: float = 0.0       # net € after wear + round-trip + c_ref
 
     @property
     def slot_values(self) -> list[int]:
@@ -1074,6 +1097,273 @@ def _correct_soc_for_pv_sells(
 
         # Patch the SlotPlan in-place.
         sp.soc_after = round(soc / cap * 100.0, 1)
+
+
+def _plan_forced_sell_slots(
+    cfg: BatteryConfig,
+    buy_prices: list[float],
+    sell_prices: list[float],
+    net_loads: list[float],
+    pv_slots: list[bool],
+    result_slots: list[SlotPlan],
+    start_slot: int,
+    start_soc_kwh: float | None,
+    round_trip_factor: float,
+) -> dict[int, tuple[float, str]]:
+    """Plan forced (manual) sell slots: battery + surplus-PV arbitrage.
+
+    Returns {slot: (kwh, tier)} where tier is ``"battery"`` or ``"pv"``.
+
+    Logic (see superpowers/plans/2026-09-14-manual-sell-arbitrage.md):
+    - Sell window opens at the first slot that passes a tier gate; once open,
+      a slot that fails a gate or sells below the price floor BREAKS the
+      window (no later re-entry), because the battery cannot recharge in day.
+    - Case-A greedily discharged slots (plan action already "discharge") are
+      skipped; if the window is open they terminate it (they sit right after
+      the sell block, so re-buy at the spike price would be a loss).
+    - No sale at the final slot (s+1 >= 96): no in-day recharge remains.
+    - PV tier first, once: surplus solar is exported at zero battery cost and
+      consumes no daily budget/remaining capacity.  ``pv_slots`` empty or a
+      True flag permits the PV tier; a False flag (slot already claimed by
+      ``_plan_pv_sell_slots``) forbids it.
+    - Battery tier: per-slot 2.5 kWh, capped by remaining usable capacity and
+      the daily budget; sells only while the round-trip exceeds the cheapest
+      forward buy minus wear (``forced_sell_min_profit``).
+    """
+    if not cfg.forced_sell_enabled:
+        return {}
+    if start_soc_kwh is None:
+        return {}
+    usable_kwh = max(
+        0.0,
+        start_soc_kwh - cfg.capacity_kwh * cfg.soc_min / 100.0 - 1.0,
+    )
+    if usable_kwh <= 0.0:
+        return {}
+    budget_kwh = (
+        cfg.forced_sell_max_kwh_pd
+        if cfg.forced_sell_max_kwh_pd > 0.0
+        else math.inf
+    )
+    min_profit = cfg.forced_sell_min_profit
+    min_price = cfg.forced_sell_min_price
+    wear = cfg.wear_cost_per_kwh
+    remaining = usable_kwh
+    total_battery = 0.0
+    per_slot_kwh = 2.5  # max sell per 15-min slot (plan constraint)
+    sell_plan: dict[int, tuple[float, str]] = {}
+    window_open = False
+
+    for s in range(start_slot, 96):
+        sell = sell_prices[s]
+        if sell < min_price:
+            if window_open:
+                break
+            continue
+        # Case-A: plan already greedily discharges this slot.  Do not
+        # double-sell; a discharge right after the sell block terminates it.
+        if result_slots[s].action == "discharge":
+            if window_open:
+                break
+            continue
+        if s + 1 >= 96:
+            # Final slot: no in-day recharge opportunity remains.
+            continue
+
+        cheapest = min(
+            (c for c in range(s + 1, 96)),
+            key=lambda c: buy_prices[c],
+        )
+        c_ref = buy_prices[cheapest]
+
+        # PV tier (first): surplus solar exports at zero battery cost.
+        if net_loads[s] < 0.0 and (not pv_slots or pv_slots[s]):
+            if sell - c_ref * round_trip_factor < min_profit:
+                if window_open:
+                    break
+                continue
+            window_open = True
+            sell_plan[s] = (
+                max(0.0, -net_loads[s]) * SLOT_DURATION_HOURS,
+                "pv",
+            )
+            continue
+
+        # Battery tier: round-trip must beat the reference forward buy.
+        if (sell - wear) * round_trip_factor - c_ref < min_profit:
+            if window_open:
+                break
+            continue
+        if remaining <= 0.05:
+            break
+        step = min(per_slot_kwh, remaining, budget_kwh - total_battery)
+        if step <= 0.05:
+            break
+        window_open = True
+        sell_plan[s] = (step, "battery")
+        total_battery += step
+        remaining -= step
+
+    return sell_plan
+
+
+def _plan_pv_sell_override(
+    cfg: BatteryConfig,
+    slots: list[SlotPlan],
+    solar_15min: list[float],
+    buy_prices: list[float],
+    sell_prices: list[float],
+    *,
+    start_slot: int,
+    initial_soc_kwh: float | None,
+    discharge_slots: list[int],
+) -> list[bool]:
+    """Two-tier PV-sell override — sell solar even when the battery won't fill.
+
+    All default-off: with both tiers disabled (or no initial SoC) the
+    returned flags are all-True, so AND-merging at the emit site is a no-op
+    and behaviour stays byte-identical.
+
+    Tier 1 — surplus_when_full: once the battery would reach soc_max, sell
+    every following morning slot's surplus solar at any sell price > 0
+    (curtailment-avoidance / morning arbitrage) instead of auto-exporting
+    the same surplus at midday spot.
+
+    Tier 2 — below_full: when the battery will NOT fill, sell solar if
+    sell_price − replacement_buy >= pv_sell_below_full_min_spread, where
+    replacement_buy is the cheapest planned discharge-slot buy price (or the
+    cheapest FUTURE buy price when no discharge is planned).
+
+    Both tiers share a hard floor guard: a sell that would leave the
+    projected SoC below soc_min is reverted (keeps the battery safe even
+    when the daylight is only marginally above the floor).
+
+    Return convention mirrors _plan_pv_sell_slots:
+        True  = third-party PV enabled  (solar charges battery — default).
+        False = third-party PV disabled (solar exported to grid at spot price).
+    """
+    n = SLOTS_PER_DAY
+    override = [True] * n
+
+    if not (cfg.pv_sell_surplus_when_full or cfg.pv_sell_below_full):
+        return override
+    if initial_soc_kwh is None:
+        return override
+
+    # Selling is capped at noon (mirrors _plan_pv_sell_slots): afternoon is
+    # the battery's charge window, handled by the base plan + firmware.
+    _MIN_SOLAR_KW = 0.1
+    NOON_SLOT = 48  # slot 48 × 15 min = 12:00 local time
+    window_end = min(NOON_SLOT, n)
+    if start_slot >= window_end:
+        return override
+
+    cap = cfg.capacity_kwh
+    soc_max_kwh = cap * cfg.soc_max / 100.0
+    soc_min_kwh = cap * cfg.soc_min / 100.0
+    floor_target_kwh = cap * cfg.soc_floor_target_pct / 100.0
+    base_load_kw = cfg.base_load_kw
+    max_charge_kw = cfg.max_charge_kw
+    charge_eff = cfg.charge_efficiency
+    drain = cfg.idle_drain_per_slot_kwh
+    slot_map: dict[int, SlotPlan] = {sp.index: sp for sp in slots}
+
+    # Replacement buy for tier-2: cheapest planned discharge buy; when no
+    # discharge is planned, fall back to the cheapest future buy per slot.
+    if discharge_slots:
+        replacement_buy: float | None = min(
+            (buy_prices[c] for c in discharge_slots if 0 <= c < len(buy_prices)),
+            default=0.0,
+        )
+    else:
+        replacement_buy = None
+
+    # Projected SoC under the NO-SELL plan (battery absorbs all solar).
+    soc = initial_soc_kwh
+    reached_max = False
+    for s in range(start_slot, window_end):
+        sp = slot_map.get(s)
+        solar_kw = solar_15min[s] if s < len(solar_15min) else 0.0
+        action = sp.action if sp is not None else "none"
+        absorbed_kwh = 0.0
+
+        if action == "charge":
+            # Grid-charge slot: never overridden; keep the projection honest.
+            grid_kwh = cfg.max_charge_per_slot_kwh * charge_eff
+            soc = min(soc + grid_kwh - drain, soc_max_kwh)
+            continue
+        if action == "charge_floor":
+            add_kwh = min(
+                cfg.max_charge_per_slot_kwh * charge_eff,
+                max(0.0, floor_target_kwh - soc),
+            )
+            soc = min(soc + add_kwh - drain, soc_max_kwh)
+            continue
+
+        if action == "discharge":
+            net_load = base_load_kw - solar_kw
+            if net_load > 0:
+                load_kwh = min(net_load, cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+                battery_draw = min(
+                    load_kwh / cfg.discharge_efficiency,
+                    max(0.0, soc - soc_min_kwh),
+                )
+                soc = max(soc - battery_draw - drain, 0.0)
+                continue
+            # Solar surplus covers the load (or exceeds it): absorbed, unless
+            # this slot later decides to sell the surplus.
+            absorbed_kwh = min(-net_load, max_charge_kw) * SLOT_DURATION_HOURS * charge_eff
+            soc = min(soc + absorbed_kwh - drain, soc_max_kwh)
+        elif action == "idle":
+            if solar_kw > base_load_kw:
+                absorbed_kwh = min(solar_kw, max_charge_kw) * SLOT_DURATION_HOURS * charge_eff
+                soc = min(soc + absorbed_kwh - drain, soc_max_kwh)
+            else:
+                soc = max(soc - drain, 0.0)
+        else:
+            # "none" / unplanned slot: battery does not absorb in the sim
+            # contract (mirrors _forward_soc_sim).
+            soc = max(soc - drain, 0.0)
+
+        if solar_kw < _MIN_SOLAR_KW:
+            continue  # negligible solar: keep PV enabled
+
+        sell_price = sell_prices[s] if s < len(sell_prices) else 0.0
+        sell_now = False
+
+        # Tier 1 — surplus when full (battery reached the cap, or this
+        # slot's solar would overflow it).  Any positive price beats the
+        # midday auto-export.
+        if cfg.pv_sell_surplus_when_full and sell_price > 0.0:
+            if reached_max or soc >= soc_max_kwh - 1e-9:
+                sell_now = True
+
+        # Tier 2 — below-full justified spread sell.
+        if (
+            not sell_now
+            and cfg.pv_sell_below_full
+            and sell_price > cfg.pv_sell_min_price_spread
+        ):
+            if replacement_buy is not None:
+                ref_buy = replacement_buy
+            elif s + 1 < len(buy_prices):
+                ref_buy = min(buy_prices[s + 1 :])
+            else:
+                ref_buy = 0.0
+            if ref_buy > 0.0 and sell_price - ref_buy >= cfg.pv_sell_below_full_min_spread:
+                sell_now = True
+
+        if sell_now:
+            # Floor guard: selling skips this slot's solar absorption, so the
+            # battery lands at soc − absorbed (conservative understate).
+            soc_with_sell = soc - absorbed_kwh
+            if soc_with_sell >= soc_min_kwh:
+                override[s] = False
+
+        if not reached_max and soc >= soc_max_kwh - 1e-9:
+            reached_max = True
+
+    return override
 
 
 def _forward_soc_sim(
@@ -2161,6 +2451,18 @@ def optimize(
             start_slot=start_slot,
             initial_soc_kwh=current_soc_kwh,
         )
+        # Two-tier sell override (surplus-when-full / below-full spread):
+        # AND-merged into the base flags → it can only ADD sells, never
+        # cancel one the base plan made.  All-default-off ⇒ override is
+        # all-True ⇒ merge is the identity.
+        sell_slots = [sp.index for sp in result_slots if sp.action == "discharge"]
+        pv_override = _plan_pv_sell_override(
+            cfg, result_slots, solar_15min, buy_prices, sell_prices,
+            start_slot=start_slot,
+            initial_soc_kwh=current_soc_kwh,
+            discharge_slots=sell_slots,
+        )
+        pv_flags = [f and o for f, o in zip(pv_flags, pv_override)]
         _correct_soc_for_pv_sells(result_slots, pv_flags, solar_15min, cfg)
 
     emaldo_cost = 0.0
@@ -2331,6 +2633,60 @@ def optimize(
 
     if enable_pv_strategy:
         result.thirdparty_pv_slots = pv_flags
+
+    # ── Forced (manual) sell: battery + surplus-PV peak arbitrage ──
+    sell_plan = _plan_forced_sell_slots(
+        cfg,
+        buy_prices,
+        sell_prices,
+        net_loads,
+        pv_flags,
+        result_slots,
+        start_slot,
+        current_soc_kwh,
+        cfg.round_trip_factor,
+    )
+    if sell_plan:
+        sell_slots = sorted(sell_plan)
+        result.sell_slots = sell_slots
+        result.sell_target_kwh = sum(
+            kwh for kwh, tier in sell_plan.values() if tier == "battery"
+        )
+        c_ref_idx = min(
+            (c for c in range(sell_slots[-1] + 1, 96)),
+            key=lambda c: buy_prices[c],
+            default=None,
+        )
+        pv_total_kwh = 0.0
+        for s, (kwh, tier) in sell_plan.items():
+            result_slots[s].action = "force_sell"
+            result_slots[s].slot_value = SLOT_IDLE  # device idles/exports
+            result_slots[s].sell_kwh = kwh
+            result_slots[s].sell_source = tier
+            result.sell_revenue += sell_prices[s] * kwh
+            if c_ref_idx is not None:
+                c_ref = buy_prices[c_ref_idx]
+                if tier == "battery":
+                    result.sell_profit += (
+                        (sell_prices[s] - cfg.wear_cost_per_kwh)
+                        * cfg.round_trip_factor
+                        - c_ref
+                    ) * kwh
+                else:  # pv: no wear, no round-trip loss on export
+                    result.sell_profit += (
+                        sell_prices[s] - c_ref * cfg.round_trip_factor
+                    ) * kwh
+            else:
+                pv_total_kwh += kwh if tier == "pv" else 0.0
+        _LOGGER.info(
+            "Forced sell planned: slots=%s battery=%.1f kWh pv=%.2f kWh "
+            "revenue=%.3f€ profit=%.3f€",
+            sell_slots,
+            result.sell_target_kwh,
+            sum(kwh for kwh, tier in sell_plan.values() if tier == "pv"),
+            result.sell_revenue,
+            result.sell_profit,
+        )
 
     _LOGGER.info(
         "Optimization complete: savings=%.4f€ (baseline=%.4f, actual=%.4f, emaldo=%.4f), "

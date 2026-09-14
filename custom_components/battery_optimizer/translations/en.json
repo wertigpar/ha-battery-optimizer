@@ -34,7 +34,21 @@
           "solar_forecast_mode": "Solar forecast mode for charge planning (p10 = pessimistic/weather-aware, p50 = median/optimistic)",
           "solar_forecast_scale": "Solar forecast scale (0 = auto-tune from accuracy history; 0.8 scales the forecast down 20%)",
           "grid_import_sensor": "Grid import energy counter (cumulative, Wh or kWh). Leave empty to auto-detect the linked Emaldo unit's grid import sensor; or enter a lifetime meter (e.g. an EM24 `_total` counter) for a cloud-free install.",
-          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh). Leave empty to auto-detect the linked Emaldo unit's grid export sensor; or enter a lifetime meter (e.g. an EM24 `_total` counter) for a cloud-free install."
+          "grid_export_sensor": "Grid export energy counter (cumulative, Wh or kWh). Leave empty to auto-detect the linked Emaldo unit's grid export sensor; or enter a lifetime meter (e.g. an EM24 `_total` counter) for a cloud-free install.",
+          "pv_sell_surplus_when_full": "Sell surplus solar when battery full",
+          "pv_sell_surplus_when_full_description": "When on, surplus solar is sold at any positive price once the battery reaches its Max SoC before noon.",
+          "pv_sell_below_full": "Sell solar even when battery not full",
+          "pv_sell_below_full_description": "When on, solar is sold during the morning even if the battery will not fill, as soon as the sell price beats the cheapest replacement buy by the minimum spread.",
+          "pv_sell_below_full_min_spread": "Min sell-vs-replacement-buy spread (€/kWh)",
+          "pv_sell_below_full_min_spread_description": "Required premium of the sell price over the cheapest later buy price. 0 = no premium required (any rounding gain).",
+          "forced_sell_enabled": "Enable forced sell (manual-sell arbitrage)",
+          "forced_sell_enabled_description": "Two-tier price-peak export: battery tier sells stored energy via the emaldo manual-selling switch; PV tier releases solar surplus to idle for automatic inverter export. Default off.",
+          "forced_sell_max_kwh_pd": "Max forced-sell energy (kWh/day)",
+          "forced_sell_max_kwh_pd_description": "Daily energy budget for forced selling (battery + PV tier). 0 = forced selling disabled.",
+          "forced_sell_min_profit": "Min profit per kWh sold (€/kWh)",
+          "forced_sell_min_profit_description": "Battery tier: (sell − wear) × round-trip − replacement buy must clear it. PV tier: sell − replacement buy × round-trip (no wear).",
+          "forced_sell_min_price": "Min sell price (€/kWh)",
+          "forced_sell_min_price_description": "Absolute sell-price floor. Slots below this never sell."
         }
       }
     },
@@ -99,7 +113,21 @@
               "precharge_horizon_days": "Look-ahead horizon (days)",
               "precharge_horizon_days_description": "1 = only pre-charge before the next-day price publish (cheap window closes at the price publish). 2 = also hedge a likely day+2 price spike: if tomorrow's optimized plan would leave the battery low, top up gently tonight using cheap grid energy so you enter the unknown day+2 with a safety buffer.",
               "precharge_publish_hour": "Next-day price publish hour (local, 0–23)",
-              "precharge_publish_hour_description": "Hour (local time, 24h) at which Nord Pool typically publishes next-day prices. Leave empty for automatic: the cutoff slot is derived from your Home Assistant timezone so it is correct for any Nord Pool market. Set only if your price source publishes at a different hour."
+              "precharge_publish_hour_description": "Hour (local time, 24h) at which Nord Pool typically publishes next-day prices. Leave empty for automatic: the cutoff slot is derived from your Home Assistant timezone so it is correct for any Nord Pool market. Set only if your price source publishes at a different hour.",
+                "pv_sell_surplus_when_full": "Sell surplus solar when battery full",
+                "pv_sell_surplus_when_full_description": "When on, surplus solar is sold at any positive price once the battery reaches its Max SoC before noon.",
+                "pv_sell_below_full": "Sell solar even when battery not full",
+                "pv_sell_below_full_description": "When on, solar is sold during the morning even if the battery will not fill, as soon as the sell price beats the cheapest replacement buy by the minimum spread.",
+                "pv_sell_below_full_min_spread": "Min sell-vs-replacement-buy spread (€/kWh)",
+                "pv_sell_below_full_min_spread_description": "Required premium of the sell price over the cheapest later buy price. 0 = no premium required (any rounding gain).",
+                "forced_sell_enabled": "Enable forced sell (manual-sell arbitrage)",
+                "forced_sell_enabled_description": "Two-tier price-peak export: battery tier sells stored energy via the emaldo manual-selling switch; PV tier releases solar surplus to idle for automatic inverter export. Default off.",
+                "forced_sell_max_kwh_pd": "Max forced-sell energy (kWh/day)",
+                "forced_sell_max_kwh_pd_description": "Daily energy budget for forced selling (battery + PV tier). 0 = forced selling disabled.",
+                "forced_sell_min_profit": "Min profit per kWh sold (€/kWh)",
+                "forced_sell_min_profit_description": "Battery tier: (sell − wear) × round-trip − replacement buy must clear it. PV tier: sell − replacement buy × round-trip (no wear).",
+                "forced_sell_min_price": "Min sell price (€/kWh)",
+                "forced_sell_min_price_description": "Absolute sell-price floor. Slots below this never sell."
         }
       }
     }
@@ -123,7 +151,12 @@
       "tomorrow_emaldo_plan_cost": { "name": "Tomorrow Emaldo Cost" },
       "tomorrow_optimizer_plan_cost": { "name": "Tomorrow Optimizer Cost" },
       "emaldo_schedule_chart": { "name": "Emaldo Schedule" },
-      "schedule_chart": { "name": "Schedule Chart" },
+      "schedule_chart": {
+        "name": "Schedule Chart"
+      },
+      "manual_sell_chart": {
+        "name": "Manual Sell Schedule"
+      },
       "auto_base_load": { "name": "Auto Base Load" },
       "plan_accuracy": { "name": "Plan Accuracy" },
       "solar_regime": { "name": "Solar Regime" },

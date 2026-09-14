@@ -74,6 +74,7 @@ async def async_setup_entry(
         TomorrowOptimizerPlanCostSensor(coordinator, entry),
         EmaldoScheduleChartSensor(coordinator, entry),
         ScheduleChartSensor(coordinator, entry),
+        ManualSellChartSensor(coordinator, entry),
         UserScheduleChartSensor(coordinator, entry),
         AutoBaseLoadSensor(coordinator, entry),
         PlanAccuracySensor(coordinator, entry),
@@ -736,6 +737,8 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
                 "profit": round(sp.profit, 4),
                 "export_kwh": round(sp.export_kwh, 4),
                 "pv_sell": not pv_on,
+                "manual_sell": sp.sell_kwh > 0,
+                "sell_source": sp.sell_source or None,
             })
 
         tomorrow = self.coordinator.last_result_tomorrow
@@ -764,6 +767,8 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
                     "profit": round(sp.profit, 4),
                     "export_kwh": round(sp.export_kwh, 4),
                     "pv_sell": not pv_on,
+                    "manual_sell": sp.sell_kwh > 0,
+                    "sell_source": sp.sell_source or None,
                 })
 
         total = self._result.total_profit
@@ -781,6 +786,89 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
         if guard is not None:
             attrs["soc_guard_marker"] = guard
         attrs["soc_history"] = self.coordinator.actual_soc_history
+        return attrs
+
+
+class ManualSellChartSensor(_BaseOptimizerSensor):
+    """Exposes the forced-sell schedule for dashboard visualization.
+
+    Shows which slots are planned for manual selling, the source
+    (battery discharge vs PV surplus release), and profit estimates.
+    """
+
+    _unrecorded_attributes = frozenset({"manual_sell"})
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "manual_sell_chart")
+        self._attr_icon = "mdi:chart-timeline"
+
+    @property
+    def native_value(self) -> str:
+        if self._result is None:
+            return "no_schedule"
+        sell = self._result.sell_slots
+        if not sell:
+            return "no_schedule"
+        bat_kwh = sum(
+            sp.sell_kwh for sp in self._result.slots
+            if sp.sell_kwh > 0 and sp.sell_source == "battery"
+        )
+        pv_kwh = sum(
+            sp.sell_kwh for sp in self._result.slots
+            if sp.sell_kwh > 0 and sp.sell_source == "pv"
+        )
+        parts: list[str] = []
+        if bat_kwh > 0:
+            parts.append(f"battery {bat_kwh:.1f}")
+        if pv_kwh > 0:
+            parts.append(f"pv {pv_kwh:.2f}")
+        detail = f" ({' · '.join(parts)})" if parts else ""
+        return f"{len(sell)} slots · {bat_kwh + pv_kwh:.1f} kWh{detail}"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self._result is None:
+            return {}
+        sell_slots = self._result.sell_slots
+        if not sell_slots:
+            return {}
+        now_ha = dt_util.now()
+        today_midnight = now_ha.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        sell_set = set(sell_slots)
+        manual_sell: list[dict[str, Any]] = []
+        bat_n = 0
+        pv_n = 0
+        for sp in self._result.slots:
+            if sp.index not in sell_set:
+                continue
+            h = (sp.index * 15) // 60
+            m = (sp.index * 15) % 60
+            slot_dt = today_midnight + timedelta(minutes=sp.index * 15)
+            entry = {
+                "slot": sp.index,
+                "time": f"{h:02d}:{m:02d}",
+                "t": slot_dt.isoformat(),
+                "source": sp.sell_source or None,
+                "kwh": round(sp.sell_kwh, 3),
+                "sell": round(sp.sell_price, 4),
+                "buy": round(sp.buy_price, 4),
+                "profit_est": round(sp.profit, 4),
+            }
+            manual_sell.append(entry)
+            if sp.sell_source == "battery":
+                bat_n += 1
+            elif sp.sell_source == "pv":
+                pv_n += 1
+        attrs: dict[str, Any] = {
+            "manual_sell": manual_sell,
+            "sell_target_kwh": round(self._result.sell_target_kwh, 3),
+            "sell_revenue": round(self._result.sell_revenue, 4),
+            "sell_profit": round(self._result.sell_profit, 4),
+            "sources": {"battery": bat_n, "pv": pv_n},
+        }
         return attrs
 
 

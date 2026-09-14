@@ -45,6 +45,9 @@ CONF_ENABLE_EMALDO_CONTROL = "enable_emaldo_control"
 CONF_SOLAR_FORECAST_MODE = "solar_forecast_mode"
 CONF_SOLAR_FORECAST_SCALE = "solar_forecast_scale"
 CONF_SOLAR_ACTUAL_SENSOR = "solar_actual_sensor"
+CONF_PV_SELL_SURPLUS_WHEN_FULL = "pv_sell_surplus_when_full"
+CONF_PV_SELL_BELOW_FULL = "pv_sell_below_full"
+CONF_PV_SELL_BELOW_FULL_MIN_SPREAD = "pv_sell_below_full_min_spread"
 
 CONF_GRID_IMPORT_SENSOR = "grid_import_sensor"
 CONF_GRID_EXPORT_SENSOR = "grid_export_sensor"
@@ -157,6 +160,21 @@ IDLE_FULL_CONTROL = "full_control"
 IDLE_SOLAR_GUARD = "solar_guard"
 IDLE_SMART_OVERRIDE = "smart_override"
 DEFAULT_IDLE_STRATEGY = IDLE_FULL_CONTROL
+
+# ── Forced sell (manual sell arbitrage) ─────────────────────────────
+CONF_FORCED_SELL_ENABLED = "forced_sell_enabled"
+CONF_FORCED_SELL_MAX_KWH_PD = "forced_sell_max_kwh_pd"
+CONF_FORCED_SELL_MIN_PROFIT = "forced_sell_min_profit"
+CONF_FORCED_SELL_MIN_PRICE = "forced_sell_min_price"
+DEFAULT_FORCED_SELL_ENABLED = False
+DEFAULT_FORCED_SELL_MAX_KWH_PD = 0.0   # 0 = unlimited
+DEFAULT_FORCED_SELL_MIN_PROFIT = 0.02  # €/kWh after wear + round-trip
+DEFAULT_FORCED_SELL_MIN_PRICE = 0.0    # absolute sell-price floor (€/kWh)
+
+# ── PV sell below-full override (two-tier solar sell; default-off) ──
+DEFAULT_PV_SELL_SURPLUS_WHEN_FULL = False
+DEFAULT_PV_SELL_BELOW_FULL = False
+DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD = 0.0  # €/kWh sell-vs-replacement-buy spread
 
 # ── Emaldo slot encoding (mirrors emaldo_lib.const) ─────────────────
 SLOT_NO_OVERRIDE = 0x80  # 128 — follow base schedule

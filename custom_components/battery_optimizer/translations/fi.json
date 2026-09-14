@@ -34,6 +34,20 @@
           "solar_forecast_mode": "Aurinkoennusteen tila lataussuunnittelua varten (p10 = pessimistinen/sään huomioiva, p50 = mediaani/optimistinen)",
           "solar_forecast_scale": "Aurinkoennusteen skaalaus (0 = automaattinen hienosäätö tarkkuushistoriasta; 0,8 skaalaa ennusteen 20 % pienemmäksi)",
           "grid_import_sensor": "Sähkön tuonnin energialaskuri (kumulatiivinen, Wh tai kWh). Jätä tyhjäksi, jolloin linkitetyn Emaldo-laitteen tuontisensori haetaan automaattisesti; tai syötä kokoelman mittauksen laskuri (esim. EM24 `_total`) pilvettömään asennukseen.",
+          "pv_sell_surplus_when_full": "Myy ylijäämäaurinko, kun akku on täynnä",
+          "pv_sell_surplus_when_full_description": "Kun päällä, ylijäämäaurinko myydään millä tahansa positiivisella hinnalla, kun akku saavuttaa Max SoC:n ennen puoltapäivää.",
+          "pv_sell_below_full": "Myy aurinko myös, kun akku ei täyty",
+          "pv_sell_below_full_description": "Kun päällä, aurinko myydään aamulla myös, jos akku ei täyty, heti kun myyntihinta ylittää halvimman korvausoston minimivälillä.",
+          "pv_sell_below_full_min_spread": "Min. myynti-korvausosto-väli (€/kWh)",
+          "pv_sell_below_full_min_spread_description": "Vaadittu myyntihinnan lisä halvimman myöhemmän ostohinnan yli. 0 = ei lisävaatimusta.",
+          "forced_sell_enabled": "Ota käyttöön pakotettu myynti (manuaalinen myyntiarbitraasi)",
+          "forced_sell_enabled_description": "Kaksitasoinen huippuhintamyynti: akkutaso myy varastoitua energiaa emaldo-manuaalimyynnin kytkimen kautta; PV-taso vapauttaa aurinkoylijäämän joutotilaan automaattista myyntiä varten. Oletus pois päältä.",
+          "forced_sell_max_kwh_pd": "Pakotetun myynnin enimmäisenergia (kWh/vrk)",
+          "forced_sell_max_kwh_pd_description": "Päivittäinen energiabudjetti pakotetulle myynnille (akku + PV-taso). 0 = pakotettu myynti pois käytöstä.",
+          "forced_sell_min_profit": "Minimivoitto myytyä kWh:ta kohti (€/kWh)",
+          "forced_sell_min_profit_description": "Akkutaso: (myynti − kuluminen) × kierrätyshyötysuhde − korvaava osto ylitettävä. PV-taso: myynti − korvaava osto × kierrätyshyötysuhde (ei kulumista).",
+          "forced_sell_min_price": "Minimimyyntihinta (€/kWh)",
+          "forced_sell_min_price_description": "Ehdoton myyntihinnan alaraja. Tätä alempia hintoja ei koskaan myydä.",
           "grid_export_sensor": "Sähkön viennin energialaskuri (kumulatiivinen, Wh tai kWh). Jätä tyhjäksi, jolloin linkitetyn Emaldo-laitteen vientisensori haetaan automaattisesti; tai syötä kokoelman mittauksen laskuri (esim. EM24 `_total`) pilvettömään asennukseen."
         }
       }
@@ -99,7 +113,21 @@
           "precharge_horizon_days": "Katse eteenpäin (päiviä)",
           "precharge_horizon_days_description": "1 = esilataus vain ennen seuraavan päivän hintojen julkaisua (halpa ikkuna sulkeutuu hintojen julkaisuun mennessä). 2 = varaa myös mahdollista ylihuomisen hintapiikkiä: jos huomisen optimoitu suunnitelma jättäisi akun matalaksi, lataa varovasti tänä iltana halvalla sähköllä, jotta tuntematon ylihuominen alkaa turvallisesta puskurista.",
           "precharge_publish_hour": "Seuraavan päivän hintojen julkaisuhetki (paikallinen, 0–23)",
-          "precharge_publish_hour_description": "Tunti (paikallinen aika, 24h), jolloin Nord Pool yleensä julkaisee seuraavan päivän hinnat. Jätä tyhjäksi automatiikkaa varten: rajahaarukka lasketaan Home Assistant -aikavyöhykkeestä, joten se on oikein kaikille Nord Pool -markkinoille. Aseta vain, jos hintälähteesi julkaisee eri hetkenä."
+                     "precharge_publish_hour_description": "Tunti (paikallinen aika, 24h), jolloin Nord Pool yleensä julkaisee seuraavan päivän hinnat. Jätä tyhjäksi automatiikkaa varten: rajahaarukka lasketaan Home Assistant -aikavyöhykkeestä, joten se on oikein kaikille Nord Pool -markkinoille. Aseta vain, jos hintälähteesi julkaisee eri hetkenä.",
+            "pv_sell_surplus_when_full": "Myy ylijäämäaurinko, kun akku on täynnä",
+            "pv_sell_surplus_when_full_description": "Kun päällä, ylijäämäaurinko myydään millä tahansa positiivisella hinnalla, kun akku saavuttaa Max SoC:n ennen puoltapäivää.",
+            "pv_sell_below_full": "Myy aurinko myös, kun akku ei täyty",
+            "pv_sell_below_full_description": "Kun päällä, aurinko myydään aamulla myös, jos akku ei täyty, heti kun myyntihinta ylittää halvimman korvausoston minimivälillä.",
+            "pv_sell_below_full_min_spread": "Min. myynti-korvausosto-väli (€/kWh)",
+            "pv_sell_below_full_min_spread_description": "Vaadittu myyntihinnan lisä halvimman myöhemmän ostohinnan yli. 0 = ei lisävaatimusta.",
+            "forced_sell_enabled": "Ota käyttöön pakotettu myynti (manuaalinen myyntiarbitraasi)",
+            "forced_sell_enabled_description": "Kaksitasoinen huippuhintamyynti: akkutaso myy varastoitua energiaa emaldo-manuaalimyynnin kytkimen kautta; PV-taso vapauttaa aurinkoylijäämän joutotilaan automaattista myyntiä varten. Oletus pois päältä.",
+            "forced_sell_max_kwh_pd": "Pakotetun myynnin enimmäisenergia (kWh/vrk)",
+            "forced_sell_max_kwh_pd_description": "Päivittäinen energiabudjetti pakotetulle myynnille (akku + PV-taso). 0 = pakotettu myynti pois käytöstä.",
+            "forced_sell_min_profit": "Minimivoitto myytyä kWh:ta kohti (€/kWh)",
+            "forced_sell_min_profit_description": "Akkutaso: (myynti − kuluminen) × kierrätyshyötysuhde − korvaava osto ylitettävä. PV-taso: myynti − korvaava osto × kierrätyshyötysuhde (ei kulumista).",
+            "forced_sell_min_price": "Minimimyyntihinta (€/kWh)",
+            "forced_sell_min_price_description": "Ehdoton myyntihinnan alaraja. Tätä alempia hintoja ei koskaan myydä."
         }
       }
     }
@@ -155,6 +183,9 @@
       },
       "schedule_chart": {
         "name": "Aikataulukaavio"
+      },
+      "manual_sell_chart": {
+        "name": "Manuaalinen myyntiaikataulu"
       },
       "auto_base_load": {
         "name": "Automaattinen peruskuorma"

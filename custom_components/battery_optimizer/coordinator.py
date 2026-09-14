@@ -115,6 +115,20 @@ from .const import (
     IDLE_FULL_CONTROL,
     IDLE_SOLAR_GUARD,
     IDLE_SMART_OVERRIDE,
+    CONF_FORCED_SELL_ENABLED,
+    CONF_FORCED_SELL_MAX_KWH_PD,
+    CONF_FORCED_SELL_MIN_PROFIT,
+    CONF_FORCED_SELL_MIN_PRICE,
+    DEFAULT_FORCED_SELL_ENABLED,
+    DEFAULT_FORCED_SELL_MAX_KWH_PD,
+DEFAULT_FORCED_SELL_MIN_PROFIT,
+    DEFAULT_FORCED_SELL_MIN_PRICE,
+    CONF_PV_SELL_SURPLUS_WHEN_FULL,
+    CONF_PV_SELL_BELOW_FULL,
+    CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
+    DEFAULT_PV_SELL_SURPLUS_WHEN_FULL,
+    DEFAULT_PV_SELL_BELOW_FULL,
+    DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD,
 )
 from .const import currency_for_timezone
 from .optimizer import (
@@ -168,6 +182,8 @@ def _action_to_mode(action: str) -> int:
         return 1
     if action == "discharge":
         return -1
+    if action == "force_sell":
+        return SLOT_IDLE  # sold slots push as idle; device exports itself
     return 0
 
 
@@ -238,6 +254,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_guard: CALLBACK_TYPE | None = None
         self._current_guard_marker: int | None = None
         self._last_sent_slots: list[int] | None = None
+        # Manual selling (forced sell) actuator state
+        self._manual_selling_active: bool = False
         # Balancing state tracking
         self._balancing_sensor: str | None = None
         # Pinned Emaldo entry (from config, or auto-detected)
@@ -644,6 +662,28 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             soc_recovery_buffer_pct=c.get(
                 CONF_SOC_RECOVERY_BUFFER, DEFAULT_SOC_RECOVERY_BUFFER_PCT
+            ),
+            forced_sell_enabled=c.get(
+                CONF_FORCED_SELL_ENABLED, DEFAULT_FORCED_SELL_ENABLED
+            ),
+            forced_sell_max_kwh_pd=c.get(
+                CONF_FORCED_SELL_MAX_KWH_PD, DEFAULT_FORCED_SELL_MAX_KWH_PD
+            ),
+            forced_sell_min_profit=c.get(
+                CONF_FORCED_SELL_MIN_PROFIT, DEFAULT_FORCED_SELL_MIN_PROFIT
+            ),
+            forced_sell_min_price=c.get(
+                CONF_FORCED_SELL_MIN_PRICE, DEFAULT_FORCED_SELL_MIN_PRICE
+            ),
+            pv_sell_surplus_when_full=c.get(
+                CONF_PV_SELL_SURPLUS_WHEN_FULL, DEFAULT_PV_SELL_SURPLUS_WHEN_FULL
+            ),
+            pv_sell_below_full=c.get(
+                CONF_PV_SELL_BELOW_FULL, DEFAULT_PV_SELL_BELOW_FULL
+            ),
+            pv_sell_below_full_min_spread=c.get(
+                CONF_PV_SELL_BELOW_FULL_MIN_SPREAD,
+                DEFAULT_PV_SELL_BELOW_FULL_MIN_SPREAD,
             ),
         )
 
@@ -2000,6 +2040,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Push today (+ tomorrow if available) to Emaldo
         push_overrides = await self._push_schedule(result, self._last_result_tomorrow)
 
+        # Start/stop emaldo manual selling for the forced-sell window
+        await self._manage_manual_selling(result, dt_util.now())
+
         # Apply PV sell strategy (controls Emaldo third-party PV switch)
         await self._apply_pv_strategy(result)
 
@@ -2443,6 +2486,74 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return True
 
         return False
+
+    async def _manage_manual_selling(
+        self, result: OptimizationResult, now: datetime
+    ) -> None:
+        """Start/stop emaldo manual selling per the forced-sell plan.
+
+        Entity-driven: stages the sell target on the manual_selling_target
+        number, then toggles the manual_selling switch (verified write).
+        Guards: integration disabled, no device id, plan window over,
+        plan without forced sell, PV-only window (no battery target —
+        inverter auto-exports surplus).
+        """
+        if not self._emaldo_control_enabled:
+            await self._stop_manual_selling()
+            return
+        if not self.resolve_emaldo_device():
+            return  # fail-safe: no selling, device just idles
+        window = result.sell_slots or []
+        if result.sell_target_kwh <= 0:
+            return  # PV-only window: inverter exports on its own
+        if not window:
+            await self._stop_manual_selling()
+            return
+        now_slot = int(now.hour * 4 + now.minute // 15)
+        if now_slot < window[0] or now_slot > window[-1]:
+            await self._stop_manual_selling()
+            return
+        if self._manual_selling_active:
+            return  # already running; re-check handled by plan re-run
+        switch_id = self._resolve_emaldo_entity(
+            "manual_selling", domain="switch"
+        ) or "switch.power_store_manual_selling"
+        number_id = self._resolve_emaldo_entity(
+            "manual_selling_target", domain="number"
+        ) or "number.power_store_manual_selling_target"
+        self._manual_selling_active = True
+        try:
+            # Stage target first (number entity merges intended target while
+            # switch is off), then enable the verified-write switch.
+            await self.hass.services.async_call(
+                "number", "set_value",
+                {"entity_id": number_id, "value": result.sell_target_kwh},
+                blocking=True,
+            )
+            await self.hass.services.async_call(
+                "switch", "turn_on", {"entity_id": switch_id}, blocking=True,
+            )
+            _LOGGER.info(
+                "Manual selling started: %d slots, target %.1f kWh",
+                len(window), result.sell_target_kwh,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Failed to start manual selling: %s", err)
+            self._manual_selling_active = False
+
+    async def _stop_manual_selling(self) -> None:
+        if not self._manual_selling_active:
+            return
+        self._manual_selling_active = False
+        switch_id = self._resolve_emaldo_entity(
+            "manual_selling", domain="switch"
+        ) or "switch.power_store_manual_selling"
+        try:
+            await self.hass.services.async_call(
+                "switch", "turn_off", {"entity_id": switch_id}, blocking=True,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Failed to stop manual selling: %s", err)
 
     async def _push_schedule(
         self,
