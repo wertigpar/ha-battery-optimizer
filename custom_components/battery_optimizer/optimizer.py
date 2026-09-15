@@ -1197,6 +1197,66 @@ def _plan_forced_sell_slots(
     return sell_plan
 
 
+def _plan_forced_sell_charge(
+    cfg: BatteryConfig,
+    buy_prices: list[float],
+    sell_prices: list[float],
+    sell_plan: dict[int, tuple[float, str]],
+    start_slot: int,
+    start_soc_kwh: float,
+    round_trip_factor: float,
+) -> dict[int, float]:
+    """Plan a cheap pre-window grid-buy charge for forced battery sells.
+
+    Returns {slot: kwh} (at most one slot: the cheapest buy before the
+    sell window). Only battery-tier sells justify a charge — PV surplus
+    exports at zero battery cost. The round-trip gate mirrors the sell
+    planner: buying at the chosen slot must net >= forced_sell_min_profit
+    after wear, using the battery tier's peak sell price as reference.
+    """
+    if not cfg.forced_sell_enabled or not sell_plan:
+        return {}
+    battery_kwh = sum(
+        kwh for kwh, tier in sell_plan.values() if tier == "battery"
+    )
+    if battery_kwh <= 0.05:
+        return {}
+    window_start = min(sell_plan)
+    if start_slot >= window_start:
+        return {}
+    headroom_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0 - start_soc_kwh
+    if headroom_kwh <= 0.05:
+        return {}
+    budget_kwh = (
+        cfg.forced_sell_max_kwh_pd
+        if cfg.forced_sell_max_kwh_pd > 0.0
+        else math.inf
+    )
+    required_kwh = min(battery_kwh, headroom_kwh, budget_kwh)
+    if required_kwh <= 0.05:
+        return {}
+    c_star = min(
+        (c for c in range(start_slot, window_start)),
+        key=lambda c: buy_prices[c],
+    )
+    peak_sell = max(
+        sell_prices[s]
+        for s, (kwh, tier) in sell_plan.items()
+        if tier == "battery"
+    )
+    if cfg.forced_sell_min_profit is not None:
+        profit = (
+            (peak_sell - cfg.wear_cost_per_kwh) * round_trip_factor
+            - buy_prices[c_star]
+        )
+        if profit < cfg.forced_sell_min_profit:
+            return {}
+    step_kwh = min(2.5, required_kwh)
+    if step_kwh <= 0.05:
+        return {}
+    return {c_star: step_kwh}
+
+
 def _forward_soc_sim(
     cfg: BatteryConfig,
     slots: list[SlotPlan],
@@ -2497,6 +2557,18 @@ def optimize(
                     ) * kwh
             else:
                 pv_total_kwh += kwh if tier == "pv" else 0.0
+        charge_plan = _plan_forced_sell_charge(
+            cfg,
+            buy_prices,
+            sell_prices,
+            sell_plan,
+            start_slot,
+            current_soc_kwh,
+            cfg.round_trip_factor,
+        )
+        for s in charge_plan:
+            result_slots[s].action = "charge"
+            result_slots[s].slot_value = charge_target
         _LOGGER.info(
             "Forced sell planned: slots=%s battery=%.1f kWh pv=%.2f kWh "
             "revenue=%.3f€ profit=%.3f€",
