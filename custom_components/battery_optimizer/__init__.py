@@ -234,7 +234,7 @@ def _cleanup_orphaned_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     dev_reg = dr.async_get(hass)
     entity_reg = er.async_get(hass)
-    for device in dev_reg.async_entries_for_config_entry(entry.entry_id):
+    for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
         if (DOMAIN, entry.entry_id) in device.identifiers:
             continue  # canonical device — never remove
         if any(e.device_id == device.id for e in entity_reg.entities.values()):
