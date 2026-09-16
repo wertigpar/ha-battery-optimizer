@@ -814,17 +814,11 @@ class ManualSellChartSensor(_BaseOptimizerSensor):
             sp.sell_kwh for sp in self._result.slots
             if sp.sell_kwh > 0 and sp.sell_source == "battery"
         )
-        pv_kwh = sum(
-            sp.sell_kwh for sp in self._result.slots
-            if sp.sell_kwh > 0 and sp.sell_source == "pv"
-        )
         parts: list[str] = []
         if bat_kwh > 0:
             parts.append(f"battery {bat_kwh:.1f}")
-        if pv_kwh > 0:
-            parts.append(f"pv {pv_kwh:.2f}")
         detail = f" ({' · '.join(parts)})" if parts else ""
-        return f"{len(sell)} slots · {bat_kwh + pv_kwh:.1f} kWh{detail}"
+        return f"{len(sell)} slots · {bat_kwh:.1f} kWh{detail}"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -858,8 +852,6 @@ class ManualSellChartSensor(_BaseOptimizerSensor):
             manual_sell.append(entry)
             if sp.sell_source == "battery":
                 bat_n += 1
-            elif sp.sell_source == "pv":
-                pv_n += 1
         attrs: dict[str, Any] = {
             "manual_sell": manual_sell,
             "sell_target_kwh": round(self._result.sell_target_kwh, 3),
