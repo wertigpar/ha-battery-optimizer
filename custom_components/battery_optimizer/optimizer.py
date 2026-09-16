@@ -70,7 +70,8 @@ class BatteryConfig:
     # excess overnight to cover the load instead of buying grid power.
     enable_night_drain: bool = True
 
-    # Manual forced-sell arbitrage (two tiers: battery + PV surplus).
+    # Manual forced-sell arbitrage (battery-only; PV surplus export is
+    # handled exclusively by the 3rd-party PV strategy).
     forced_sell_enabled: bool = False
     forced_sell_max_kwh_pd: float = 0.0   # daily kWh cap, 0 = unlimited
     forced_sell_min_profit: float = 0.02  # €/kWh after wear + round-trip
@@ -120,7 +121,7 @@ class SlotPlan:
     profit: float = 0.0  # estimated slot profit/cost in €
     export_kwh: float = 0.0  # solar exported to grid this slot (kWh)
     sell_kwh: float = 0.0      # kWh force-sold this slot (battery or PV)
-    sell_source: str = ""      # "battery" | "pv"
+    sell_source: str = ""      # "battery" always (PV tier removed)
 
 
 @dataclass
@@ -182,7 +183,7 @@ class OptimizationResult:
     emaldo_export_energy: float = 0.0
     emaldo_export_commission: float = 0.0
     trace: dict | None = None   # decision trace — populated on main runs only
-    # Manual forced-sell (two-tier arbitrage) report.
+    # Manual forced-sell (battery-only arbitrage) report.
     sell_slots: list[int] = field(default_factory=list)
     sell_target_kwh: float = 0.0   # battery kWh reserved for the sell window
     sell_revenue: float = 0.0      # gross sell € (battery + PV surpl.)
@@ -1093,16 +1094,14 @@ def _plan_forced_sell_slots(
     cfg: BatteryConfig,
     buy_prices: list[float],
     sell_prices: list[float],
-    net_loads: list[float],
-    pv_slots: list[bool],
     result_slots: list[SlotPlan],
     start_slot: int,
     start_soc_kwh: float | None,
     round_trip_factor: float,
 ) -> dict[int, tuple[float, str]]:
-    """Plan forced (manual) sell slots: battery + surplus-PV arbitrage.
+    """Plan forced (manual) sell slots: battery-only arbitrage.
 
-    Returns {slot: (kwh, tier)} where tier is ``"battery"`` or ``"pv"``.
+    Returns {slot: (kwh, "battery")}.
 
     Logic (see superpowers/plans/2026-09-14-manual-sell-arbitrage.md):
     - Sell window opens at the first slot that passes a tier gate; once open,
@@ -1112,10 +1111,6 @@ def _plan_forced_sell_slots(
       skipped; if the window is open they terminate it (they sit right after
       the sell block, so re-buy at the spike price would be a loss).
     - No sale at the final slot (s+1 >= 96): no in-day recharge remains.
-    - PV tier first, once: surplus solar is exported at zero battery cost and
-      consumes no daily budget/remaining capacity.  ``pv_slots`` empty or a
-      True flag permits the PV tier; a False flag (slot already claimed by
-      ``_plan_pv_sell_slots``) forbids it.
     - Battery tier: per-slot 2.5 kWh, capped by remaining usable capacity and
       the daily budget; sells only while the round-trip exceeds the cheapest
       forward buy minus wear (``forced_sell_min_profit``).
@@ -1165,19 +1160,6 @@ def _plan_forced_sell_slots(
             key=lambda c: buy_prices[c],
         )
         c_ref = buy_prices[cheapest]
-
-        # PV tier (first): surplus solar exports at zero battery cost.
-        if net_loads[s] < 0.0 and (not pv_slots or pv_slots[s]):
-            if sell - c_ref * round_trip_factor < min_profit:
-                if window_open:
-                    break
-                continue
-            window_open = True
-            sell_plan[s] = (
-                max(0.0, -net_loads[s]) * SLOT_DURATION_HOURS,
-                "pv",
-            )
-            continue
 
         # Battery tier: round-trip must beat the reference forward buy.
         if (sell - wear) * round_trip_factor - c_ref < min_profit:
@@ -2513,13 +2495,11 @@ def optimize(
     if enable_pv_strategy:
         result.thirdparty_pv_slots = pv_flags
 
-    # ── Forced (manual) sell: battery + surplus-PV peak arbitrage ──
+    # ── Forced (manual) sell: battery-only peak arbitrage ──
     sell_plan = _plan_forced_sell_slots(
         cfg,
         buy_prices,
         sell_prices,
-        net_loads,
-        pv_flags,
         result_slots,
         start_slot,
         current_soc_kwh,
@@ -2536,27 +2516,19 @@ def optimize(
             key=lambda c: buy_prices[c],
             default=None,
         )
-        pv_total_kwh = 0.0
-        for s, (kwh, tier) in sell_plan.items():
+        for s, (kwh, _tier) in sell_plan.items():
             result_slots[s].action = "force_sell"
             result_slots[s].slot_value = SLOT_IDLE  # device idles/exports
             result_slots[s].sell_kwh = kwh
-            result_slots[s].sell_source = tier
+            result_slots[s].sell_source = "battery"
             result.sell_revenue += sell_prices[s] * kwh
             if c_ref_idx is not None:
                 c_ref = buy_prices[c_ref_idx]
-                if tier == "battery":
-                    result.sell_profit += (
-                        (sell_prices[s] - cfg.wear_cost_per_kwh)
-                        * cfg.round_trip_factor
-                        - c_ref
-                    ) * kwh
-                else:  # pv: no wear, no round-trip loss on export
-                    result.sell_profit += (
-                        sell_prices[s] - c_ref * cfg.round_trip_factor
-                    ) * kwh
-            else:
-                pv_total_kwh += kwh if tier == "pv" else 0.0
+                result.sell_profit += (
+                    (sell_prices[s] - cfg.wear_cost_per_kwh)
+                    * cfg.round_trip_factor
+                    - c_ref
+                ) * kwh
         charge_plan = _plan_forced_sell_charge(
             cfg,
             buy_prices,
@@ -2570,11 +2542,10 @@ def optimize(
             result_slots[s].action = "charge"
             result_slots[s].slot_value = charge_target
         _LOGGER.info(
-            "Forced sell planned: slots=%s battery=%.1f kWh pv=%.2f kWh "
+            "Forced sell planned: slots=%s battery=%.1f kWh "
             "revenue=%.3f€ profit=%.3f€",
             sell_slots,
             result.sell_target_kwh,
-            sum(kwh for kwh, tier in sell_plan.values() if tier == "pv"),
             result.sell_revenue,
             result.sell_profit,
         )

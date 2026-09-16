@@ -4,22 +4,63 @@
 
 ### Added
 
-- **Forced sell (manual sell arbitrage)** — opt-in two-tier price-peak
+- **Forced sell (manual sell arbitrage)** — opt-in price-peak
   arbitrage. `forced_sell_enabled` + `forced_sell_max_kwh_pd` must both be
-  set; default off ⇒ byte-identical plan. **battery** tier discharges
+  set; default off ⇒ byte-identical plan. The **battery** tier discharges
   stored energy at peak spot via the emaldo `manual_selling` switch +
   `manual_selling_target` number (wear + round-trip apply, gate
-  `(sell − wear) × η_rt − c_ref ≥ min_profit`);
-  **pv** tier releases solar-surplus slots to idle so the inverter
-  auto-exports (no wear, gate `sell − buy × η_rt ≥ min_profit`). Intraday
+  `(sell − wear) × η_rt − c_ref ≥ min_profit`). Intraday
   only (cheaper recharge slot must exist in remaining day); `soc_min` +
-  1.0 kWh floor reserve; Case-A discharge slots and `pv_sell_strategy`
-  slots never double-marked. Files: `optimizer.py`, `models.py`,
+  1.0 kWh floor reserve; Case-A discharge slots never double-marked.
+  Solar surplus export is NOT part of forced sell — owned exclusively by
+  the 3rd-party PV strategy. Files: `optimizer.py`, `models.py`,
   `coordinator.py`, `config_flow.py`, `const.py`.
 - **New `sensor.*_manual_sell_chart` diagnostic** — per-slot sell window
-  (slot, time, source battery/pv, kWh, sell/buy price, profit estimate),
-  `sell_target_kwh`, `sell_revenue`, `sell_profit`, and `sources` split.
+  (slot, time, source battery (single; pv never emitted), kWh, sell/buy
+  price, profit estimate), `sell_target_kwh`, `sell_revenue`,
+  `sell_profit`, and `sources` split (pv side always 0).
   Files: `sensor.py`, `strings.json`, translations.
+- **Forced-sell pre-window grid charge** — new `_plan_forced_sell_charge`
+  planner: when a forced-sell window exists later in the day and
+  `sell_target_kwh` exceeds the battery's current usable energy, the
+  optimizer now plans an arbitrage grid-charge from the current SoC toward
+  `soc_max` in cheaper pre-window slots to fund the battery-tier discharge
+  (round-trip funded like Case B). No profitable cheap slots available → no
+  charge, sell only what the battery holds. Default-off with the rest of
+  forced sell; byte-identical when forced sell is disabled. Files:
+  `optimizer.py`. Guard: `tests/test_forced_sell.py` (charge-success,
+  insufficient-cheap-slots, current-SoC landing cases).
+
+### Changed
+
+- **PV Sell Strategy override options removed** — the below-full / surplus
+  `pv_sell` override options and their `_plan_pv_sell_override` planner were
+  dropped; PV-sell behavior is now the single default strategy path
+  (stored-value gate vs cheapest post-cutover sell, floor recovery,
+  iterated-T, starvation guard unchanged). Removal of
+  `_plan_pv_sell_override` is a behavior change for any config that set the
+  override options. Files: `const.py`, `config_flow.py`, `optimizer.py`,
+  `strings.json`, `translations/*.json`.
+- **Forced-sell PV tier removed (battery-only manual selling)** — the internal surplus-solar "pv" tier of `_plan_forced_sell_slots` was deleted; the planner no longer takes `net_loads`/`pv_slots` and sells battery energy only. All solar surplus export belongs exclusively to the 3rd-party PV strategy; the two feature sets now share zero state. `sensor.*_manual_sell_chart` slot sources are always `battery`. Files: `optimizer.py`, `tests/test_forced_sell.py`; docs: `docs/pv-sell-strategy-analysis.md`.
+
+### Fixed
+
+- **Manual sell chart attributes missing when no sell window exists** —
+  `ManualSellChartSensor` now always emits its chart attributes (empty
+  per-slot array when the plan has no forced-sell window) so dashboard chart
+  cards render an empty timeline instead of `no_schedule`/blank; README card
+  snippet updated with zero-data fallback and the correct entity id. Files:
+  `sensor.py`, `README.md`.
+- **Device cleanup used deprecated `async_entries_for_config_entry`** —
+  `_cleanup_orphaned_devices` called the deprecated instance method
+  (`dev_reg.async_entries_for_config_entry(entry_id)`); replaced with the
+  module-level form `dr.async_entries_for_config_entry(dev_reg,
+  entry.entry_id)`. File: `__init__.py`.
+- **Deprecated `get_devices_for_config_entry_id` in device-resolution
+  helper** — replaced with the non-deprecated registry lookup;
+  device-registry listener for the config entry now attaches stably per
+  entry so entity/device re-registration after an HA restart never detaches
+  entities from the "Optimizer Configuration" device. File: `coordinator.py`.
 
 ## v0.3.15
 
