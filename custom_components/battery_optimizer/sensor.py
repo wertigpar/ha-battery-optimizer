@@ -288,7 +288,8 @@ class RealizedCostHistorySensor(_RealizedCostBaseSensor):
         # per-attribute cap (a full day near that cap would otherwise get the
         # attribute dropped from long-term statistics).
         attrs["slots"] = json.dumps(
-            compact_records(self.coordinator.realized_cost_today_records)
+            compact_records(self.coordinator.realized_cost_today_records),
+            separators=(",", ":"),
         )
         return attrs
 

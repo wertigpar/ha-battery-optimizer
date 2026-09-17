@@ -92,9 +92,9 @@ def compact_records(records: list[dict]) -> list[dict]:
     recorder's 16384-byte per-attribute cap, so even a single duplicate slot
     drops the attribute (and its cost history) from long-term statistics.
 
-    Returns a copy keeping only the keys the cost chart needs and capping the
-    list to the most recent SLOTS_PER_DAY records, so the serialized attribute
-    stays comfortably under the recorder cap on any day.
+    Returns a copy compacted to the 7 chart keys and bounded to the most
+    recent SLOTS_PER_DAY records, so the serialized attribute stays under the
+    recorder's 16384-byte per-attribute cap.
     """
     if not records:
         return []
@@ -106,8 +106,6 @@ def compact_records(records: list[dict]) -> list[dict]:
         "import_kwh",
         "export_kwh",
         "net",
-        "action",
-        "soc_delta",
     )
     return [
         {k: r[k] for k in keep if k in r}
