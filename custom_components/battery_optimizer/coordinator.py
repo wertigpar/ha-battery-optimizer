@@ -1015,6 +1015,25 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     return entity_id
         return None
 
+    def _emaldo_stream_stale(self) -> bool | None:
+        """Whether the linked Emaldo realtime stream is stale (wedged).
+
+        Reads the ``stream_stale`` attribute of ``sensor.power_store_realtime_connection``
+        (emaldo diagnostic sensor). ``None`` when the sensor is unavailable or
+        the attribute is missing — the caller then decides whether to treat
+        that as a hard skip or to proceed (see ``_push_schedule``).
+        """
+        entity_id = self._resolve_emaldo_entity("realtime_status")
+        if entity_id is None:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        stale = state.attributes.get("stream_stale")
+        if stale is None:
+            return None
+        return bool(stale)
+
     def _effective_grid_import_sensor(self) -> str | None:
         """Grid import sensor to use: explicit config override, else auto-discovered.
 
@@ -2573,6 +2592,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info(
                 "Balancing active (%s) — skipping schedule push",
                 self.hass.states.get(self._balancing_sensor).state,
+            )
+            return None
+
+        # #68/#70 storm amplifier guard: skip pushing over a wedged emaldo
+        # stream. During a 21204 reconnect storm the stream sits "stale" and
+        # every push attempt triggers coordinator teardown/rebuild churn that
+        # feeds the storm. Skip the push, keep the schedule for next non-stale
+        # cycle; the device falls back to its internal AI meanwhile.
+        if self._emaldo_stream_stale():
+            _LOGGER.info(
+                "Emaldo realtime connection stale — skipping schedule push "
+                "(21204 storm amplifier guard)"
             )
             return None
 
