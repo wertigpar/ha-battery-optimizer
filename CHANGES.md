@@ -25,6 +25,7 @@
   attribute is serialized with tight separators — a full day now fits in
   ≈ 11.6 kB, comfortably under the cap. The ApexCharts per-slot card
   (`s.ts` / `s.net`) is unaffected. Files: `cost_history.py`, `sensor.py`.
+  **Fixes [#22](https://github.com/wertigpar/ha-battery-optimizer/issues/22).**
 
 - **Optimizer discharge floor applies round-trip + wear economics when
   today's solar forecast cannot refill the battery** — the floor now
