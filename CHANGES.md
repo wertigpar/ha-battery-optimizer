@@ -1,5 +1,36 @@
 # Changes
 
+## v0.3.17
+
+### Fixed
+
+- **Skip schedule push while Emaldo realtime stream is stale.**
+  During a 21204 reconnect storm the linked Emaldo stream sits `stale`
+  (`sensor.power_store_realtime_connection` state), and every
+  `apply_bulk_schedule` push over the wedged shared stream triggered
+  coordinator teardown/rebuild churn that amplified the storm
+  (deduplicated evidence: ~1418 stream reconnects, ~1421 `session_expired_21204`
+  rearm, ~29 stall resets in one 90-min storm). The coordinator now resolves
+  the Emaldo realtime-status sensor and skips the push while it reports
+  `stale` (log once per push cycle, schedule kept for the next non-stale
+  cycle). Sensor missing/unavailable ⇒ push proceeds unchanged. Default
+  behavior unchanged. Files: `coordinator.py`.
+
+- **`sensor.*_realized_cost_history` `slots` attribute size** — the
+  compacted per-slot JSON could exceed Home Assistant's 16384-byte
+  per-attribute recorder cap on a full day (96 slots ≈ 16.6 kB), which
+  made the recorder drop the entire attribute (and its cost history) from
+  long-term statistics. `compact_records` now keeps only the 7 chart keys
+  (`ts`, `slot`, `buy`, `sell`, `import_kwh`, `export_kwh`, `net`) and the
+  attribute is serialized with tight separators — a full day now fits in
+  ≈ 11.6 kB, comfortably under the cap. The ApexCharts per-slot card
+  (`s.ts` / `s.net`) is unaffected. Files: `cost_history.py`, `sensor.py`.
+
+- **Optimizer discharge floor applies round-trip + wear economics when
+  today's solar forecast cannot refill the battery** — the floor now
+  prevents unprofitable grid-funded cycles even when the solar regime is
+  inactive (previously skipped in that case). Files: `optimizer.py`.
+
 ## v0.3.16
 
 ### Added
