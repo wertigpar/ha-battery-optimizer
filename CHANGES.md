@@ -31,7 +31,7 @@
   prevents unprofitable grid-funded cycles even when the solar regime is
   inactive (previously skipped in that case). Files: `optimizer.py`.
 
-- Options flow accepts an empty `precharge_publish_hour` (falls back to automatic timezone-derived cutoff) instead of failing with "expected float".
+- **Options flow accepts an empty `precharge_publish_hour`** (falls back to automatic timezone-derived cutoff) instead of failing with "expected float". **Fixes [#21](https://github.com/wertigpar/ha-battery-optimizer/issues/21).**
 
 ## v0.3.16
 
