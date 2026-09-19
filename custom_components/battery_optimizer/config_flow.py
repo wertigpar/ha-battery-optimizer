@@ -426,7 +426,11 @@ def _build_schema(
                 default=d.get(
                     CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
                 ),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=23.0)),
+            ): vol.Any(
+                None,
+                "",
+                vol.All(vol.Coerce(float), vol.Range(min=0.0, max=23.0)),
+            ),
             # ── Forced sell (manual sell arbitrage; default-off) ──
             vol.Optional(
                 CONF_FORCED_SELL_ENABLED,
@@ -778,6 +782,8 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
                     ),
                     errors=errors,
                 )
+            if user_input.get(CONF_PRECHARGE_PUBLISH_HOUR) in (None, ""):
+                user_input.pop(CONF_PRECHARGE_PUBLISH_HOUR, None)
             return self.async_create_entry(title="", data=user_input)
 
         # Merge config entry data with any existing options
