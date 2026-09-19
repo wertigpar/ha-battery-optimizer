@@ -21,6 +21,9 @@ from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.selector import (
     DateSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
 )
@@ -426,10 +429,10 @@ def _build_schema(
                 default=d.get(
                     CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
                 ),
-            ): vol.Any(
-                None,
-                "",
-                vol.All(vol.Coerce(float), vol.Range(min=0.0, max=23.0)),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0.0, max=23.0, mode=NumberSelectorMode.BOX
+                )
             ),
             # ── Forced sell (manual sell arbitrage; default-off) ──
             vol.Optional(
