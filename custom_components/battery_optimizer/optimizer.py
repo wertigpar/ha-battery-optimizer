@@ -1692,7 +1692,7 @@ def optimize(
     # price above wear.  The computed floor is threaded into the night-drain
     # probes so the plateau measurement matches the real plan.
     if case_a_floor is None:
-        if solar_regime_engaged and not solar_full_recharge:
+        if not solar_full_recharge:
             today_remaining = buy_prices[start_slot:] or buy_prices
             today_min = min(today_remaining)
             if future_min_buy is not None:
