@@ -3408,6 +3408,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if actual_on is not None:
             self._pv_switch_state = actual_on
 
+        # Defer when the switch entity is missing or its state is unknown
+        # (unavailable/unknown). No correction is possible without an actual
+        # state, and forcing one risks writing to the wrong entity volume.
+        if actual_on is None:
+            _LOGGER.debug(
+                "PV switch state unknown (entity=%s) — deferring state sync",
+                entity_id,
+            )
+            return
+
         if actual_on != desired_on:
             _LOGGER.warning(
                 "PV switch mismatch: actual=%s, desired=%s — correcting",

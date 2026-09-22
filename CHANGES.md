@@ -1,5 +1,18 @@
 # Changes
 
+## v0.3.18
+
+### Fixed
+
+- **Defer PV switch state sync when the switch state is unknown** — when
+  `_ensure_pv_switch_matches_plan` cannot read the Emaldo third-party PV
+  switch state (entity missing, `unavailable`, or `unknown`), it now
+  defers: debug log only, no `PV switch mismatch` warning, no correction
+  write, and the cached PV switch state is left unchanged. Forcing a
+  correction without an actual state risked writing to the wrong entity
+  volume. Behavior when the state is known is unchanged. Files:
+  `coordinator.py`.
+
 ## v0.3.17
 
 ### Fixed
