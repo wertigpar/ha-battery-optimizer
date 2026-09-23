@@ -13,6 +13,19 @@
   volume. Behavior when the state is known is unchanged. Files:
   `coordinator.py`.
 
+- **Forced sell: sell Case-A discharge-slot remainder (issue #23)** — a
+  peak slot the main plan already greedily discharges for house-load
+  cover (buy price above wear, solar below load) was skipped entirely by
+  the forced-sell guard, so a sell window whose only profitable slots were
+  discharge slots never opened (reported: 10 kWh battery, SE3 inverter,
+  18:30-19:00 peak, 0.5 kW base load ⇒ 0.125 kWh/slot house cover). The
+  guard now sells only the per-slot headroom the plan does not use:
+  `cap = 2.5 kWh − min(load − solar, max_discharge_kw) × 15 min`, and the
+  window stays open. Solar-surplus discharge slots (net load ≤ 0, battery
+  absorbing solar) and full-rate drains (cap < 0.05 kWh, re-buy at the
+  spike price would be a loss) keep the legacy skip/terminate behavior.
+  Files: `optimizer.py`.
+
 ## v0.3.17
 
 ### Fixed

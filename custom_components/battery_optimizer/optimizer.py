@@ -1107,9 +1107,14 @@ def _plan_forced_sell_slots(
     - Sell window opens at the first slot that passes a tier gate; once open,
       a slot that fails a gate or sells below the price floor BREAKS the
       window (no later re-entry), because the battery cannot recharge in day.
-    - Case-A greedily discharged slots (plan action already "discharge") are
-      skipped; if the window is open they terminate it (they sit right after
-      the sell block, so re-buy at the spike price would be a loss).
+    - Case-A greedily discharged slots (plan action already "discharge")
+      sell only the per-slot headroom the plan does not already use: kWh the
+      discharge covers (house load), subtracted from the per-slot cap, is
+      not sellable.  A full-rate drain (remainder < 0.05) keeps the legacy
+      behavior — skipped, or terminates the window when open (sitting right
+      after the sell block, re-buy at the spike price would be a loss).
+      Solar-surplus discharge slots (net load <= 0) also keep legacy
+      behavior: the battery absorbs excess solar, no sell headroom.
     - No sale at the final slot (s+1 >= 96): no in-day recharge remains.
     - Battery tier: per-slot 2.5 kWh, capped by remaining usable capacity and
       the daily budget; sells only while the round-trip exceeds the cheapest
@@ -1145,12 +1150,29 @@ def _plan_forced_sell_slots(
             if window_open:
                 break
             continue
-        # Case-A: plan already greedily discharges this slot.  Do not
-        # double-sell; a discharge right after the sell block terminates it.
+        # Case-A: plan already greedily discharges this slot.  Sell only the
+        # per-slot headroom the plan does not use: the plan's own discharge
+        # already covers the house load (peak spike slots), so don't double
+        # fill the same inverter slot — cap the sell at the remainder.
+        # A full-rate drain leaves nothing to sell and terminates the window
+        # (discharge right after the sell block = re-buy at the spike price).
+        slot_cap = per_slot_kwh
         if result_slots[s].action == "discharge":
-            if window_open:
-                break
-            continue
+            net_load_kw = result_slots[s].load_kw - result_slots[s].solar_kw
+            if net_load_kw <= 0:
+                # Solar-surplus discharge slot: battery busy absorbing solar.
+                # Greedy drain already fills the slot; nothing sellable.
+                if window_open:
+                    break
+                continue
+            slot_discharge_kwh = (
+                min(net_load_kw, cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+            )
+            slot_cap = max(0.0, per_slot_kwh - slot_discharge_kwh)
+            if slot_cap < 0.05:
+                if window_open:
+                    break
+                continue
         if s + 1 >= 96:
             # Final slot: no in-day recharge opportunity remains.
             continue
@@ -1168,7 +1190,7 @@ def _plan_forced_sell_slots(
             continue
         if remaining <= 0.05:
             break
-        step = min(per_slot_kwh, remaining, budget_kwh - total_battery)
+        step = min(slot_cap, remaining, budget_kwh - total_battery)
         if step <= 0.05:
             break
         window_open = True
