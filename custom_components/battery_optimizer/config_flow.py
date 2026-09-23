@@ -128,6 +128,8 @@ from .const import (
     DEFAULT_FORCED_SELL_MAX_KWH_PD,
     DEFAULT_FORCED_SELL_MIN_PROFIT,
     DEFAULT_FORCED_SELL_MIN_PRICE,
+    CONF_STALE_PUSH_RETRY_COUNT,
+    DEFAULT_STALE_PUSH_RETRY_COUNT,
 )
 from .rules import (
     UserRule,
@@ -462,6 +464,13 @@ def _build_schema(
                     DEFAULT_FORCED_SELL_MIN_PRICE,
                 ),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            vol.Optional(
+                CONF_STALE_PUSH_RETRY_COUNT,
+                default=d.get(
+                    CONF_STALE_PUSH_RETRY_COUNT,
+                    DEFAULT_STALE_PUSH_RETRY_COUNT,
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=5)),
 
         }
     )

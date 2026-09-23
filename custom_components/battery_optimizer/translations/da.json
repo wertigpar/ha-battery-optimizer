@@ -42,7 +42,9 @@
           "forced_sell_min_profit": "Min. fortjeneste pr. solgt kWh (€/kWh)",
           "forced_sell_min_profit_description": "Batteri-lag: (salg − slid) × rundtur − erstatningskøb skal overstige dette. PV-lag: salg − erstatningskøb × rundtur (intet slid).",
           "forced_sell_min_price": "Min. salgspris (€/kWh)",
-          "forced_sell_min_price_description": "Absolut salgsprisgulv. Slots under dette sælges aldrig."
+          "forced_sell_min_price_description": "Absolut salgsprisgulv. Slots under dette sælges aldrig.",
+          "stale_push_retry_count": "Forsøg ved fastlåst strøm (0-5)",
+          "stale_push_retry_count_description": "Når Emaldo-realtidsstrømmen er fastlåst, forsøg så mange ekstra gange (30 s pause imellem). 0 = ét forsøg uden fornyede forsøg."
         }
       }
     },
@@ -115,7 +117,9 @@
             "forced_sell_min_profit": "Min. fortjeneste pr. solgt kWh (€/kWh)",
             "forced_sell_min_profit_description": "Batteri-lag: (salg − slid) × rundtur − erstatningskøb skal overstige dette. PV-lag: salg − erstatningskøb × rundtur (intet slid).",
             "forced_sell_min_price": "Min. salgspris (€/kWh)",
-            "forced_sell_min_price_description": "Absolut salgsprisgulv. Slots under dette sælges aldrig."
+            "forced_sell_min_price_description": "Absolut salgsprisgulv. Slots under dette sælges aldrig.",
+            "stale_push_retry_count": "Forsøg ved fastlåst strøm (0-5)",
+            "stale_push_retry_count_description": "Når Emaldo-realtidsstrømmen er fastlåst, forsøg så mange ekstra gange (30 s pause imellem). 0 = ét forsøg uden fornyede forsøg."
         }
       }
     }

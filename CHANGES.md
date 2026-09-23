@@ -1,5 +1,27 @@
 # Changes
 
+## v0.3.19
+
+### Fixed
+
+- **Push schedule through a stale Emaldo stream with bounded retry
+  (issue #24)** — the v0.3.17 storm amplifier guard skipped the whole push
+  whenever `sensor.power_store_realtime_connection` was sampled `stale`,
+  but the 21204 reconnect storm flaps the stream `stale`↔`connected` every
+  ~90 s while the optimizer samples it only once per cycle (120 min). The
+  rolling override therefore never landed in a connected window and the
+  battery idled on its internal AI all night (reported: overnight
+  discharge skipped, energy bought at the morning peak instead of cheap
+  night hours). The hard skip is replaced by a bounded push-through:
+  when the stream is stale the coordinator now pushes anyway and retries
+  up to `stale_push_retry_count` times (default 3, configurable 0–5 in
+  the options flow) with a 30 s backoff between attempts, so the push
+  lands in one of the connected windows. A non-stale stream keeps the
+  single-attempt, unchanged behavior. The churn the old guard protected
+  against is gated upstream by ha-emaldo beta37+ storm-state holder, and a
+  failed push here is a log line only (no teardown/rebuild exists in this
+  repo). Files: `coordinator.py`, `config_flow.py`, `const.py`.
+
 ## v0.3.18
 
 ### Fixed

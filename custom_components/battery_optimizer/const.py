@@ -144,6 +144,18 @@ SOLAR_REGIME_DEBOUNCE_DAYS = 3     # consecutive days on one side before flip
 DEFAULT_OPTIMIZER_INTERVAL = 120   # minutes
 OPTIMIZER_INTERVALS = [15, 30, 60, 120]
 
+# ── Stale-stream push retry (issue #24) ──────────────────────────────
+# During a 21204 reconnect storm the Emaldo stream flaps stale<->connected
+# every ~90 s while the optimizer only samples it once per cycle (120 min).
+# The v0.3.17 storm amplifier guard skipped the whole push on a stale
+# sample, so the rolling override never covered the night. New behavior:
+# push through the stale stream, retrying with a short backoff so the push
+# lands in one of the connected windows. Retries are bounded and only
+# delay the coordinator by backoff × retries at most.
+CONF_STALE_PUSH_RETRY_COUNT = "stale_push_retry_count"
+DEFAULT_STALE_PUSH_RETRY_COUNT = 3     # additional attempts after the first
+STALE_PUSH_RETRY_BACKOFF_S = 30.0
+
 # ── SoC Guard ────────────────────────────────────────────────────────
 DEFAULT_SOC_GUARD_INTERVAL = 0   # minutes, 0 = disabled
 SOC_GUARD_INTERVALS = [0, 15, 30, 60, 120]

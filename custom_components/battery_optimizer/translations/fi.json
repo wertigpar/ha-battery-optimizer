@@ -43,6 +43,8 @@
           "forced_sell_min_profit_description": "Akkutaso: (myynti − kuluminen) × kierrätyshyötysuhde − korvaava osto ylitettävä. PV-taso: myynti − korvaava osto × kierrätyshyötysuhde (ei kulumista).",
           "forced_sell_min_price": "Minimimyyntihinta (€/kWh)",
           "forced_sell_min_price_description": "Ehdoton myyntihinnan alaraja. Tätä alempia hintoja ei koskaan myydä.",
+          "stale_push_retry_count": "Uusintayritykset jumiutuneen yhteyden yli (0-5)",
+          "stale_push_retry_count_description": "Kun Emaldo-reaaliaikayhteys on jumiutunut, yritä aikataulun lähetystä tämän verran lisäkertoja (30 s tauko). 0 = yksi lähetysyritys ilman uusintoja.",
           "grid_export_sensor": "Sähkön viennin energialaskuri (kumulatiivinen, Wh tai kWh). Jätä tyhjäksi, jolloin linkitetyn Emaldo-laitteen vientisensori haetaan automaattisesti; tai syötä kokoelman mittauksen laskuri (esim. EM24 `_total`) pilvettömään asennukseen."
         }
       }
@@ -117,7 +119,9 @@
             "forced_sell_min_profit": "Minimivoitto myytyä kWh:ta kohti (€/kWh)",
             "forced_sell_min_profit_description": "Akkutaso: (myynti − kuluminen) × kierrätyshyötysuhde − korvaava osto ylitettävä. PV-taso: myynti − korvaava osto × kierrätyshyötysuhde (ei kulumista).",
             "forced_sell_min_price": "Minimimyyntihinta (€/kWh)",
-            "forced_sell_min_price_description": "Ehdoton myyntihinnan alaraja. Tätä alempia hintoja ei koskaan myydä."
+            "forced_sell_min_price_description": "Ehdoton myyntihinnan alaraja. Tätä alempia hintoja ei koskaan myydä.",
+            "stale_push_retry_count": "Uusintayritykset jumiutuneen yhteyden yli (0-5)",
+            "stale_push_retry_count_description": "Kun Emaldo-reaaliaikayhteys on jumiutunut, yritä aikataulun lähetystä tämän verran lisäkertoja (30 s tauko). 0 = yksi lähetysyritys ilman uusintoja."
         }
       }
     }

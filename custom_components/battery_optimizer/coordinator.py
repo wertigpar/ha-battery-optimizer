@@ -6,6 +6,7 @@ and pushes the resulting schedule to the Emaldo integration.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timedelta
 import json
 import logging
@@ -123,6 +124,9 @@ from .const import (
     DEFAULT_FORCED_SELL_MAX_KWH_PD,
 DEFAULT_FORCED_SELL_MIN_PROFIT,
     DEFAULT_FORCED_SELL_MIN_PRICE,
+    CONF_STALE_PUSH_RETRY_COUNT,
+    DEFAULT_STALE_PUSH_RETRY_COUNT,
+    STALE_PUSH_RETRY_BACKOFF_S,
 )
 from .const import currency_for_timezone
 from .optimizer import (
@@ -2595,17 +2599,32 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return None
 
-        # #68/#70 storm amplifier guard: skip pushing over a wedged emaldo
-        # stream. During a 21204 reconnect storm the stream sits "stale" and
-        # every push attempt triggers coordinator teardown/rebuild churn that
-        # feeds the storm. Skip the push, keep the schedule for next non-stale
-        # cycle; the device falls back to its internal AI meanwhile.
-        if self._emaldo_stream_stale():
-            _LOGGER.info(
-                "Emaldo realtime connection stale — skipping schedule push "
-                "(21204 storm amplifier guard)"
+        # #68/#70 storm amplifier guard — superseded by #24 bounded retry.
+        # The 21204 reconnect storm used to hard-skip pushing over a wedged
+        # stream, but the stream flaps stale<->connected every ~90 s while
+        # the optimizer only samples it once per cycle (120 min), so the
+        # rolling override never landed in a connected window and the
+        # battery idled on its internal AI all night (issue #24). The
+        # churn this guard protected against is gated upstream by ha-emaldo
+        # beta37+ storm-state holder; a failed push here is a log line only
+        # (no teardown/rebuild exists in this repo). Push through the stale
+        # stream with a bounded retry + backoff so the override lands in one
+        # of the connected windows. Retries are configurable (0 = one-shot
+        # push-through, same as pre-storm behavior).
+        stream_stale = bool(self._emaldo_stream_stale())
+        stale_push_retries = (
+            self._config_int(
+                CONF_STALE_PUSH_RETRY_COUNT, DEFAULT_STALE_PUSH_RETRY_COUNT
             )
-            return None
+            if stream_stale
+            else 0
+        )
+        if stream_stale:
+            _LOGGER.info(
+                "Emaldo realtime connection stale — pushing with bounded "
+                "retry (%d attempt(s), %ss backoff; issue #24)",
+                stale_push_retries + 1, STALE_PUSH_RETRY_BACKOFF_S,
+            )
 
         emaldo_modes = self._read_emaldo_internal_modes()
         now_slot = _current_slot_index()
@@ -2727,16 +2746,31 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             SLOTS_PER_DAY - now_slot, now_slot,
         )
 
-        try:
-            await self.hass.services.async_call(
-                EMALDO_DOMAIN,
-                "apply_bulk_schedule",
-                service_data,
-                blocking=True,
-            )
-            _LOGGER.info("Rolling schedule applied to Emaldo successfully")
-        except Exception as err:
-            _LOGGER.error("Failed to push schedule to Emaldo: %s", err)
+        push_attempts = stale_push_retries + 1
+        for attempt in range(1, push_attempts + 1):
+            try:
+                await self.hass.services.async_call(
+                    EMALDO_DOMAIN,
+                    "apply_bulk_schedule",
+                    service_data,
+                    blocking=True,
+                )
+                _LOGGER.info(
+                    "Rolling schedule applied to Emaldo successfully%s",
+                    f" (attempt {attempt}/{push_attempts})" if stream_stale else "",
+                )
+                break
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error(
+                    "Failed to push schedule to Emaldo (attempt %d/%d): %s",
+                    attempt, push_attempts, err,
+                )
+                if attempt < push_attempts:
+                    _LOGGER.info(
+                        "Retrying schedule push in %ss (%d/%d)",
+                        STALE_PUSH_RETRY_BACKOFF_S, attempt + 1, push_attempts,
+                    )
+                    await asyncio.sleep(STALE_PUSH_RETRY_BACKOFF_S)
 
         return overrides_needed
 

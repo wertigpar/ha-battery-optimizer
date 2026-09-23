@@ -42,7 +42,9 @@
           "forced_sell_min_profit": "Min profit per kWh sold (€/kWh)",
           "forced_sell_min_profit_description": "Battery tier: (sell − wear) × round-trip − replacement buy must clear it. PV tier: sell − replacement buy × round-trip (no wear).",
           "forced_sell_min_price": "Min sell price (€/kWh)",
-          "forced_sell_min_price_description": "Absolute sell-price floor. Slots below this never sell."
+          "forced_sell_min_price_description": "Absolute sell-price floor. Slots below this never sell.",
+          "stale_push_retry_count": "Stale-push retries (0-5)",
+          "stale_push_retry_count_description": "Retry the schedule push this many extra times (30 s backoff each) when the Emaldo realtime stream is stale, so the override reaches a connected window (issue #24). 0 = one-shot push-through."
         }
       }
     },
@@ -115,7 +117,9 @@
                 "forced_sell_min_profit": "Min profit per kWh sold (€/kWh)",
                 "forced_sell_min_profit_description": "Battery tier: (sell − wear) × round-trip − replacement buy must clear it. PV tier: sell − replacement buy × round-trip (no wear).",
                 "forced_sell_min_price": "Min sell price (€/kWh)",
-                "forced_sell_min_price_description": "Absolute sell-price floor. Slots below this never sell."
+                "forced_sell_min_price_description": "Absolute sell-price floor. Slots below this never sell.",
+                "stale_push_retry_count": "Stale-push retries (0-5)",
+                "stale_push_retry_count_description": "Retry the schedule push this many extra times (30 s backoff each) when the Emaldo realtime stream is stale, so the override reaches a connected window (issue #24). 0 = one-shot push-through."
         }
       }
     }

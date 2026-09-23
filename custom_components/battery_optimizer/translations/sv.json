@@ -43,7 +43,9 @@
           "forced_sell_min_profit": "Min vinst per såld kWh (€/kWh)",
           "forced_sell_min_profit_description": "Batterinivå: (sälj − slitage) × rundgång − ersättningsköp måste överstiga detta. PV-nivå: sälj − ersättningsköp × rundgång (inget slitage).",
           "forced_sell_min_price": "Min säljpris (€/kWh)",
-          "forced_sell_min_price_description": "Absolut säljprisgolv. Slots under detta säljs aldrig."
+          "forced_sell_min_price_description": "Absolut säljprisgolv. Slots under detta säljs aldrig.",
+          "stale_push_retry_count": "Försök vid stel ström (0-5)",
+          "stale_push_retry_count_description": "När Emaldo-realtidsströmmen är stel, gör så många extra försök (30 s väntan emellan). 0 = ett försök utan omtag."
         }
       }
     },
@@ -117,7 +119,9 @@
             "forced_sell_min_profit": "Min vinst per såld kWh (€/kWh)",
             "forced_sell_min_profit_description": "Batterinivå: (sälj − slitage) × rundgång − ersättningsköp måste överstiga detta. PV-nivå: sälj − ersättningsköp × rundgång (inget slitage).",
             "forced_sell_min_price": "Min säljpris (€/kWh)",
-            "forced_sell_min_price_description": "Absolut säljprisgolv. Slots under detta säljs aldrig."
+            "forced_sell_min_price_description": "Absolut säljprisgolv. Slots under detta säljs aldrig.",
+            "stale_push_retry_count": "Försök vid stel ström (0-5)",
+            "stale_push_retry_count_description": "När Emaldo-realtidsströmmen är stel, gör så många extra försök (30 s väntan emellan). 0 = ett försök utan omtag."
         }
       }
     }
