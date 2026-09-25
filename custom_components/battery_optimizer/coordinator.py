@@ -7,6 +7,7 @@ and pushes the resulting schedule to the Emaldo integration.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 import json
 import logging
@@ -183,6 +184,41 @@ def _action_to_mode(action: str) -> int:
     if action == "force_sell":
         return SLOT_IDLE  # sold slots push as idle; device exports itself
     return 0
+
+
+def _split_result_by_day(result: OptimizationResult) -> tuple[OptimizationResult, OptimizationResult]:
+    def split_slots(offset: int) -> list[SlotPlan]:
+        return [
+            replace(slot, index=slot.index - offset)
+            for slot in result.slots[offset:offset + SLOTS_PER_DAY]
+        ]
+
+    today = replace(
+        result,
+        slots=split_slots(0),
+        emaldo_modes=result.emaldo_modes[:SLOTS_PER_DAY],
+        thirdparty_pv_slots=result.thirdparty_pv_slots[:SLOTS_PER_DAY],
+        safeguard_slots=[
+            slot for slot in result.safeguard_slots if slot < SLOTS_PER_DAY
+        ],
+        sell_slots=[slot for slot in result.sell_slots if slot < SLOTS_PER_DAY],
+    )
+    tomorrow = OptimizationResult(
+        slots=split_slots(SLOTS_PER_DAY),
+        emaldo_modes=result.emaldo_modes[SLOTS_PER_DAY:],
+        thirdparty_pv_slots=result.thirdparty_pv_slots[SLOTS_PER_DAY:],
+        safeguard_slots=[
+            slot - SLOTS_PER_DAY
+            for slot in result.safeguard_slots
+            if slot >= SLOTS_PER_DAY
+        ],
+        sell_slots=[
+            slot - SLOTS_PER_DAY
+            for slot in result.sell_slots
+            if slot >= SLOTS_PER_DAY
+        ],
+    )
+    return today, tomorrow
 
 
 def _write_json(path: str, data: dict) -> None:
@@ -1907,57 +1943,62 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # price each slot without re-parsing spot data.
         self._cost_buy_prices = buy_prices
         self._cost_sell_prices = sell_prices
-        # Tomorrow's prices (published ~13:00 CET, sensor-triggered re-run)
-        # must be ready BEFORE today's plan: when the no-refill regime is
-        # engaged, today's discharge floor is min(remaining today, tomorrow).
-        buy_tom = None
-        sell_tom = None
-        if prices_tomorrow is not None:
-            buy_tom, sell_tom = compute_prices(prices_tomorrow, cfg)
         emaldo_modes = self._read_emaldo_internal_modes()
-        # Cross-day charge signal: tomorrow's confirmed grid-charge need (from
-        # the previous run's tomorrow plan) lets today pre-charge cheap surplus
-        # slots instead of deferring the purchase to tomorrow at a higher price.
-        # Tomorrow is re-planned below from today's actual end-SoC, so this
-        # signal is only an estimate and never feeds the final tomorrow plan.
-        future_charge_need = None
-        if prices_tomorrow is not None and self._last_result_tomorrow:
-            _need = sum(
-                cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
-                for sp in self._last_result_tomorrow.slots
-                if sp.action == "charge"
-            )
-            if _need > 0.0:
-                future_charge_need = _need
-        result = optimize(
-            buy_prices,
-            sell_prices,
-            solar,
-            cfg,
-            start_slot=now_slot,
-            initial_soc_pct=soc,
-            enable_pv_strategy=self._pv_strategy_enabled,
-            emaldo_modes=emaldo_modes,
-            solar_regime_engaged=bool(
-                self._solar_regime and self._solar_regime["engaged"]
-            ),
-            future_min_buy=min(buy_tom) if buy_tom else None,
-            future_grid_charge_needed=future_charge_need,
-        )
-        result.reason = reason
 
         # ── User schedule layer: apply rules as a mask ──────────────
         user_rules = self._read_user_rules()
         today_date = dt_util.now().date()
-        if any(r.action != "optimizer" or r.level != LEVEL_DEFAULT
-               for r in user_rules):
+        has_user_rules = any(
+            r.action != "optimizer" or r.level != LEVEL_DEFAULT
+            for r in user_rules
+        )
+        solar_tomorrow: list[float] | None = None
+        previous_result_tomorrow = self._last_result_tomorrow
+        if prices_tomorrow is not None:
+            solar_tomorrow = self._get_solcast_forecast("tomorrow")
+            buy_tom, sell_tom = compute_prices(prices_tomorrow, cfg)
+            continuous_result = optimize(
+                buy_prices + buy_tom,
+                sell_prices + sell_tom,
+                solar + solar_tomorrow,
+                cfg,
+                start_slot=now_slot,
+                initial_soc_pct=soc,
+                enable_pv_strategy=self._pv_strategy_enabled,
+                emaldo_modes=emaldo_modes,
+                solar_regime_engaged=bool(
+                    self._solar_regime and self._solar_regime["engaged"]
+                ),
+            )
+            result, result_tomorrow = _split_result_by_day(continuous_result)
+            result.reason = reason
+            self._last_result_tomorrow = result_tomorrow
+        else:
+            result = optimize(
+                buy_prices,
+                sell_prices,
+                solar,
+                cfg,
+                start_slot=now_slot,
+                initial_soc_pct=soc,
+                enable_pv_strategy=self._pv_strategy_enabled,
+                emaldo_modes=emaldo_modes,
+                solar_regime_engaged=bool(
+                    self._solar_regime and self._solar_regime["engaged"]
+                ),
+                future_min_buy=None,
+                future_grid_charge_needed=None,
+            )
+            result.reason = reason
+            self._last_result_tomorrow = None
+
+        if has_user_rules:
             self._apply_user_mask(
                 result, user_rules, solar, cfg, start_slot=now_slot,
                 initial_soc_kwh=cfg.capacity_kwh * soc / 100.0,
                 day=today_date,
             )
         else:
-            # only the default optimizer rule — pure fast path, unchanged
             self._last_sources = None
             self._last_user_winners = None
 
@@ -1965,55 +2006,30 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_run = dt_util.now()
         self._last_reason = reason
 
-        # ── Speculative grid pre-charge (cheap-energy safety fill) ──
-        # Runs BEFORE tomorrow's optimization on purpose: the day+2 hedge reads
-        # LAST run's _last_result_tomorrow (not the current one), so order here
-        # only affects the current run's result_tomorrow. Computing tomorrow
-        # AFTER pre-charge makes it start from today's TOPPED-UP end-SoC, so the
-        # pushed forecast is continuous across the midnight handoff (no fake
-        # "deep gap" where charged energy appears to vanish).
         if self.config.get(CONF_PRECHARGE_ENABLED, DEFAULT_PRECHARGE_ENABLED):
             self._apply_speculative_precharge(
                 result, buy_prices, solar, cfg, soc, now_slot,
                 tomorrow_available=bool(prices_tomorrow),
                 tomorrow_end_soc_pct=(
-                    self._last_result_tomorrow.slots[-1].soc_after
-                    if self._last_result_tomorrow and self._last_result_tomorrow.slots
+                    previous_result_tomorrow.slots[-1].soc_after
+                    if previous_result_tomorrow and previous_result_tomorrow.slots
                     else None
                 ),
             )
 
-        # Tomorrow's plan — computed AFTER pre-charge so it starts from today's
-        # actual (post-precharge) end-SoC.  The hedge's drain-risk signal comes
-        # from the PREVIOUS run's _last_result_tomorrow (read above), so this
-        # reorder does not change the hedge's decision.
         if prices_tomorrow is not None:
-            solar_tomorrow = self._get_solcast_forecast("tomorrow")
-            end_soc = result.slots[-1].soc_after if result.slots else None
-            result_tomorrow = optimize(
-                buy_tom,
-                sell_tom,
-                solar_tomorrow,
-                cfg,
-                start_slot=0,
-                initial_soc_pct=end_soc,
-                enable_pv_strategy=self._pv_strategy_enabled,
-                emaldo_modes=emaldo_modes,
-                solar_regime_engaged=bool(
-                    self._solar_regime and self._solar_regime["engaged"]
-                ),
-            )
-            self._last_result_tomorrow = result_tomorrow
-            self._apply_user_mask(
-                result_tomorrow, user_rules, solar_tomorrow, cfg,
-                start_slot=0,
-                initial_soc_kwh=cfg.capacity_kwh * (
-                    result.slots[-1].soc_after if result.slots else cfg.soc_min
-                ) / 100.0,
-                day=(today_date + timedelta(days=1)),
-                store_last=False,
-                store_last_tomorrow=True,
-            )
+            result_tomorrow = self._last_result_tomorrow
+            if has_user_rules and result_tomorrow is not None:
+                self._apply_user_mask(
+                    result_tomorrow, user_rules, solar_tomorrow or [], cfg,
+                    start_slot=0,
+                    initial_soc_kwh=cfg.capacity_kwh * (
+                        result.slots[-1].soc_after if result.slots else cfg.soc_min
+                    ) / 100.0,
+                    day=(today_date + timedelta(days=1)),
+                    store_last=False,
+                    store_last_tomorrow=True,
+                )
             _LOGGER.info(
                 "Tomorrow optimization: savings=%.4f€, C=%d D=%d I=%d",
                 result_tomorrow.total_profit,
@@ -2021,8 +2037,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 result_tomorrow.discharge_slots,
                 result_tomorrow.idle_slots,
             )
-        else:
-            self._last_result_tomorrow = None
         # Retain the scale THIS plan ran under — the next run's accuracy
         # comparison attributes the solar error to it (raw-basis recovery).
         self._last_result_solar_scale = self._solar_scale
