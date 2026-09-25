@@ -109,7 +109,9 @@
   prevents unprofitable grid-funded cycles even when the solar regime is
   inactive (previously skipped in that case). Files: `optimizer.py`.
 
-- **Options flow accepts an empty `precharge_publish_hour`** (falls back to automatic timezone-derived cutoff) instead of failing with "expected float". **Fixes [#21](https://github.com/wertigpar/ha-battery-optimizer/issues/21).**
+- **Options flow accepts an empty `precharge_publish_hour`** (falls back to
+  automatic timezone-derived cutoff) instead of failing with "expected
+  float". **Fixes [#21](https://github.com/wertigpar/ha-battery-optimizer/issues/21).**
 
 ## v0.3.16
 
@@ -152,7 +154,14 @@
   `_plan_pv_sell_override` is a behavior change for any config that set the
   override options. Files: `const.py`, `config_flow.py`, `optimizer.py`,
   `strings.json`, `translations/*.json`.
-- **Forced-sell PV tier removed (battery-only manual selling)** — the internal surplus-solar "pv" tier of `_plan_forced_sell_slots` was deleted; the planner no longer takes `net_loads`/`pv_slots` and sells battery energy only. All solar surplus export belongs exclusively to the 3rd-party PV strategy; the two feature sets now share zero state. `sensor.*_manual_sell_chart` slot sources are always `battery`. Files: `optimizer.py`, `tests/test_forced_sell.py`; docs: `docs/pv-sell-strategy-analysis.md`.
+- **Forced-sell PV tier removed (battery-only manual selling)** — the internal
+  surplus-solar "pv" tier of `_plan_forced_sell_slots` was deleted; the
+  planner no longer takes `net_loads`/`pv_slots` and sells battery energy
+  only. All solar surplus export belongs exclusively to the 3rd-party PV
+  strategy; the two feature sets now share zero state.
+  `sensor.*_manual_sell_chart` slot sources are always `battery`. Files:
+  `optimizer.py`, `tests/test_forced_sell.py`; docs:
+  `docs/pv-sell-strategy-analysis.md`.
 
 ### Fixed
 
@@ -516,7 +525,16 @@
 
 ### Fixed
 
-- **Emaldo plan-cost breakdown reports grid cost plus wear (matching the optimizer sensor)** — `emaldo_plan_cost_breakdown`'s docstring previously claimed the `emaldo_plan_cost` sensor state equals `emaldo_grid_cost - emaldo_wear_cost` (minus). The real sensor value is `emaldo_cost = emaldo_grid_cost + emaldo_wear_total` (grid cost plus wear), identical in form to `optimizer_plan_cost` (`baseline_cost - net_profit`). The attribute dict keys were already correct; only the docstring was corrected so the decomposition reads `emaldo_grid_cost + emaldo_wear_cost == sensor state`. No numeric logic or values changed. File: `optimizer.py`.
+- **Emaldo plan-cost breakdown reports grid cost plus wear (matching the
+  optimizer sensor)** — `emaldo_plan_cost_breakdown`'s docstring previously
+  claimed the `emaldo_plan_cost` sensor state equals
+  `emaldo_grid_cost - emaldo_wear_cost` (minus). The real sensor value is
+  `emaldo_cost = emaldo_grid_cost + emaldo_wear_total` (grid cost plus wear),
+  identical in form to `optimizer_plan_cost` (`baseline_cost - net_profit`).
+  The attribute dict keys were already correct; only the docstring was
+  corrected so the decomposition reads
+  `emaldo_grid_cost + emaldo_wear_cost == sensor state`. No numeric logic or
+  values changed. File: `optimizer.py`.
 
 ## v0.3.6
 
@@ -1081,7 +1099,11 @@
 
 ### Added
 
-- **Local brand images** (`brand/` folder): original battery-glyph icon + logo (navy `#112A41` icon, energy-green `#00B25C` logo, white dark-mode variants, all `@2x`). Distinct from Emaldo branding — no Emaldo logo used. Served via HA 2026.3+ local brands proxy (`/api/brands/integration/battery_optimizer/...`).
+- **Local brand images** (`brand/` folder): original battery-glyph icon +
+  logo (navy `#112A41` icon, energy-green `#00B25C` logo, white dark-mode
+  variants, all `@2x`). Distinct from Emaldo branding — no Emaldo logo used.
+  Served via HA 2026.3+ local brands proxy
+  (`/api/brands/integration/battery_optimizer/...`).
 - **Persistable plan accuracy history** — per-run planned-vs-actual records
   (discharge/charge/solar kWh + signed errors) are now written to
   `battery_optimizer_accuracy.json` in the HA config dir and survive HA
