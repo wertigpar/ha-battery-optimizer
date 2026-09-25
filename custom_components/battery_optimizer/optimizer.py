@@ -507,6 +507,7 @@ def _simulate_soc_trajectory(
     charge_targets: dict[int, int] | None = None,
     discharge_targets: dict[int, int] | None = None,
     pv_slots: list[bool] | None = None,
+    total_slots: int = SLOTS_PER_DAY,
 ) -> list[float]:
     """Forward-simulate the true (unclamped) SoC trajectory in kWh.
 
@@ -514,9 +515,9 @@ def _simulate_soc_trajectory(
     NOT soc_min — so the trajectory reveals slots where idle drain pulls
     the battery below the configured floor.  Used by the SoC safeguard.
 
-    Returns a list of 96 SoC values (kWh) — SoC *after* each slot.
+    Returns one SoC value (kWh) after each slot in the requested horizon.
     """
-    n = SLOTS_PER_DAY
+    n = total_slots
     soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
     floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
     idle_drain = cfg.idle_drain_per_slot_kwh
@@ -623,6 +624,7 @@ def _apply_soc_safeguard(
     *,
     start_slot: int,
     initial_soc_kwh: float,
+    total_slots: int = SLOTS_PER_DAY,
 ) -> list[int]:
     """Insert keep-alive charge slots so SoC never falls below soc_min.
 
@@ -655,17 +657,18 @@ def _apply_soc_safeguard(
     tolerance_kwh = cfg.capacity_kwh * 0.005
 
     inserted: list[int] = []
-    max_iterations = 24  # hard cap: enough to bridge >2 days of idle drain
+    max_iterations = 24 + max(0, total_slots - SLOTS_PER_DAY)
     search_from = start_slot  # advanced past violations that cannot be fixed
 
     for _ in range(max_iterations):
         traj = _simulate_soc_trajectory(
             plan_actions, net_loads, solar_15min, cfg,
             start_slot=start_slot, initial_soc_kwh=initial_soc_kwh,
+            total_slots=total_slots,
         )
         violation_slot = next(
             (
-                s for s in range(search_from, SLOTS_PER_DAY)
+                s for s in range(search_from, total_slots)
                 if traj[s] < soc_min_kwh - tolerance_kwh
             ),
             None,
@@ -769,6 +772,7 @@ def _plan_pv_sell_slots(
     *,
     start_slot: int = 0,
     initial_soc_kwh: float | None = None,
+    total_slots: int = SLOTS_PER_DAY,
 ) -> list[bool]:
     """Plan which solar slots should sell to grid vs charge the battery.
 
@@ -788,11 +792,11 @@ def _plan_pv_sell_slots(
     Grid-charge slots (action == "charge") are never overridden.
 
     Returns:
-        list[bool] of length 96.
+        list[bool] of length total_slots.
         True  = third-party PV enabled  (solar charges battery — default).
         False = third-party PV disabled (solar exported to grid at spot price).
     """
-    n = SLOTS_PER_DAY
+    n = total_slots
     pv_slots = [True] * n
 
     _MIN_SOLAR_KW = 0.1
@@ -1108,6 +1112,8 @@ def _plan_forced_sell_slots(
     start_slot: int,
     start_soc_kwh: float | None,
     round_trip_factor: float,
+    *,
+    total_slots: int = SLOTS_PER_DAY,
 ) -> dict[int, tuple[float, str]]:
     """Plan forced (manual) sell slots: battery-only arbitrage.
 
@@ -1125,7 +1131,7 @@ def _plan_forced_sell_slots(
       after the sell block, re-buy at the spike price would be a loss).
       Solar-surplus discharge slots (net load <= 0) also keep legacy
       behavior: the battery absorbs excess solar, no sell headroom.
-    - No sale at the final slot (s+1 >= 96): no in-day recharge remains.
+    - No sale at the final slot (s+1 >= total_slots): no recharge remains.
     - Battery tier: per-slot 2.5 kWh, capped by remaining usable capacity and
       the daily budget; sells only while the round-trip exceeds the cheapest
       forward buy minus wear (``forced_sell_min_profit``).
@@ -1154,7 +1160,7 @@ def _plan_forced_sell_slots(
     sell_plan: dict[int, tuple[float, str]] = {}
     window_open = False
 
-    for s in range(start_slot, 96):
+    for s in range(start_slot, total_slots):
         sell = sell_prices[s]
         if sell < min_price:
             if window_open:
@@ -1183,12 +1189,12 @@ def _plan_forced_sell_slots(
                 if window_open:
                     break
                 continue
-        if s + 1 >= 96:
-            # Final slot: no in-day recharge opportunity remains.
+        if s + 1 >= total_slots:
+            # Final slot: no recharge opportunity remains.
             continue
 
         cheapest = min(
-            (c for c in range(s + 1, 96)),
+            (c for c in range(s + 1, total_slots)),
             key=lambda c: buy_prices[c],
         )
         c_ref = buy_prices[cheapest]
@@ -1383,6 +1389,7 @@ def _probe_result(
     enable_pv_strategy: bool,
     emaldo_modes: list[int] | None,
     case_a_floor: float,
+    total_slots: int = SLOTS_PER_DAY,
 ) -> OptimizationResult:
     """One full optimize() run with the night drain disabled (a "probe").
 
@@ -1395,6 +1402,7 @@ def _probe_result(
         start_slot=start_slot, initial_soc_pct=initial_soc_pct,
         enable_pv_strategy=enable_pv_strategy, emaldo_modes=emaldo_modes,
         enable_night_drain=False, _probe=True, case_a_floor=case_a_floor,
+        total_slots=total_slots,
     )
 
 
@@ -1409,6 +1417,7 @@ def _find_plateau_edge(
     enable_pv_strategy: bool,
     emaldo_modes: list[int] | None,
     case_a_floor: float,
+    total_slots: int = SLOTS_PER_DAY,
 ) -> float:
     """Lowest start SoC whose day profit still matches P0 (within eps).
 
@@ -1427,7 +1436,7 @@ def _find_plateau_edge(
         profit = _probe_result(
             buy_prices, sell_prices, solar_15min, cfg,
             start_slot, mid_pct, enable_pv_strategy, emaldo_modes,
-            case_a_floor,
+            case_a_floor, total_slots,
         ).total_profit
         if profit >= p0_profit - _EDGE_EPSILON_EUR:
             hi_pct = mid_pct
@@ -1448,6 +1457,7 @@ def _build_night_drain_plan(
     enable_pv_strategy: bool,
     emaldo_modes: list[int] | None,
     case_a_floor: float,
+    total_slots: int = SLOTS_PER_DAY,
 ) -> dict[int, str] | None:
     """Merged plan = edge-optimal day plan + overnight discharge of excess.
 
@@ -1459,19 +1469,19 @@ def _build_night_drain_plan(
     """
     net_loads = [
         cfg.base_load_kw - (solar_15min[s] if s < len(solar_15min) else 0.0)
-        for s in range(SLOTS_PER_DAY)
+        for s in range(total_slots)
     ]
     edge_result = _probe_result(
         buy_prices, sell_prices, solar_15min, cfg,
         start_slot, edge_pct, enable_pv_strategy, emaldo_modes,
-        case_a_floor,
+        case_a_floor, total_slots,
     )
     plan: dict[int, str] = {
         sp.index: sp.action for sp in edge_result.slots if sp.action != "none"
     }
     wear_cost = cfg.wear_cost_per_kwh
     window = [
-        s for s in range(start_slot, min(first_solar_slot, SLOTS_PER_DAY))
+        s for s in range(start_slot, min(first_solar_slot, total_slots))
         if plan.get(s) in (None, "idle")
         and net_loads[s] > 0
         and buy_prices[s] > case_a_floor
@@ -1510,8 +1520,9 @@ def optimize(
     future_min_buy: float | None = None,
     future_grid_charge_needed: float | None = None,
     case_a_floor: float | None = None,
+    total_slots: int = SLOTS_PER_DAY,
 ) -> OptimizationResult:
-    """Run greedy optimization over 96 slots.
+    """Run greedy optimization over a requested slot horizon.
 
     Strategy:
     1. For each slot, compute net_load = load - solar.
@@ -1523,17 +1534,30 @@ def optimize(
     5. Respect SoC constraints and round-trip efficiency.
 
     Args:
-        buy_prices: 96 effective buy prices €/kWh.
-        sell_prices: 96 effective sell prices €/kWh.
-        solar_15min: 96 expected solar kW values.
+        buy_prices: Effective buy prices €/kWh.
+        sell_prices: Effective sell prices €/kWh.
+        solar_15min: Expected solar kW values.
         cfg: Battery and fee config.
-        start_slot: First slot to plan (0-95), earlier slots get "none".
+        start_slot: First slot to plan; earlier slots get "none".
         initial_soc_pct: Current SoC %. None → use soc_min.
+        total_slots: Horizon length; minimum is one 96-slot day.
 
     Returns:
-        OptimizationResult with 96 SlotPlans.
+        OptimizationResult with total_slots SlotPlans.
     """
-    n = SLOTS_PER_DAY
+    if (
+        not isinstance(total_slots, int)
+        or isinstance(total_slots, bool)
+        or total_slots < SLOTS_PER_DAY
+    ):
+        _LOGGER.warning(
+            "total_slots must be a positive int >= %d; got %r; using %d",
+            SLOTS_PER_DAY,
+            total_slots,
+            SLOTS_PER_DAY,
+        )
+        total_slots = SLOTS_PER_DAY
+    n = total_slots
     soc_min_kwh = cfg.capacity_kwh * cfg.soc_min / 100.0
     soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
     night_drain_plan: dict[int, str] | None = None  # bound in the drain guard below
@@ -1803,13 +1827,13 @@ def optimize(
                 buy_prices, sell_prices, solar_15min, cfg,
                 start_slot, initial_soc_pct,
                 enable_pv_strategy, emaldo_modes,
-                case_a_floor,
+                case_a_floor, n,
             ).total_profit
             edge_pct = _find_plateau_edge(
                 buy_prices, sell_prices, solar_15min, cfg,
                 start_slot, initial_soc_pct, p0_profit,
                 enable_pv_strategy, emaldo_modes,
-                case_a_floor,
+                case_a_floor, n,
             )
             if edge_pct < initial_soc_pct:
                 excess_kwh = (
@@ -1819,7 +1843,7 @@ def optimize(
                     buy_prices, sell_prices, solar_15min, cfg,
                     start_slot, first_solar_slot, edge_pct,
                     excess_kwh, enable_pv_strategy, emaldo_modes,
-                    case_a_floor,
+                    case_a_floor, n,
                 )
                 if night_drain_plan is not None:
                     # Phase 2 — the merged plan overrides the plain one.  Any
@@ -2083,7 +2107,7 @@ def optimize(
     # top-up on top of a fix).
     floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
     _guard = 0
-    while _guard < SLOTS_PER_DAY:
+    while _guard < n:
         dis_slots_a = sorted(
             (s for s, a in plan_actions.items() if a == "discharge"),
             key=lambda s: (round(buy_prices[s], 4), -s),
@@ -2093,6 +2117,7 @@ def optimize(
         traj_a = _simulate_soc_trajectory(
             plan_actions, net_loads, solar_15min, cfg,
             start_slot=start_slot, initial_soc_kwh=current_soc_kwh,
+            total_slots=n,
         )
         # The floor check applies to the discharge-affected region only,
         # from the first discharge slot onward.  A dip before that point is
@@ -2126,6 +2151,7 @@ def optimize(
     safeguard_slots = _apply_soc_safeguard(
         plan_actions, buy_prices, net_loads, solar_15min, cfg,
         start_slot=start_slot, initial_soc_kwh=current_soc_kwh,
+        total_slots=n,
     )
 
     # Step 4: Build the result
@@ -2361,12 +2387,13 @@ def optimize(
     # optimizer itself plans are the effective switch schedule, so compute
     # them first and feed the per-slot flag into the device simulation (this
     # benchmark = "what the internal plan costs GIVEN our PV handling").
-    pv_flags: list[bool] = []
+    pv_flags: list[bool] = [True] * n
     if enable_pv_strategy:
         pv_flags = _plan_pv_sell_slots(
             cfg, result_slots, solar_15min, buy_prices, sell_prices,
             start_slot=start_slot,
             initial_soc_kwh=current_soc_kwh,
+            total_slots=n,
         )
         _correct_soc_for_pv_sells(result_slots, pv_flags, solar_15min, cfg)
 
@@ -2490,12 +2517,15 @@ def optimize(
             trace["edge_pct"] = edge_pct
             trace["excess_kwh"] = round(excess_kwh, 3)
 
+    result_emaldo_modes = (
+        [SLOT_IDLE] * n if emaldo_modes is None else emaldo_modes
+    )
     result = OptimizationResult(
         slots=result_slots,
         total_profit=gross_profit,
         baseline_cost=baseline_cost,
         emaldo_cost=emaldo_cost,
-        emaldo_modes=emaldo_modes or [],
+        emaldo_modes=result_emaldo_modes,
         emaldo_grid_cost=emaldo_grid_cost,
         emaldo_wear_total=emaldo_wear_total,
         emaldo_cycled_kwh=e_cycled,
@@ -2536,8 +2566,7 @@ def optimize(
         trace=trace,
     )
 
-    if enable_pv_strategy:
-        result.thirdparty_pv_slots = pv_flags
+    result.thirdparty_pv_slots = pv_flags
 
     # ── Forced (manual) sell: battery-only peak arbitrage ──
     sell_plan = _plan_forced_sell_slots(
@@ -2548,6 +2577,7 @@ def optimize(
         start_slot,
         current_soc_kwh,
         cfg.round_trip_factor,
+        total_slots=n,
     )
     if sell_plan:
         sell_slots = sorted(sell_plan)
@@ -2556,7 +2586,7 @@ def optimize(
             kwh for kwh, tier in sell_plan.values() if tier == "battery"
         )
         c_ref_idx = min(
-            (c for c in range(sell_slots[-1] + 1, 96)),
+            (c for c in range(sell_slots[-1] + 1, n)),
             key=lambda c: buy_prices[c],
             default=None,
         )

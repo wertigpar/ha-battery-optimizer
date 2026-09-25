@@ -37,6 +37,20 @@
   failed push here is a log line only (no teardown/rebuild exists in this
   repo). Files: `coordinator.py`, `config_flow.py`, `const.py`.
 
+- **Two-day optimization horizon (tomorrow's plan was always empty)** —
+  `optimize()` took a fixed 96-slot window, so even when tomorrow's prices
+  were fetched and valid the optimizer truncated the combined
+  today+tomorrow array to 96 slots and tomorrow's 96 slots came back all
+  `none` (verified locally against live HA: 192 prices in ⇒ 96 slots out,
+  indices 0..95, `res.slots[96:192]` all zero). The horizon is now an
+  explicit keyword-only `total_slots: int = SLOTS_PER_DAY` argument; the
+  coordinator passes the combined length
+  (`total_slots=len(buy_prices) + len(buy_tom)`), and the optimization runs
+  as one continuous window with a single carried SoC trajectory across
+  midnight (no reset at slot 96). Default 96 preserves prior behavior
+  byte-for-byte; omitting the kwarg never infers a length from the input
+  arrays. Files: `optimizer.py`, `coordinator.py`.
+
 ## v0.3.18
 
 ### Fixed

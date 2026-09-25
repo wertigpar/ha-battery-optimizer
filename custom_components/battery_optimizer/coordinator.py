@@ -1969,6 +1969,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 solar_regime_engaged=bool(
                     self._solar_regime and self._solar_regime["engaged"]
                 ),
+                total_slots=len(buy_prices) + len(buy_tom),
             )
             result, result_tomorrow = _split_result_by_day(continuous_result)
             result.reason = reason
