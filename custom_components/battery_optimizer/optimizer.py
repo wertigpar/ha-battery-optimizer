@@ -122,6 +122,16 @@ class SlotPlan:
     export_kwh: float = 0.0  # solar exported to grid this slot (kWh)
     sell_kwh: float = 0.0      # kWh force-sold this slot (battery or PV)
     sell_source: str = ""      # "battery" always (PV tier removed)
+    grid_import_kwh: float = 0.0       # actual grid import this slot (kWh)
+    grid_export_kwh: float = 0.0       # actual grid export this slot (kWh)
+    import_energy_cost: float = 0.0    # import energy cost this slot (€)
+    import_transfer_cost: float = 0.0  # import transfer cost this slot (€)
+    import_tax_cost: float = 0.0       # import tax cost this slot (€)
+    import_commission_cost: float = 0.0  # import commission this slot (€)
+    export_energy_revenue: float = 0.0   # export energy revenue this slot (€)
+    export_commission_cost: float = 0.0  # export commission this slot (€)
+    baseline_cost: float = 0.0        # baseline (buy-only) cost this slot (€)
+    cycled_kwh: float = 0.0           # battery energy cycled this slot (kWh)
 
 
 @dataclass
@@ -2147,6 +2157,7 @@ def optimize(
         profit = 0.0
         actual_grid_kwh = 0.0  # grid electricity bought this slot
         export_kwh = 0.0       # solar exported to grid this slot
+        slot_cycled_kwh = 0.0  # battery energy cycled this slot
 
         if s < start_slot:
             # Past slots — don't touch
@@ -2221,6 +2232,7 @@ def optimize(
                     cfg.max_discharge_kw * SLOT_DURATION_HOURS,
                 )
                 cycled_kwh += draw_ac
+                slot_cycled_kwh = draw_ac
                 soc = max(soc - draw_ac * cfg.discharge_efficiency - idle_drain, 0.0)
                 actual_grid_kwh += max(0.0, load_kwh - draw_ac * cfg.discharge_efficiency)
                 # Per-slot SoC threshold: battery discharges only while
@@ -2329,6 +2341,16 @@ def optimize(
             soc_after=soc / cfg.capacity_kwh * 100.0,
             profit=profit,
             export_kwh=export_kwh,
+            grid_import_kwh=actual_grid_kwh,
+            grid_export_kwh=export_kwh,
+            import_energy_cost=g_ie * actual_grid_kwh,
+            import_transfer_cost=g_it * actual_grid_kwh,
+            import_tax_cost=g_itx * actual_grid_kwh,
+            import_commission_cost=g_ic * actual_grid_kwh,
+            export_energy_revenue=g_ee * export_kwh,
+            export_commission_cost=g_ec * export_kwh,
+            baseline_cost=baseline_slot,
+            cycled_kwh=slot_cycled_kwh,
         ))
 
     # --- Emaldo plan cost: simulate battery following the Emaldo AI modes ---

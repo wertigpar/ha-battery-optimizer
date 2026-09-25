@@ -2,6 +2,21 @@
 
 ## v0.3.19
 
+### Added
+
+- **Per-slot cost, grid-energy and cycled-kWh fields on `SlotPlan`** — every
+  slot now carries the actual grid import/export it produced and the full fee
+  decomposition it cost, so cost-history and chart sensors can report per-slot
+  realized cost without re-deriving it: `grid_import_kwh`, `grid_export_kwh`,
+  `import_energy_cost`, `import_transfer_cost`, `import_tax_cost`,
+  `import_commission_cost`, `export_energy_revenue`, `export_commission_cost`,
+  `baseline_cost` (buy-only cost for the same slot) and `cycled_kwh` (battery
+  energy cycled that slot). Import cost = spot × VAT + transfer + commission
+  per imported kWh; export revenue = spot − commission per exported kWh; the
+  decomposition sums to the slot's net cost against the baseline. Populated
+  in `optimizer.py` from the per-slot buy/sell price decompositions already
+  in scope at the append. Files: `optimizer.py`.
+
 ### Fixed
 
 - **Push schedule through a stale Emaldo stream with bounded retry
