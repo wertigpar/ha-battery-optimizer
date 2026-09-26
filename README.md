@@ -1345,6 +1345,23 @@ series:
 - **Red** = device AI plans to discharge
 - **Gray** = device AI plans idle
 
+**48-hour window.** The chart covers today *and* tomorrow (`graph_span: 48h`), but
+only as far as the device's own schedule reaches. Emaldo's backend returns 96 or 192
+15-minute slots; when it returns **96**, tomorrow has no data and the second half of
+the card stays empty. The sensor never pads a missing day, because a fabricated idle
+day would misreport what the device actually planned.
+
+Check the three count attributes to see which case you are in:
+
+| Attribute | Meaning |
+| --- | --- |
+| `emaldo_slots` | Total slots in the chart (today + tomorrow) |
+| `emaldo_slots_today` | Slots received for today (normally 96) |
+| `emaldo_slots_tomorrow` | Slots received for tomorrow — `0` means the device sent a one-day plan |
+
+If `emaldo_slots_tomorrow` is `0`, an empty tomorrow is an **upstream** condition
+(the Emaldo backend returned only today), not a chart bug.
+
 Compare this chart side-by-side with the "Optimized Schedule" chart to see where the optimizer overrides the internal schedule.
 
 #### Dashboard chart — Schedule Source

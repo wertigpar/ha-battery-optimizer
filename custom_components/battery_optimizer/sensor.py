@@ -542,13 +542,36 @@ class EmaldoScheduleChartSensor(_BaseOptimizerSensor):
         n_idle = len(modes) - n_charge - n_discharge
         return f"{n_charge}C {n_discharge}D {n_idle}I"
 
+    def _mode_window(self) -> list[int]:
+        """Emaldo's plan modes across the full 48 h window.
+
+        ``_split_result_by_day`` truncates ``emaldo_modes`` to one day on each
+        half of the 192-slot result, so ``last_result`` only ever carries
+        today and the second day has to come from ``last_result_tomorrow``.
+        Emitted as-is: a one-day upstream payload is never padded, because a
+        fabricated idle day would misreport Emaldo's intent.
+        """
+        if self._result is None:
+            return []
+        modes = list(self._result.emaldo_modes)
+        tomorrow = self.coordinator.last_result_tomorrow
+        if tomorrow is not None and tomorrow.emaldo_modes:
+            modes.extend(tomorrow.emaldo_modes)
+        return modes
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         if self._result is None or not self._result.emaldo_modes:
             return {}
-        modes = self._result.emaldo_modes
+        modes = self._mode_window()
+        today_modes = self._result.emaldo_modes
+        tomorrow_modes = (
+            self.coordinator.last_result_tomorrow.emaldo_modes
+            if self.coordinator.last_result_tomorrow is not None
+            else []
+        )
         slots_data = []
-        # Allow up to 192 slots (48h rolling window)
+        # Up to 192 slots (today + tomorrow), bounded by what Emaldo returned.
         max_slots = min(len(modes), SLOTS_PER_DAY * 2)
         now_ha = dt_util.now()
         today_midnight = now_ha.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -578,7 +601,15 @@ class EmaldoScheduleChartSensor(_BaseOptimizerSensor):
                 "solar": round(op.solar_kw, 3) if op else 0.0,
             })
 
-        return {"schedule": slots_data}
+        return {
+            "schedule": slots_data,
+            # Emaldo mode counts as received upstream. A one-day payload leaves
+            # emaldo_slots_tomorrow at 0 and the second day stays empty -- that
+            # is an upstream condition, not a sensor fault.
+            "emaldo_slots": len(modes),
+            "emaldo_slots_today": len(today_modes),
+            "emaldo_slots_tomorrow": len(tomorrow_modes),
+        }
 
 
 class UserScheduleChartSensor(_BaseOptimizerSensor):
