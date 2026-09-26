@@ -1,5 +1,36 @@
 # Changes
 
+## v0.3.20
+
+### Added
+
+- **Mode-count attributes on `Emaldo Schedule Chart`** — the chart now reports
+  `emaldo_slots` (total in the card), `emaldo_slots_today` and
+  `emaldo_slots_tomorrow` alongside the `schedule` list. Emaldo's backend
+  returns either 96 or 192 fifteen-minute slots, so these make an upstream
+  one-day payload distinguishable from a sensor fault without opening the
+  log: a card whose second half is empty is an **upstream** condition when
+  `emaldo_slots_tomorrow` is `0`. Files: `sensor.py`, `README.md`.
+
+### Fixed
+
+- **Internal Schedule chart could never render tomorrow** — the 192-slot
+  allowance documented on `EmaldoScheduleChartSensor` was dead code.
+  `_split_result_by_day()` truncates `emaldo_modes` to 96 per day when it
+  halves the continuous result, and the sensor read the modes from
+  `last_result` only, so `min(len(modes), 192)` was capped at 96 upstream of
+  the check. The day-1 branch already reached into
+  `last_result_tomorrow` for price and solar, so the second day rendered
+  with real prices but no plan — an empty trailing half of the 48 h card. The
+  sensor now builds its mode window from `last_result` plus
+  `last_result_tomorrow` and reaches 192 slots as documented. A one-day
+  upstream payload is emitted as-is and **never padded**: fabricating 96 idle
+  slots would make the card look complete while misreporting what Emaldo
+  actually planned. `native_value` keeps its today-only summary contract, so
+  no existing dashboard changes. Regression tests:
+  `tests/test_emaldo_schedule_chart.py`. Files: `sensor.py`, `README.md`,
+  `manifest.json`.
+
 ## v0.3.19
 
 ### Added
