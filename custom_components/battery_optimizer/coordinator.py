@@ -59,6 +59,8 @@ from .const import (
     CONF_SOC_RECOVERY_BUFFER,
     DEFAULT_ENABLE_SOC_SAFEGUARD,
     DEFAULT_SOC_RECOVERY_BUFFER_PCT,
+    DEFAULT_VAT_MULTIPLIER,
+    DEFAULT_TRANSFER_FEE_BUY,
     LOW_SOC_RERUN_MARGIN_PCT,
     LOW_SOC_RERUN_THROTTLE_MIN,
     IDLE_GAP_RERUN_THROTTLE_MIN,
@@ -186,12 +188,83 @@ def _action_to_mode(action: str) -> int:
     return 0
 
 
+# OptimizationResult fields that accumulate over slots and therefore need a
+# per-day split (issue #25).  Day 1 comes from the snapshot optimize() captured
+# when the horizon crossed SLOTS_PER_DAY; day 2 is the continuous total minus
+# that snapshot, so day1 + day2 == continuous for every field listed here.
+# When a field is absent from the snapshot its loop never crossed the boundary
+# (single-day run, or an Emaldo plan that stopped early) and the whole value
+# belongs to day 1.
+_SPLIT_SCALAR_FIELDS: tuple[str, ...] = (
+    # 42 fields the old bare-constructor default, now split per day
+    "total_profit",
+    "baseline_cost",
+    "emaldo_cost",
+    "emaldo_grid_cost",
+    "emaldo_wear_total",
+    "emaldo_cycled_kwh",
+    "charge_slots",
+    "discharge_slots",
+    "idle_slots",
+    "cycled_kwh",
+    "wear_cost_total",
+    "net_profit",
+    "remaining_slots",
+    "baseline_import_kwh",
+    "baseline_export_kwh",
+    "baseline_import_cost",
+    "baseline_export_revenue",
+    "baseline_import_energy",
+    "baseline_import_transfer",
+    "baseline_import_tax",
+    "baseline_import_commission",
+    "baseline_export_energy",
+    "baseline_export_commission",
+    "grid_import_kwh",
+    "grid_export_kwh",
+    "grid_energy",
+    "grid_transfer",
+    "grid_tax",
+    "grid_commission",
+    "grid_export_energy",
+    "grid_export_commission",
+    "emaldo_import_kwh",
+    "emaldo_export_kwh",
+    "emaldo_import_energy",
+    "emaldo_import_transfer",
+    "emaldo_import_tax",
+    "emaldo_import_commission",
+    "emaldo_export_energy",
+    "emaldo_export_commission",
+    "sell_target_kwh",
+    "sell_revenue",
+    "sell_profit",
+)
+# Fields deliberately left unsplit: slots, emaldo_modes, thirdparty_pv_slots,
+# safeguard_slots and sell_slots are sliced per day above; reason is prose, and
+# the caller sets it on today only; trace is a run-level debug dict that is not
+# a per-day quantity, so today keeps it (unchanged) and tomorrow stays None.
+
+
 def _split_result_by_day(result: OptimizationResult) -> tuple[OptimizationResult, OptimizationResult]:
     def split_slots(offset: int) -> list[SlotPlan]:
         return [
             replace(slot, index=slot.index - offset)
             for slot in result.slots[offset:offset + SLOTS_PER_DAY]
         ]
+
+    snapshot = result.day1_totals or {}
+    day1: dict = {}
+    day2: dict = {}
+    for field_name in _SPLIT_SCALAR_FIELDS:
+        total = getattr(result, field_name)
+        first = snapshot.get(field_name)
+        if first is None:
+            day1[field_name] = total
+            day2[field_name] = 0 if isinstance(total, int) else 0.0
+        else:
+            day1[field_name] = first
+            day2[field_name] = total - first
 
     today = replace(
         result,
@@ -202,6 +275,8 @@ def _split_result_by_day(result: OptimizationResult) -> tuple[OptimizationResult
             slot for slot in result.safeguard_slots if slot < SLOTS_PER_DAY
         ],
         sell_slots=[slot for slot in result.sell_slots if slot < SLOTS_PER_DAY],
+        day1_totals=None,
+        **day1,
     )
     tomorrow = OptimizationResult(
         slots=split_slots(SLOTS_PER_DAY),
@@ -217,6 +292,7 @@ def _split_result_by_day(result: OptimizationResult) -> tuple[OptimizationResult
             for slot in result.sell_slots
             if slot >= SLOTS_PER_DAY
         ],
+        **day2,
     )
     return today, tomorrow
 
@@ -685,8 +761,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             discharge_efficiency=c.get(CONF_DISCHARGE_EFFICIENCY, 0.95),
             soc_min=c.get(CONF_SOC_MIN, 20),
             soc_max=c.get(CONF_SOC_MAX, 100),
-            vat_multiplier=c.get(CONF_VAT_MULTIPLIER, 1.255),
-            transfer_fee_buy=c.get(CONF_TRANSFER_FEE_BUY, 0.0572),
+            vat_multiplier=c.get(CONF_VAT_MULTIPLIER, DEFAULT_VAT_MULTIPLIER),
+            transfer_fee_buy=c.get(CONF_TRANSFER_FEE_BUY, DEFAULT_TRANSFER_FEE_BUY),
             sales_commission=c.get(CONF_SALES_COMMISSION, 0.002),
             base_load_kw=base_load_kw,
             wear_cost_per_kwh=c.get(CONF_BATTERY_WEAR_COST, 0.03),

@@ -21,6 +21,8 @@ from .const import (
     SLOTS_PER_DAY,
     SLOT_DURATION_HOURS,
     PUBLISH_CUTOFF_SLOT,
+    DEFAULT_VAT_MULTIPLIER,
+    DEFAULT_TRANSFER_FEE_BUY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,8 +46,8 @@ class BatteryConfig:
     soc_min: float = 20.0      # percent
     soc_max: float = 100.0     # percent
 
-    vat_multiplier: float = 1.255
-    transfer_fee_buy: float = 0.0572   # €/kWh
+    vat_multiplier: float = DEFAULT_VAT_MULTIPLIER
+    transfer_fee_buy: float = DEFAULT_TRANSFER_FEE_BUY   # €/kWh
     sales_commission: float = 0.002    # €/kWh
 
     base_load_kw: float = 0.5
@@ -198,6 +200,12 @@ class OptimizationResult:
     sell_target_kwh: float = 0.0   # battery kWh reserved for the sell window
     sell_revenue: float = 0.0      # gross sell € (battery + PV surpl.)
     sell_profit: float = 0.0       # net € after wear + round-trip + c_ref
+    # Day-boundary snapshot (issue #25): totals for slots [0, SLOTS_PER_DAY)
+    # only, captured inside optimize() when the horizon crosses the day
+    # boundary.  Day 2 = continuous total - this snapshot.  Keys are
+    # OptimizationResult field names for the scalars that accumulate per slot.
+    # None on single-day (96-slot) runs, which never cross the boundary.
+    day1_totals: dict | None = None
 
     @property
     def slot_values(self) -> list[int]:
@@ -2176,8 +2184,47 @@ def optimize(
     grid_import_kwh = grid_export_kwh = 0.0
     g_import_energy = g_import_transfer = g_import_tax = g_import_commission = 0.0
     g_export_energy = g_export_commission = 0.0
+    # Issue #25: day-boundary snapshot (None until the horizon crosses day 2).
+    day1_totals: dict | None = None
 
     for s in range(n):
+        # Issue #25: freeze the day-1 totals before slot SLOTS_PER_DAY is
+        # accumulated, so the coordinator can split the 192-slot totals.
+        if s == SLOTS_PER_DAY:
+            day1_totals = {
+                "total_profit": baseline_cost - actual_cost,
+                "baseline_cost": baseline_cost,
+                "charge_slots": n_charge,
+                "discharge_slots": n_discharge,
+                "idle_slots": n_idle,
+                "cycled_kwh": cycled_kwh,
+                "wear_cost_total": wear_cost * cycled_kwh,
+                "net_profit": (baseline_cost - actual_cost) - wear_cost * cycled_kwh,
+                "remaining_slots": max(0, SLOTS_PER_DAY - start_slot),
+                "baseline_import_kwh": baseline_import_kwh,
+                "baseline_export_kwh": baseline_export_kwh,
+                "baseline_import_cost": (
+                    bl_import_energy
+                    + bl_import_transfer
+                    + bl_import_tax
+                    + bl_import_commission
+                ),
+                "baseline_export_revenue": bl_export_energy - bl_export_commission,
+                "baseline_import_energy": bl_import_energy,
+                "baseline_import_transfer": bl_import_transfer,
+                "baseline_import_tax": bl_import_tax,
+                "baseline_import_commission": bl_import_commission,
+                "baseline_export_energy": bl_export_energy,
+                "baseline_export_commission": bl_export_commission,
+                "grid_import_kwh": grid_import_kwh,
+                "grid_export_kwh": grid_export_kwh,
+                "grid_energy": g_import_energy,
+                "grid_transfer": g_import_transfer,
+                "grid_tax": g_import_tax,
+                "grid_commission": g_import_commission,
+                "grid_export_energy": g_export_energy,
+                "grid_export_commission": g_export_commission,
+            }
         action = "none"
         slot_value = SLOT_NO_OVERRIDE
         profit = 0.0
@@ -2410,6 +2457,23 @@ def optimize(
                 continue
             if s >= len(emaldo_modes):
                 break
+            if s == SLOTS_PER_DAY and day1_totals is not None:
+                day1_totals.update(
+                    {
+                        "emaldo_grid_cost": emaldo_cost,
+                        "emaldo_wear_total": cfg.wear_cost_per_kwh * e_cycled,
+                        "emaldo_cost": emaldo_cost + cfg.wear_cost_per_kwh * e_cycled,
+                        "emaldo_cycled_kwh": e_cycled,
+                        "emaldo_import_kwh": e_import_total_kwh,
+                        "emaldo_export_kwh": e_export_total_kwh,
+                        "emaldo_import_energy": e_import_energy,
+                        "emaldo_import_transfer": e_import_transfer,
+                        "emaldo_import_tax": e_import_tax,
+                        "emaldo_import_commission": e_import_commission,
+                        "emaldo_export_energy": e_export_energy,
+                        "emaldo_export_commission": e_export_commission,
+                    }
+                )
             e_bp = buy_prices[s] if s < len(buy_prices) else 0.0
             e_sp = sell_prices[s] if s < len(sell_prices) else 0.0
             mode = emaldo_modes[s]
@@ -2590,6 +2654,9 @@ def optimize(
             key=lambda c: buy_prices[c],
             default=None,
         )
+        day1_sell_revenue = 0.0
+        day1_sell_profit = 0.0
+        day1_sell_target = 0.0
         for s, (kwh, _tier) in sell_plan.items():
             result_slots[s].action = "force_sell"
             result_slots[s].slot_value = SLOT_IDLE  # device idles/exports
@@ -2603,6 +2670,19 @@ def optimize(
                     * cfg.round_trip_factor
                     - c_ref
                 ) * kwh
+            # sell_* accumulate onto the result after construction, so the
+            # day-1 snapshot has to be extended here too (issue #25).
+            if day1_totals is not None and s < SLOTS_PER_DAY:
+                day1_sell_revenue += sell_prices[s] * kwh
+                if _tier == "battery":
+                    day1_sell_target += kwh
+                if c_ref_idx is not None:
+                    c_ref = buy_prices[c_ref_idx]
+                    day1_sell_profit += (
+                        (sell_prices[s] - cfg.wear_cost_per_kwh)
+                        * cfg.round_trip_factor
+                        - c_ref
+                    ) * kwh
         charge_plan = _plan_forced_sell_charge(
             cfg,
             buy_prices,
@@ -2623,6 +2703,14 @@ def optimize(
             result.sell_revenue,
             result.sell_profit,
         )
+        if day1_totals is not None:
+            day1_totals["sell_revenue"] = day1_sell_revenue
+            day1_totals["sell_profit"] = day1_sell_profit
+            day1_totals["sell_target_kwh"] = day1_sell_target
+
+    # Attached last so the snapshot covers the forced-sell totals that are
+    # accumulated onto the result after construction (issue #25).
+    result.day1_totals = day1_totals
 
     _LOGGER.info(
         "Optimization complete: savings=%.4f€ (baseline=%.4f, actual=%.4f, emaldo=%.4f), "

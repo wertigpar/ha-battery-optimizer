@@ -1,5 +1,36 @@
 # Changes
 
+## v0.3.21
+
+### Fixed
+
+- **Today/tomorrow totals were not split per day** — `_split_result_by_day()`
+  halved the 192-slot continuous result but constructed `tomorrow` with a bare
+  `OptimizationResult()`, so every accumulating scalar defaulted to `0.0` while
+  `today` kept the *full* two-day value. The tomorrow cost/savings sensors
+  therefore reported a 0 € cost against a full baseline, and the day's
+  percentages were wrong in both directions. `optimize()` now captures a
+  day-boundary snapshot (`OptimizationResult.day1_totals`) when the horizon
+  crosses slot 96; day 1 is read from the snapshot and day 2 is
+  `continuous - day1`, so `day1 + day2 == continuous` for all 42
+  accumulating scalars. The snapshot is extended for the Emaldo and
+  forced-sell totals, which are accumulated after the main loop; a run that
+  never crosses the boundary (single-day, or an Emaldo plan that stopped
+  early) attributes the whole value to day 1 rather than dropping it.
+  Regression tests: `tests/test_two_day_horizon.py` (12 cases, including a
+  real forced-sell window straddling the boundary).
+
+- **Runtime transfer-fee default disagreed with the config-flow default** —
+  `coordinator.py` and the `BatteryConfig` dataclass each hardcoded
+  `0.0572` while `const.py` and the config flow used `0.0776`. Any entry
+  lacking an explicit `transfer_fee_buy` key, and any direct `BatteryConfig`
+  construction, priced imports 24% below the configured value, skewing every
+  cost, savings and plan-cost sensor. No migration exists for the key, so the
+  two paths could diverge indefinitely. Both sites now use
+  `DEFAULT_TRANSFER_FEE_BUY` / `DEFAULT_VAT_MULTIPLIER`; `const.py` is the
+  single source of truth. The value is confirmed VAT-inclusive, and the
+  constant's comment now says so.
+
 ## v0.3.20
 
 ### Added

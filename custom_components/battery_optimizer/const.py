@@ -66,7 +66,7 @@ SOLAR_FORECAST_P10 = "p10"  # Solcast 10th-percentile (pessimistic, weather-awar
 
 # ── Defaults ─────────────────────────────────────────────────────────
 DEFAULT_VAT_MULTIPLIER = 1.255       # 25.5% Finnish electricity VAT
-DEFAULT_TRANSFER_FEE_BUY = 0.0776    # €/kWh transfer + tax
+DEFAULT_TRANSFER_FEE_BUY = 0.0776    # €/kWh transfer + tax, VAT-inclusive
 DEFAULT_SALES_COMMISSION = 0.003     # €/kWh retailer commission on feed-in
 DEFAULT_BATTERY_CAPACITY_KWH = 15.0
 DEFAULT_MAX_CHARGE_KW = 10.0
