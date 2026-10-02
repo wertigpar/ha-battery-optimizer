@@ -137,6 +137,7 @@ from .optimizer import (
     OptimizationResult,
     SlotPlan,
     compute_prices,
+    compute_solar_confidence_ratio,
     interpolate_solar_to_15min,
     optimize,
     speculative_precharge_slots,
@@ -1022,6 +1023,44 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # commutes with the linear interpolation, so scaling AFTER it yields
         # the same profile as scaling the 30-min slots.
         return [v * self._solar_scale for v in forecast_15]
+
+    def _get_solar_confidence_ratio(self, which: str = "today") -> float | None:
+        """p10/p50 energy ratio for the requested day, or None if unavailable.
+
+        Kept separate from _get_solcast_forecast so that method's list return
+        type and all five existing call sites stay untouched.  The HA state
+        cache makes the second read cheap.
+        """
+        sensor_id = (
+            self.config[CONF_SOLCAST_TODAY]
+            if which == "today"
+            else self.config[CONF_SOLCAST_TOMORROW]
+        )
+        state = self.hass.states.get(sensor_id)
+        if state is None:
+            _LOGGER.debug("Solcast sensor %s not found for confidence", sensor_id)
+            return None
+        try:
+            return compute_solar_confidence_ratio(state.attributes.get("detailedForecast"))
+        except (AttributeError, TypeError, ValueError) as err:
+            # Never let a malformed forecast payload abort the coordinator
+            # update - degrade to "no confidence information" instead.
+            _LOGGER.debug("Solcast confidence ratio unavailable for %s: %s", sensor_id, err)
+            return None
+
+    def _solar_confidence_ratio_for_plan(self) -> float | None:
+        """Most conservative (lowest) confidence across the planned days.
+
+        A low ratio on either day justifies charging, so the minimum is the
+        safe choice.  Returns None when neither day yields a ratio.
+        """
+        ratios = [
+            r for r in (
+                self._get_solar_confidence_ratio("today"),
+                self._get_solar_confidence_ratio("tomorrow"),
+            ) if r is not None
+        ]
+        return min(ratios) if ratios else None
 
     def _resolve_solar_scale(self) -> float:
         """Resolve the whole-day solar scale: manual config or auto-tune.
@@ -2046,6 +2085,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._solar_regime and self._solar_regime["engaged"]
                 ),
                 total_slots=len(buy_prices) + len(buy_tom),
+                solar_confidence_ratio=self._solar_confidence_ratio_for_plan(),
             )
             result, result_tomorrow = _split_result_by_day(continuous_result)
             result.reason = reason
@@ -2065,6 +2105,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 future_min_buy=None,
                 future_grid_charge_needed=None,
+                solar_confidence_ratio=self._solar_confidence_ratio_for_plan(),
             )
             result.reason = reason
             self._last_result_tomorrow = None
