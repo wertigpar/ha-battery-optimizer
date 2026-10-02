@@ -23,6 +23,7 @@ from .const import (
     PUBLISH_CUTOFF_SLOT,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_TRANSFER_FEE_BUY,
+    DEFAULT_GRID_CHARGE_SOLAR_AWARE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,6 +62,9 @@ class BatteryConfig:
     # surplus absorption (over-forecast safety — never plan around solar that
     # may not arrive).  1.0 = trust the forecast fully.
     solar_forecast_margin: float = 0.85
+    # 0.0 = pre-0.3.22 sizing. 1.0 = size the Case B grid charge against a
+    # pessimistic solar estimate (issue #26). Blends linearly in between.
+    grid_charge_solar_aware: float = DEFAULT_GRID_CHARGE_SOLAR_AWARE
 
     # SoC floor safeguard — keep-alive charging that prevents the battery
     # idle drain from pulling SoC below soc_min on cloudy/no-arbitrage days.
@@ -369,6 +373,41 @@ def _soc_to_discharge_target(soc_min: float) -> int:
     """
     target = max(int(soc_min), 0)
     return (256 - target) & 0xFF
+
+
+def _case_b_grid_charge(
+    cfg: BatteryConfig,
+    soc_max_kwh: float,
+    current_soc_kwh: float,
+    available_soc: float,
+    solar_confidence_ratio: float | None,
+) -> float:
+    """How much grid charging may fund toward soc_max (Case B round trip).
+
+    At confidence 0.0 this returns the pre-0.3.22 value
+    ``max(0.0, soc_max_kwh - current_soc_kwh)`` exactly, so the default
+    configuration is byte-identical.
+
+    Above 0.0 the amount blends toward what solar will *not* fill.  The
+    ceiling uses a pessimistic SoC scaled by the forecast's own p10/p50
+    ratio, so a day whose forecast disagrees with itself keeps a large
+    ceiling and still charges, while a confident clear day charges nothing.
+
+    The ceiling is clamped to ``full``: soc_max minus current SoC is the most
+    energy that can physically be charged, so no solar estimate or ratio may
+    raise the allowance above it.  The clamp is also what makes an unconfident
+    day degrade exactly to the legacy headroom.
+    """
+    full = max(0.0, soc_max_kwh - current_soc_kwh)
+    w = float(cfg.grid_charge_solar_aware)
+    if w <= 0.0:
+        return full
+    w = min(1.0, w)
+    ratio = 1.0 if solar_confidence_ratio is None else float(solar_confidence_ratio)
+    ratio = max(0.0, min(1.0, ratio))
+    pessimistic_soc = available_soc * ratio
+    solar_ceiling = min(full, max(0.0, soc_max_kwh - pessimistic_soc))
+    return full * (1.0 - w) + solar_ceiling * w
 
 
 def speculative_precharge_slots(

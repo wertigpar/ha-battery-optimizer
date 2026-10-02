@@ -43,6 +43,7 @@ CONF_ENABLE_PV_STRATEGY = "enable_pv_strategy"
 CONF_SOLAR_SELL_MIN_FORECAST_KWH = "solar_sell_min_forecast_kwh"
 CONF_ENABLE_EMALDO_CONTROL = "enable_emaldo_control"
 CONF_SOLAR_FORECAST_MODE = "solar_forecast_mode"
+CONF_GRID_CHARGE_SOLAR_AWARE = "grid_charge_solar_aware"
 CONF_SOLAR_FORECAST_SCALE = "solar_forecast_scale"
 CONF_SOLAR_ACTUAL_SENSOR = "solar_actual_sensor"
 
@@ -102,6 +103,7 @@ DEFAULT_ENABLE_PV_STRATEGY = False
 DEFAULT_ENABLE_EMALDO_CONTROL = True
 DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH = 10.0  # kWh; below this, cloudy day → skip
 DEFAULT_SOLAR_FORECAST_MODE = SOLAR_FORECAST_P10  # conservative planning by default
+DEFAULT_GRID_CHARGE_SOLAR_AWARE = 0.0  # 0.0 = legacy sizing (issue #26 off)
 
 # ── Speculative grid pre-charge defaults ───────────────────────────
 DEFAULT_PRECHARGE_ENABLED = False           # opt-in feature
