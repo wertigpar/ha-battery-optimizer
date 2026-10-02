@@ -79,6 +79,7 @@ from .const import (
     CONF_ENABLE_EMALDO_CONTROL,
     CONF_SOLAR_FORECAST_MODE,
     CONF_SOLAR_FORECAST_SCALE,
+    CONF_GRID_CHARGE_SOLAR_AWARE,
     CONF_SOLAR_ACTUAL_SENSOR,
     CONF_GRID_IMPORT_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
@@ -109,6 +110,7 @@ from .const import (
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_SOLAR_FORECAST_MODE,
     DEFAULT_SOLAR_FORECAST_SCALE,
+    DEFAULT_GRID_CHARGE_SOLAR_AWARE,
     DEFAULT_GRID_IMPORT_SENSOR,
     DEFAULT_GRID_EXPORT_SENSOR,
     DEFAULT_RULE_RETENTION_DAYS,
@@ -764,6 +766,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             soc_max=c.get(CONF_SOC_MAX, 100),
             vat_multiplier=c.get(CONF_VAT_MULTIPLIER, DEFAULT_VAT_MULTIPLIER),
             transfer_fee_buy=c.get(CONF_TRANSFER_FEE_BUY, DEFAULT_TRANSFER_FEE_BUY),
+            grid_charge_solar_aware=c.get(
+                CONF_GRID_CHARGE_SOLAR_AWARE, DEFAULT_GRID_CHARGE_SOLAR_AWARE
+            ),
             sales_commission=c.get(CONF_SALES_COMMISSION, 0.002),
             base_load_kw=base_load_kw,
             wear_cost_per_kwh=c.get(CONF_BATTERY_WEAR_COST, 0.03),

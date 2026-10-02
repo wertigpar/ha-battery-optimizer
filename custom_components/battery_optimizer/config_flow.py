@@ -65,6 +65,7 @@ from .const import (
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
     CONF_SOLAR_FORECAST_MODE,
     CONF_SOLAR_FORECAST_SCALE,
+    CONF_GRID_CHARGE_SOLAR_AWARE,
     CONF_SOLAR_ACTUAL_SENSOR,
     CONF_GRID_IMPORT_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
@@ -114,6 +115,7 @@ from .const import (
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_SOLAR_FORECAST_MODE,
     DEFAULT_SOLAR_FORECAST_SCALE,
+    DEFAULT_GRID_CHARGE_SOLAR_AWARE,
     DEFAULT_SOLAR_ACTUAL_SENSOR,
     DEFAULT_GRID_IMPORT_SENSOR,
     DEFAULT_GRID_EXPORT_SENSOR,
@@ -338,6 +340,12 @@ def _build_schema(
                     CONF_SOLAR_FORECAST_SCALE, DEFAULT_SOLAR_FORECAST_SCALE
                 ),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=SOLAR_SCALE_MAX)),
+            vol.Optional(
+                CONF_GRID_CHARGE_SOLAR_AWARE,
+                default=d.get(
+                    CONF_GRID_CHARGE_SOLAR_AWARE, DEFAULT_GRID_CHARGE_SOLAR_AWARE
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
             vol.Optional(
                 CONF_SOLAR_ACTUAL_SENSOR,
                 default=d.get(
