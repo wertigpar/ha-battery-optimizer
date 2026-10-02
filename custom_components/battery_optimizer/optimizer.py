@@ -359,6 +359,25 @@ def interpolate_solar_to_15min(slots_30min: list[float]) -> list[float]:
     return result[:SLOTS_PER_DAY]
 
 
+def solar_confidence_ratio(detailed: list[dict] | None) -> float | None:
+    """p10/p50 energy ratio of a Solcast ``detailedForecast``.
+
+    Returns None when the forecast is absent or p50 energy is zero, in which
+    case no confidence information exists and callers must treat it as 1.0.
+    The ratio is energy-weighted, so one large low-p10 slot dominates, which
+    is the behaviour we want.  The ``_solar_scale`` multiplier is deliberately
+    excluded: it is a constant on both series and would cancel anyway.
+    """
+    if not detailed or not isinstance(detailed, list):
+        return None
+    p50 = sum(float(s.get("pv_estimate", 0.0) or 0.0) for s in detailed)
+    if p50 <= 0.0:
+        return None
+    p10 = sum(float(s.get("pv_estimate10", s.get("pv_estimate", 0.0)) or 0.0)
+              for s in detailed)
+    return max(0.0, min(1.0, p10 / p50))
+
+
 def _soc_to_charge_target(soc_max: float) -> int:
     """Convert a SoC max % to an emaldo charge slot value.
 
@@ -1577,6 +1596,7 @@ def optimize(
     solar_regime_engaged: bool = False,
     future_min_buy: float | None = None,
     future_grid_charge_needed: float | None = None,
+    solar_confidence_ratio: float | None = None,
     case_a_floor: float | None = None,
     total_slots: int = SLOTS_PER_DAY,
 ) -> OptimizationResult:
@@ -2102,7 +2122,9 @@ def optimize(
     # soc_max (already cheapest-sorted).  On cloudy days the pass charges
     # at most up to soc_max (check below), so this cannot over-fill.
     if profitable_charge:
-        grid_charge_needed += max(0.0, soc_max_kwh - current_soc_kwh)
+        grid_charge_needed += _case_b_grid_charge(
+            cfg, soc_max_kwh, current_soc_kwh, available_soc, solar_confidence_ratio
+        )
 
     # Forward-sim from the true current SoC (not the solar-only end-state).
     # Morning cheap slots charge from where the battery actually is, noon
@@ -2626,6 +2648,14 @@ def optimize(
             "mode": "split" if solar_full_recharge else "combined",
             "night_drain_applied": night_drain_plan is not None,
             "grid_charge_needed": round(grid_charge_needed, 3),
+            "grid_charge_needed_solar_ceiling": round(
+                _case_b_grid_charge(
+                    cfg, soc_max_kwh, current_soc_kwh, available_soc, solar_confidence_ratio
+                ), 3
+            ),
+            "solar_confidence_ratio": (
+                None if solar_confidence_ratio is None else round(float(solar_confidence_ratio), 4)
+            ),
         }
         if night_drain_plan is not None and initial_soc_pct is not None:
             trace["edge_pct"] = edge_pct
