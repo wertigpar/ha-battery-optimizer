@@ -11,6 +11,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta
 import json
 import logging
+import math
 import os
 from typing import Any
 
@@ -102,7 +103,7 @@ from .const import (
     DEFAULT_PRECHARGE_PUBLISH_HOUR,
     NORD_POOL_PUBLISH_TZ,
     NORD_POOL_PUBLISH_HOUR,
-    PUBLISH_CUTOFF_SLOT,    SOLAR_FORECAST_P10,
+    PUBLISH_CUTOFF_SLOT,    SOLAR_FORECAST_P10, SOLAR_FORECAST_P50,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
@@ -1030,12 +1031,37 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return [v * self._solar_scale for v in forecast_15]
 
     def _get_solar_confidence_ratio(self, which: str = "today") -> float | None:
-        """p10/p50 energy ratio for the requested day, or None if unavailable.
+        """p10/p50 dispersion ratio for the requested day, or None if unavailable.
 
         Kept separate from _get_solcast_forecast so that method's list return
-        type and all five existing call sites stay untouched.  The HA state
+        type and all six existing call sites stay untouched.  The HA state
         cache makes the second read cheap.
+
+        Two guards short-circuit before the (expensive) ``detailedForecast``
+        parse:
+
+        * Feature off — nothing reads the value, so skip ~288 dicts of parsing.
+        * Forecast mode is P10 — ``available_soc`` is then built from the p10
+          series and already carries the pessimism.  Multiplying it by the
+          p10/p50 ratio *again* would double-discount: a p10 of 6.0 at ratio
+          0.60 becomes 3.6, i.e. forecasting 36 % of p50, a percentile Solcast
+          never issues.  The ratio is only the right correction when
+          ``available_soc`` is p50-based, so it is forced to 1.0 in P10 mode.
+          (This looks like an obvious bug to a reader who does not know
+          ``available_soc`` is already pessimistic — hence the note.)
         """
+        if not self._grid_charge_solar_aware_enabled():
+            return None
+        forecast_mode = self.config.get(
+            CONF_SOLAR_FORECAST_MODE, DEFAULT_SOLAR_FORECAST_MODE
+        )
+        if forecast_mode != SOLAR_FORECAST_P50:
+            _LOGGER.debug(
+                "Solar forecast mode %s already discounts p10; "
+                "skipping the p10/p50 dispersion ratio",
+                forecast_mode,
+            )
+            return 1.0
         sensor_id = (
             self.config[CONF_SOLCAST_TODAY]
             if which == "today"
@@ -1053,12 +1079,36 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Solcast confidence ratio unavailable for %s: %s", sensor_id, err)
             return None
 
+    def _grid_charge_solar_aware_enabled(self) -> bool:
+        """True when the solar-aware blend weight is above 0.
+
+        Reads the entry config directly (the same source
+        ``_build_battery_config`` uses) so the check needs no BatteryConfig.
+        A None/NaN value reads as disabled, matching the legacy fallback in
+        ``_case_b_grid_charge``.
+        """
+        try:
+            weight = float(
+                self.config.get(
+                    CONF_GRID_CHARGE_SOLAR_AWARE, DEFAULT_GRID_CHARGE_SOLAR_AWARE
+                )
+                or 0.0
+            )
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(weight) and weight > 0.0
+
     def _solar_confidence_ratio_for_plan(self) -> float | None:
         """Most conservative (lowest) confidence across the planned days.
 
         A low ratio on either day justifies charging, so the minimum is the
-        safe choice.  Returns None when neither day yields a ratio.
+        safe choice.  Only valid for a plan whose ``available_soc`` spans both
+        days — a today-only plan must use ``_get_solar_confidence_ratio`` for
+        today alone, or an overcast *tomorrow* inflates today's charge.
+        Returns None when neither day yields a ratio.
         """
+        if not self._grid_charge_solar_aware_enabled():
+            return None
         ratios = [
             r for r in (
                 self._get_solar_confidence_ratio("today"),
@@ -2110,7 +2160,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 future_min_buy=None,
                 future_grid_charge_needed=None,
-                solar_confidence_ratio=self._solar_confidence_ratio_for_plan(),
+                # Today-only plan: `solar` and `available_soc` are today's
+                # forecast only, so the ratio must be today's too. Taking the
+                # min across both days let an overcast *tomorrow* inflate
+                # today's overnight charge — the waste #26 exists to stop.
+                solar_confidence_ratio=self._get_solar_confidence_ratio("today"),
             )
             result.reason = reason
             self._last_result_tomorrow = None

@@ -21,9 +21,50 @@
   nothing. **At the 0.0 default the optimizer output is unchanged.**
 
   Both the ratio and the computed ceiling are exposed in the plan trace as
-  `solar_confidence_ratio` and `grid_charge_needed_solar_ceiling`. Files:
+  `solar_confidence_ratio` and `grid_charge_needed_solar_ceiling` — but only when
+  the option is enabled. At the 0.0 default `grid_charge_needed_solar_ceiling`
+  is `null`, because there the ceiling has no solar term at all and publishing
+  the plain legacy headroom under that name would misdescribe it. Files:
   `optimizer.py`, `coordinator.py`, `const.py`, `config_flow.py`, translations.
   Regression tests: `tests/test_grid_charge_solar_aware.py`.
+
+### Fixed
+
+- **A today-only plan used tomorrow's forecast confidence** — the `else` branch
+  taken when tomorrow's prices are unavailable plans today alone and feeds it
+  today's solar series, but it passed `min(today, tomorrow)` confidence. An
+  overcast *tomorrow* therefore inflated *today's* overnight charge — the waste
+  this feature exists to stop. The branch now uses today's ratio; the minimum
+  across both days stays on the two-day continuous plan, whose `available_soc`
+  genuinely spans both.
+- **Unknown forecast confidence fell back to "fully confident"** — a Solcast
+  payload carrying `pv_estimate` but no `pv_estimate10` reported a p10/p50 ratio
+  of 1.0, which shrank the overnight charge to zero and left the battery empty
+  into the morning peak. `compute_solar_confidence_ratio()` now returns `None`
+  when no slot reports `pv_estimate10` (a partial payload is answered from the
+  slots that do, comparing like with like), and `_case_b_grid_charge()` treats
+  `None` as *legacy sizing* rather than as full confidence.
+- **The p10/p50 discount was applied on top of an already-pessimistic forecast**
+  — `available_soc` is built from the series selected by `solar_forecast_mode`,
+  which defaults to P10. Multiplying that by the dispersion ratio again
+  double-discounted, forecasting a percentile Solcast never issues. The ratio
+  is now applied only in P50 mode, where it is the single correct correction;
+  in P10 mode the pessimism is already inside `available_soc`.
+- **`grid_charge_needed_solar_ceiling` was published without a solar term** —
+  see the note above; the key is now `null` unless the option is enabled.
+- **A `None` blend weight aborted the coordinator update** — `float(None)` raised
+  `TypeError` where `math.isfinite()` already guarded `NaN`/`inf` for the same
+  corrupted-config case, which would have stopped battery control entirely. It
+  now falls back to legacy sizing.
+- **The forecast payload was parsed on every refresh with the feature off** —
+  ~288 dicts read for a value nothing consumed. The ratio readers now return
+  early when the option is disabled.
+- Docstring inaccuracy: the confidence-ratio helper claimed to leave "all five"
+  `_get_solcast_forecast` call sites untouched; there are six.
+- The config-flow description claimed `1.0` sizes the charge against a
+  pessimistic (p10) forecast. It does not select p10 — it applies a p10/p50
+  dispersion discount on top of the configured mode. Reworded in `strings.json`
+  and all five translations.
 
 ## v0.3.21
 

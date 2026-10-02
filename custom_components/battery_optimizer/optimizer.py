@@ -362,19 +362,38 @@ def interpolate_solar_to_15min(slots_30min: list[float]) -> list[float]:
 def compute_solar_confidence_ratio(detailed: list[dict] | None) -> float | None:
     """p10/p50 energy ratio of a Solcast ``detailedForecast``.
 
-    Returns None when the forecast is absent or p50 energy is zero, in which
-    case no confidence information exists and callers must treat it as 1.0.
+    Returns None when the forecast is absent, when p50 energy is zero, or when
+    **no slot reports ``pv_estimate10`` at all** — in every such case no
+    confidence information exists and the caller must fall back to legacy
+    sizing.  The middle case used to substitute p50 for a missing p10, which
+    reported *perfect* confidence and collapsed the overnight charge to zero;
+    that is the unsafe direction and contradicts the module rule "when
+    uncertain, charge more".
+
+    A partially populated payload is answered from the slots that do report
+    p10.  Both totals are then restricted to those slots so the result stays a
+    true p10/p50 ratio; dividing a partial p10 by the *whole-day* p50 would
+    deflate it purely by the un-covered slots, i.e. bias confidence downward.
+
     The ratio is energy-weighted, so one large low-p10 slot dominates, which
     is the behaviour we want.  The ``_solar_scale`` multiplier is deliberately
     excluded: it is a constant on both series and would cancel anyway.
     """
     if not detailed or not isinstance(detailed, list):
         return None
-    p50 = sum(float(s.get("pv_estimate", 0.0) or 0.0) for s in detailed)
-    if p50 <= 0.0:
+    p10 = 0.0
+    p50 = 0.0
+    covered = False
+    for slot in detailed:
+        # `is None` (rather than falsy) so a reported 0.0 counts as coverage.
+        raw10 = slot.get("pv_estimate10")
+        if raw10 is None:
+            continue
+        covered = True
+        p10 += float(raw10 or 0.0)
+        p50 += float(slot.get("pv_estimate", 0.0) or 0.0)
+    if not covered or p50 <= 0.0:
         return None
-    p10 = sum(float(s.get("pv_estimate10", s.get("pv_estimate", 0.0)) or 0.0)
-              for s in detailed)
     return max(0.0, min(1.0, p10 / p50))
 
 
@@ -424,17 +443,28 @@ def _case_b_grid_charge(
         current_soc_kwh: true current battery-internal SoC, kWh; may be slightly
             negative.
         solar_confidence_ratio: forecast p10/p50 ratio.  ``None`` means no
-            disagreement information, i.e. treat as fully confident (1.0).
+            disagreement information was available, which is treated as
+            *legacy sizing* rather than as full confidence: an unknown ratio
+            must not read as a confident forecast.
     """
     full = max(0.0, soc_max_kwh - current_soc_kwh)
-    w = float(cfg.grid_charge_solar_aware)
+    # `or 0.0` absorbs a None weight (corrupted config) the same way the
+    # isfinite check below absorbs NaN/inf: fall back to legacy sizing instead
+    # of raising TypeError and aborting the whole coordinator update.
+    w = float(cfg.grid_charge_solar_aware or 0.0)
     # Non-finite weights (a corrupted config value; vol.Range does not reject
     # NaN) must fall back to legacy sizing, never read as "fully on".
     if not math.isfinite(w) or w <= 0.0:
         return full
     w = min(1.0, w)
-    ratio = 1.0 if solar_confidence_ratio is None else float(solar_confidence_ratio)
-    ratio = max(0.0, min(1.0, ratio))
+    if solar_confidence_ratio is None:
+        # No p10/p50 dispersion information at all. Blending toward a
+        # "solar will definitely fill it" ceiling of zero would leave the
+        # battery empty into the morning peak — the exact waste this sizing
+        # exists to prevent. Without a ratio there is no evidence solar fills
+        # it, so behave exactly like legacy.
+        return full
+    ratio = max(0.0, min(1.0, float(solar_confidence_ratio)))
     pessimistic_soc = available_soc * ratio
     solar_ceiling = min(full, max(0.0, soc_max_kwh - pessimistic_soc))
     return full * (1.0 - w) + solar_ceiling * w
@@ -2648,10 +2678,20 @@ def optimize(
             "mode": "split" if solar_full_recharge else "combined",
             "night_drain_applied": night_drain_plan is not None,
             "grid_charge_needed": round(grid_charge_needed, 3),
-            "grid_charge_needed_solar_ceiling": round(
-                _case_b_grid_charge(
-                    cfg, soc_max_kwh, current_soc_kwh, available_soc, solar_confidence_ratio
-                ), 3
+            # Only populated when the option is on. At the 0.0 default
+            # _case_b_grid_charge returns the plain legacy headroom, which has
+            # no solar term at all — publishing that under a key called "solar
+            # ceiling" would be a lie for every user who never opted in.
+            "grid_charge_needed_solar_ceiling": (
+                round(
+                    _case_b_grid_charge(
+                        cfg, soc_max_kwh, current_soc_kwh,
+                        available_soc, solar_confidence_ratio,
+                    ),
+                    3,
+                )
+                if float(cfg.grid_charge_solar_aware or 0.0) > 0.0
+                else None
             ),
             "solar_confidence_ratio": (
                 None if solar_confidence_ratio is None else round(float(solar_confidence_ratio), 4)
