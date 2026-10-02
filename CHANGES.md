@@ -1,5 +1,30 @@
 # Changes
 
+## v0.3.22
+
+### Added
+
+- **Solar-aware overnight grid charging (opt-in, off by default)** — the Case B
+  round-trip pass sized its charge as the full headroom to `soc_max`
+  (`soc_max - current SoC`) and ignored `available_soc`, the solar-only projected
+  state of charge. On a day whose solar fills the battery anyway, the charged
+  energy simply displaced solar that was then exported, so the system bought at
+  the full import price and sold at the export price. Reported in #26 as roughly
+  4-5 SEK on one night, with about 1 kWh of the charge useful (it carried the
+  battery over an expensive morning peak) and about 8 kWh wasted.
+
+  The new `grid_charge_solar_aware` option (0.0-1.0, default **0.0**) blends the
+  legacy size toward a ceiling derived from what solar will *not* fill. The
+  ceiling uses a pessimistic state of charge scaled by the forecast's own
+  p10/p50 energy ratio, so a day where the forecast disagrees with itself keeps
+  a large ceiling and still charges, while a confident clear day charges almost
+  nothing. **At the 0.0 default the optimizer output is unchanged.**
+
+  Both the ratio and the computed ceiling are exposed in the plan trace as
+  `solar_confidence_ratio` and `grid_charge_needed_solar_ceiling`. Files:
+  `optimizer.py`, `coordinator.py`, `const.py`, `config_flow.py`, translations.
+  Regression tests: `tests/test_grid_charge_solar_aware.py`.
+
 ## v0.3.21
 
 ### Fixed
