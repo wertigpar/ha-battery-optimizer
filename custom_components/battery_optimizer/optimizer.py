@@ -359,7 +359,7 @@ def interpolate_solar_to_15min(slots_30min: list[float]) -> list[float]:
     return result[:SLOTS_PER_DAY]
 
 
-def solar_confidence_ratio(detailed: list[dict] | None) -> float | None:
+def compute_solar_confidence_ratio(detailed: list[dict] | None) -> float | None:
     """p10/p50 energy ratio of a Solcast ``detailedForecast``.
 
     Returns None when the forecast is absent or p50 energy is zero, in which
