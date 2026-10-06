@@ -370,6 +370,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_sent_slots: list[int] | None = None
         # Manual selling (forced sell) actuator state
         self._manual_selling_active: bool = False
+        # Serialises the forced-sell start/stop sequence.  Two callers now
+        # reach it: the tail of an optimizer run and the 5-min forced-sell
+        # tick.  Without this lock a tick that decides to stop can interleave
+        # between the start path's number.set_value and switch.turn_on, so the
+        # switch ends up ON with _manual_selling_active False — a state no
+        # later stop can recover from.  NOT reentrant: the _locked helpers
+        # below assume it is already held.
+        self._forced_sell_lock: asyncio.Lock = asyncio.Lock()
         # Balancing state tracking
         self._balancing_sensor: str | None = None
         # Pinned Emaldo entry (from config, or auto-detected)
@@ -470,6 +478,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Emaldo control enable/disable
         self._emaldo_control_enabled: bool = self.config.get(
             CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
+        )
+        # Forced sell (manual selling) enable/disable.  Gates the 5-min tick so
+        # installs without the feature — the default — allocate neither a
+        # coroutine nor a task every 5 minutes, mirroring _pv_strategy_enabled
+        # on the PV reconcile loop.
+        self._forced_sell_enabled: bool = self.config.get(
+            CONF_FORCED_SELL_ENABLED, DEFAULT_FORCED_SELL_ENABLED
         )
         # Low-SoC forced re-run throttle
         self._last_low_soc_rerun: datetime | None = None
@@ -2693,8 +2708,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         sell window the window opened and closed between runs and nothing was
         ever sold. This is the tick-driven entry point the reconcile timer
         calls; it reads the clock itself so the caller needs no arguments.
+
+        _last_result is only ever assigned, never cleared on a failed run, so
+        without an age gate this would reinterpret an hours-old plan's
+        sell_slots against today's clock and sell at stale prices.
         """
+        if not self._forced_sell_enabled:
+            return
         if not self._emaldo_control_enabled or self._last_result is None:
+            return
+        if self._last_run is None:
+            return
+        opt_interval = self._config_int(
+            CONF_OPTIMIZER_INTERVAL, DEFAULT_OPTIMIZER_INTERVAL
+        )
+        if dt_util.now() - self._last_run > timedelta(minutes=opt_interval + 15):
+            _LOGGER.debug("Last plan too old to act on for forced sell")
             return
         await self._manage_manual_selling(self._last_result, dt_util.now())
 
@@ -2704,7 +2733,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Mirrors _pv_reconcile_callback: a cheap synchronous guard plus a
         scheduled task, so the timer callback never blocks the event loop.
+        The _forced_sell_enabled guard keeps the tick free for installs that
+        never enabled the feature.
         """
+        if not self._forced_sell_enabled:
+            return
         if not self._emaldo_control_enabled or self._last_result is None:
             return
         self.hass.async_create_task(self._evaluate_forced_sell())
@@ -2714,6 +2747,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """Start/stop emaldo manual selling per the forced-sell plan.
 
+        Entry point for both callers (optimizer run tail and the 5-min tick).
+        Takes _forced_sell_lock so the two cannot interleave, then delegates.
+        """
+        async with self._forced_sell_lock:
+            await self._manage_manual_selling_locked(result, now)
+
+    async def _manage_manual_selling_locked(
+        self, result: OptimizationResult, now: datetime
+    ) -> None:
+        """Body of _manage_manual_selling; caller already holds the lock.
+
         Entity-driven: stages the sell target on the manual_selling_target
         number, then toggles the manual_selling switch (verified write).
         Guards: integration disabled, no device id, plan window over,
@@ -2721,19 +2765,24 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         inverter auto-exports surplus).
         """
         if not self._emaldo_control_enabled:
-            await self._stop_manual_selling()
+            await self._stop_manual_selling_locked()
             return
         if not self.resolve_emaldo_device():
             return  # fail-safe: no selling, device just idles
         window = result.sell_slots or []
         if result.sell_target_kwh <= 0:
-            return  # PV-only window: inverter exports on its own
+            # PV-only window: the inverter exports on its own.  Stop rather
+            # than return — a plan that turns PV-only while a sell window is
+            # active must switch the sale off, or the tick re-enters this
+            # no-op every 5 minutes forever and the switch stays on.
+            await self._stop_manual_selling_locked()
+            return
         if not window:
-            await self._stop_manual_selling()
+            await self._stop_manual_selling_locked()
             return
         now_slot = int(now.hour * 4 + now.minute // 15)
         if now_slot < window[0] or now_slot > window[-1]:
-            await self._stop_manual_selling()
+            await self._stop_manual_selling_locked()
             return
         if self._manual_selling_active:
             return  # already running; re-check handled by plan re-run
@@ -2743,7 +2792,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         number_id = self._resolve_emaldo_entity(
             "manual_selling_target", domain="number"
         ) or "number.power_store_manual_selling_target"
-        self._manual_selling_active = True
         try:
             # Stage target first (number entity merges intended target while
             # switch is off), then enable the verified-write switch.
@@ -2755,15 +2803,28 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.hass.services.async_call(
                 "switch", "turn_on", {"entity_id": switch_id}, blocking=True,
             )
-            _LOGGER.info(
-                "Manual selling started: %d slots, target %.1f kWh",
-                len(window), result.sell_target_kwh,
-            )
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Failed to start manual selling: %s", err)
-            self._manual_selling_active = False
+            return
+        # Flag set only after the switch is verified on, so a failed or
+        # interrupted start never leaves a flag claiming to be selling.
+        self._manual_selling_active = True
+        _LOGGER.info(
+            "Manual selling started: %d slots, target %.1f kWh",
+            len(window), result.sell_target_kwh,
+        )
 
     async def _stop_manual_selling(self) -> None:
+        """Stop an active manual sale. Public entry point; takes the lock."""
+        async with self._forced_sell_lock:
+            await self._stop_manual_selling_locked()
+
+    async def _stop_manual_selling_locked(self) -> None:
+        """Stop an active manual sale; caller already holds the lock.
+
+        asyncio.Lock is not reentrant, so _manage_manual_selling_locked calls
+        this directly instead of re-entering _stop_manual_selling.
+        """
         if not self._manual_selling_active:
             return
         self._manual_selling_active = False
