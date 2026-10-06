@@ -1,5 +1,90 @@
 # Changes
 
+## v0.3.23
+
+### Fixed
+
+- **Forced sell now fires on its own schedule** — `manual_sell_schedule` could
+  be planned correctly and still export nothing. `_manage_manual_selling()` ran
+  only at the tail of a full optimizer run, so with `optimizer_interval` at
+  120 min a 45-minute sell window opened and closed between runs. Reported in
+  #23: four windows over four days produced zero export, and only one of them
+  contained a run. Evaluation now also runs on a dedicated 5-minute tick.
+
+- **Sell back to grid is enabled for the window, then restored** — Emaldo
+  refuses `Manual selling` while its sell-back switch is off, so a correctly
+  planned window still exported nothing. Measured in #23: with the switch off,
+  `Manual selling` read back off for 3 minutes, the battery sat flat at ~1.4 kW
+  covering the house and nothing was exported; with the switch on it converged
+  in 6 s, the battery went 8.2 → 9.0 kW and the grid −7.4 kW. Forced sell now
+  enables the switch when the window opens, remembers that *it* was the one that
+  flipped it, and turns it off again when the window closes.
+
+  The entity id comes from `_resolve_emaldo_entity("sell_back_to_grid",
+  domain="switch")`, falling back to `switch.power_store_sell_back_to_grid`. A
+  switch that was already on is never turned off — only the component's own
+  flip is undone — so users who keep Sell back to grid permanently on are
+  unaffected.
+
+  Grid-code compliance, anti-islanding and contractual export caps are enforced
+  by the Emaldo device itself at the HV layer, below this integration, so this
+  switch is a user preference rather than a regulatory interlock.
+
+- **An unclean restart could strand the switch on** — `async_shutdown` cannot
+  await, so nothing runs after a power loss. The window-open path now writes a
+  marker to `battery_optimizer_sell_back_to_grid.json` in the HA config
+  directory, and the restore is driven from the next `run_optimizer()` and from
+  every forced-sell tick until it settles. A failed restore keeps the marker and
+  is retried; the marker is cleared only after `switch.turn_off` succeeds.
+
+- **The forced-sell actuator was not safe to call from two places** — the new
+  tick and the optimizer-run tail both reach `_manage_manual_selling()`, which
+  set `_manual_selling_active` before two awaits. A tick firing at the slot
+  boundary could turn the switch off between `number.set_value` and
+  `switch.turn_on`, leaving it ON with the flag False — a state no later stop
+  could recover from. The start/stop sequence is now serialised behind an
+  `asyncio.Lock` (`_manage_manual_selling_locked` /
+  `_stop_manual_selling_locked`, neither reentrant, so internal stops call the
+  locked variant) and the flag is set only after `turn_on` succeeds. Three
+  further tick defects came out of the same review: the tick refuses a plan
+  older than `optimizer_interval + 15` minutes instead of reinterpreting an old
+  plan's `sell_slots` against today's clock; a plan that turns PV-only
+  mid-window now stops instead of leaving the switch on and re-entering the no-op
+  every 5 minutes; and the tick is gated on `forced_sell_enabled` so installs
+  without the feature allocate neither a coroutine nor a task.
+
+### Changed
+
+- **Forced sell is evaluated on a 5-minute tick, not only after an optimizer
+  run.** This is a behaviour change: forced sell can now act when no optimizer
+  run happened. The flip side is that a sell window shorter than 5 minutes could
+  still be missed. Real windows are 45–120 min (6–8 slots), so this is
+  theoretical, but the tick resolution is now the floor.
+- `switch.power_store_sell_back_to_grid` is now written by the component during
+  a forced-sell window only, and only if it was the component that turned it on.
+- Restart recovery is driven by the tick as well as the startup run, so an
+  unclean restart can leave the switch on for up to 5 minutes.
+
+### Verification gaps
+
+None of these are blockers.
+
+- No live Home Assistant test. `homeassistant` is not importable in the local
+  environment, so the config flow and the real service calls are covered by
+  `load_coordinator()` stub tests only. First real proof is a device deploy.
+- The idempotent restore is unit-tested against a mocked `hass`. A genuine power
+  loss mid-window on real hardware is untested.
+- The `sell_back_to_grid` entity id is unverified against a live Emaldo: if
+  Emaldo names the unique-id suffix differently the registry lookup returns
+  `None` and the fallback applies, correct only if the default matches their
+  slug.
+- Interaction with the PV sell switch is untested. Both switches are now driven
+  by the component on independent 5-minute timers, and nothing exercises them
+  diverging inside the same window.
+- `runtime_state.json` was deliberately not reused for the restore marker. If a
+  future change needs one store for all persisted coordinator state, this
+  sidecar should be folded in then.
+
 ## v0.3.22
 
 ### Added

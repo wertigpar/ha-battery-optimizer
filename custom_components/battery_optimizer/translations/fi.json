@@ -38,7 +38,7 @@
           "grid_import_sensor": "Sähkön tuonnin energialaskuri (kumulatiivinen, Wh tai kWh). Jätä tyhjäksi, jolloin linkitetyn Emaldo-laitteen tuontisensori haetaan automaattisesti; tai syötä kokoelman mittauksen laskuri (esim. EM24 `_total`) pilvettömään asennukseen.",
           
           "forced_sell_enabled": "Ota käyttöön pakotettu myynti (manuaalinen myyntiarbitraasi)",
-          "forced_sell_enabled_description": "Kaksitasoinen huippuhintamyynti: akkutaso myy varastoitua energiaa emaldo-manuaalimyynnin kytkimen kautta; PV-taso vapauttaa aurinkoylijäämän joutotilaan automaattista myyntiä varten. Oletus pois päältä.",
+          "forced_sell_enabled_description": "Kaksitasoinen huippuhintamyynti: akkutaso myy varastoitua energiaa emaldo-manuaalimyynnin kytkimen kautta; PV-taso vapauttaa aurinkoylijäämän joutotilaan automaattista myyntiä varten. Oletus pois päältä. Pakotettu myynti kytkee \"Myy takaisin verkkoon\" päälle ikkunan ajaksi ja pois päältä sen jälkeen. Itse kytkemäsi kytkimeen ei kosketa.",
           "forced_sell_max_kwh_pd": "Pakotetun myynnin enimmäisenergia (kWh/vrk)",
           "forced_sell_max_kwh_pd_description": "Päivittäinen energiabudjetti pakotetulle myynnille (akku + PV-taso). 0 = pakotettu myynti pois käytöstä.",
           "forced_sell_min_profit": "Minimivoitto myytyä kWh:ta kohti (€/kWh)",
@@ -117,7 +117,7 @@
                      "precharge_publish_hour_description": "Tunti (paikallinen aika, 24h), jolloin Nord Pool yleensä julkaisee seuraavan päivän hinnat. Jätä tyhjäksi automatiikkaa varten: rajahaarukka lasketaan Home Assistant -aikavyöhykkeestä, joten se on oikein kaikille Nord Pool -markkinoille. Aseta vain, jos hintälähteesi julkaisee eri hetkenä.",
             
             "forced_sell_enabled": "Ota käyttöön pakotettu myynti (manuaalinen myyntiarbitraasi)",
-            "forced_sell_enabled_description": "Kaksitasoinen huippuhintamyynti: akkutaso myy varastoitua energiaa emaldo-manuaalimyynnin kytkimen kautta; PV-taso vapauttaa aurinkoylijäämän joutotilaan automaattista myyntiä varten. Oletus pois päältä.",
+            "forced_sell_enabled_description": "Kaksitasoinen huippuhintamyynti: akkutaso myy varastoitua energiaa emaldo-manuaalimyynnin kytkimen kautta; PV-taso vapauttaa aurinkoylijäämän joutotilaan automaattista myyntiä varten. Oletus pois päältä. Pakotettu myynti kytkee \"Myy takaisin verkkoon\" päälle ikkunan ajaksi ja pois päältä sen jälkeen. Itse kytkemäsi kytkimeen ei kosketa.",
             "forced_sell_max_kwh_pd": "Pakotetun myynnin enimmäisenergia (kWh/vrk)",
             "forced_sell_max_kwh_pd_description": "Päivittäinen energiabudjetti pakotetulle myynnille (akku + PV-taso). 0 = pakotettu myynti pois käytöstä.",
             "forced_sell_min_profit": "Minimivoitto myytyä kWh:ta kohti (€/kWh)",

@@ -39,7 +39,7 @@
           "grid_export_sensor": "Nätexports energiräknare (ackumulerad, Wh eller kWh). Lämna tom för att auto-upptäcka den länkade Emaldo-enhetens export-sensor; eller ange en livstidsmätare (t.ex. en EM24 `_total`-räknare) för en installation utan moln.",
           
           "forced_sell_enabled": "Aktivera tvångsförsäljning (manuell säljarbitrage)",
-          "forced_sell_enabled_description": "Tvånivåexport vid pristoppar: batterinivån säljer lagrad energi via emaldos manuella säljomkopplare; PV-nivån släpper solöverskott till idle för automatisk export. Av som standard.",
+          "forced_sell_enabled_description": "Tvånivåexport vid pristoppar: batterinivån säljer lagrad energi via emaldos manuella säljomkopplare; PV-nivån släpper solöverskott till idle för automatisk export. Av som standard. Tvångsförsäljning slår på \"Sälj tillbaka till nätet\" under fönstret och stänger av det efteråt. En kopplare du själv håller på lämnas orörd.",
           "forced_sell_max_kwh_pd": "Max energi för tvångsförsäljning (kWh/dag)",
           "forced_sell_max_kwh_pd_description": "Daglig energibudget för tvångsförsäljning (batteri + PV-nivå). 0 = tvångsförsäljning avaktiverad.",
           "forced_sell_min_profit": "Min vinst per såld kWh (€/kWh)",
@@ -117,7 +117,7 @@
           "precharge_publish_hour_description": "Timme (lokal tid, 24h) då Nord Pool vanligtvis publicerar nästa dags priser. Lämna tomt för automatik: gränsen beräknas från din Home Assistant-tidszon och blir rätt för alla Nord Pool-marknader. Ange bara om din priskälla publicerar vid en annan tidpunkt.",
             
             "forced_sell_enabled": "Aktivera tvångsförsäljning (manuell säljarbitrage)",
-            "forced_sell_enabled_description": "Tvånivåexport vid pristoppar: batterinivån säljer lagrad energi via emaldos manuella säljomkopplare; PV-nivån släpper solöverskott till idle för automatisk export. Av som standard.",
+            "forced_sell_enabled_description": "Tvånivåexport vid pristoppar: batterinivån säljer lagrad energi via emaldos manuella säljomkopplare; PV-nivån släpper solöverskott till idle för automatisk export. Av som standard. Tvångsförsäljning slår på \"Sälj tillbaka till nätet\" under fönstret och stänger av det efteråt. En kopplare du själv håller på lämnas orörd.",
             "forced_sell_max_kwh_pd": "Max energi för tvångsförsäljning (kWh/dag)",
             "forced_sell_max_kwh_pd_description": "Daglig energibudget för tvångsförsäljning (batteri + PV-nivå). 0 = tvångsförsäljning avaktiverad.",
             "forced_sell_min_profit": "Min vinst per såld kWh (€/kWh)",
