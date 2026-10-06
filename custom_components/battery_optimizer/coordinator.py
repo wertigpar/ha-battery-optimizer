@@ -2718,8 +2718,20 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _last_result is only ever assigned, never cleared on a failed run, so
         without an age gate this would reinterpret an hours-old plan's
         sell_slots against today's clock and sell at stale prices.
+
+        Disabling forced sell mid-window stops the sale rather than orphaning
+        it: a bare ``return`` would leave the manual-selling switch on and the
+        Sell back to grid enable un-restored, with the sale running past its
+        window and nothing managing it.  So when the feature is off and
+        something is still active, tear down.  Deliberately above the
+        _last_result/_last_run/age gates — teardown must work even with no
+        usable plan.
         """
         if not self._forced_sell_enabled:
+            if self._manual_selling_active or self._sell_back_to_grid_saved:
+                # Public entry point on purpose: this coroutine does not hold
+                # _forced_sell_lock, and asyncio.Lock is not reentrant.
+                await self._stop_manual_selling()
             return
         if not self._emaldo_control_enabled or self._last_result is None:
             return
@@ -2740,9 +2752,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Mirrors _pv_reconcile_callback: a cheap synchronous guard plus a
         scheduled task, so the timer callback never blocks the event loop.
         The _forced_sell_enabled guard keeps the tick free for installs that
-        never enabled the feature.
+        never enabled the feature — but it checks the two active-state flags
+        first, so a mid-window disable still queues the teardown instead of
+        orphaning the sale, while an install with nothing active still
+        allocates no coroutine and no task.
         """
         if not self._forced_sell_enabled:
+            if self._manual_selling_active or self._sell_back_to_grid_saved:
+                self.hass.async_create_task(self._evaluate_forced_sell())
             return
         if not self._emaldo_control_enabled or self._last_result is None:
             return
@@ -2779,8 +2796,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         the switch, so a switch the user turned on themselves is never taken
         away again.
 
-        The flag is cleared after the call rather than before, so a failed
-        restore is retried by the next stop the 5-min tick issues.
+        The flag is cleared only once the service call has succeeded.  A failed
+        restore leaves it set, so the next stop the 5-min tick issues retries
+        it; clearing it on failure would discard the only record that a restore
+        is owed and strand the switch ON with nothing left to act on.
         """
         if not self._sell_back_to_grid_saved:
             return
@@ -2789,10 +2808,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.hass.services.async_call(
                 "switch", "turn_off", {"entity_id": sell_back_id}, blocking=True,
             )
-            _LOGGER.info("Restored %s to off after the window", sell_back_id)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Failed to restore %s: %s", sell_back_id, err)
+            _LOGGER.error(
+                "Failed to restore %s to off, retrying on the next forced-sell "
+                "tick: %s", sell_back_id, err,
+            )
+            return
         self._sell_back_to_grid_saved = None
+        _LOGGER.info("Restored %s to off after the window", sell_back_id)
 
     async def _manage_manual_selling(
         self, result: OptimizationResult, now: datetime
