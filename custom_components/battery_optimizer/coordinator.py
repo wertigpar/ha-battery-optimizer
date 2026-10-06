@@ -410,6 +410,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "battery_optimizer_runtime.json"
         )
         self._runtime_state_restored = False
+        # Issue #23: records that a forced-sell window left Emaldo's Sell back
+        # to grid switch on, so a restart mid-window can put it back off — the
+        # in-memory _sell_back_to_grid_saved flag dies with the process, and a
+        # power loss skips every restore path.  Its own sidecar rather than a
+        # runtime_state.json field: that file is day-scoped (rebuild_runtime
+        # rejects a stale last_run and needs plan_slots), while this marker has
+        # to outlive the day and is not a plan.
+        self._sell_back_to_grid_state_path = self.hass.config.path(
+            "battery_optimizer_sell_back_to_grid.json"
+        )
+        self._sell_back_to_grid_restored = False
         # Solar forecast scale — resolved per run, applied at the forecast
         # choke point. The last value used by a plan run is retained so the
         # NEXT accuracy computation can attribute the error to the scale that
@@ -1612,6 +1623,86 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._runtime_state_path,
             )
 
+    def _load_sell_back_to_grid_state(self) -> bool | None:
+        """True when a previous session left Sell back to grid enabled for us."""
+        try:
+            with open(self._sell_back_to_grid_state_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        value = data.get("we_enabled")
+        return value if isinstance(value, bool) else None
+
+    def _persist_sell_back_to_grid_state(self) -> None:
+        """Record that we left Sell back to grid on, for restart recovery."""
+        if not self._sell_back_to_grid_saved:
+            return
+        try:
+            with open(self._sell_back_to_grid_state_path, "w", encoding="utf-8") as fh:
+                json.dump({"we_enabled": True, "at": dt_util.now().isoformat()}, fh)
+        except OSError:
+            _LOGGER.warning(
+                "Could not persist sell-back-to-grid state to %s",
+                self._sell_back_to_grid_state_path,
+            )
+
+    def _clear_sell_back_to_grid_state(self) -> None:
+        """Drop the recovery marker once the switch is back the user's way."""
+        try:
+            os.remove(self._sell_back_to_grid_state_path)
+        except FileNotFoundError:
+            return
+        except OSError:
+            _LOGGER.warning(
+                "Could not clear sell-back-to-grid state at %s",
+                self._sell_back_to_grid_state_path,
+            )
+
+    async def _restore_sell_back_to_grid_after_restart(self) -> None:
+        """Put Sell back to grid back off after a restart mid-window.
+
+        async_shutdown cannot await, so a power loss skips every in-session
+        restore path.  This runs once from run_optimizer's startup restore
+        instead, driven purely by the marker file, and is idempotent: no marker
+        means nothing to undo.  Retried until it succeeds — a failed turn_off
+        leaves both the marker and the one-shot guard alone, so the next run
+        (and the next restart) tries again rather than stranding the switch ON.
+
+        Takes _forced_sell_lock so a forced-sell tick cannot be enabling the
+        switch at the same moment.  Deliberately does NOT call
+        _restore_sell_back_to_grid: that is keyed on the in-memory flag, which
+        is exactly what the restart lost.
+        """
+        if self._sell_back_to_grid_restored:
+            return
+        marker = await self.hass.async_add_executor_job(
+            self._load_sell_back_to_grid_state
+        )
+        if not marker:
+            self._sell_back_to_grid_restored = True
+            return
+        async with self._forced_sell_lock:
+            sell_back_id = self._sell_back_to_grid_switch_id()
+            try:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": sell_back_id}, blocking=True,
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error(
+                    "Failed to restore %s to off after an unclean restart, "
+                    "retrying on the next run: %s", sell_back_id, err,
+                )
+                return  # keep the marker so the next attempt retries
+            await self.hass.async_add_executor_job(
+                self._clear_sell_back_to_grid_state
+            )
+            self._sell_back_to_grid_restored = True
+            _LOGGER.info(
+                "Restored %s to off after an unclean restart", sell_back_id
+            )
+
     async def _restore_runtime_state(self) -> None:
         """Rehydrate the previous run's plan + snapshot after an HA restart.
 
@@ -1980,6 +2071,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         await self._maybe_sweep_expired_rules(reason)
         await self._restore_runtime_state()
+        # Issue #23: the real safety net for an unclean restart mid-window —
+        # async_shutdown cannot await, so nothing else runs after a power loss.
+        await self._restore_sell_back_to_grid_after_restart()
         _LOGGER.info("Optimizer triggered: reason=%s, force=%s", reason, force)
 
         # Battery SoC guard (issue #16): a failed/unavailable SoC read must
@@ -2815,6 +2909,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return
         self._sell_back_to_grid_saved = None
+        # The marker is cleared here, not in the stop path: this is the single
+        # place that decides a restore is no longer owed (both exits of
+        # _stop_manual_selling_locked route through it), and it does so only on
+        # success.  A failure above returns early, so the marker survives and a
+        # later restart still knows a restore is pending.
+        await self.hass.async_add_executor_job(
+            self._clear_sell_back_to_grid_state
+        )
         _LOGGER.info("Restored %s to off after the window", sell_back_id)
 
     async def _manage_manual_selling(
@@ -2888,6 +2990,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.info(
                     "Temporarily enabled %s for the forced-sell window",
                     sell_back_id,
+                )
+                # Issue #23: the in-memory flag above cannot survive a power
+                # loss, and nothing else records that the switch is ours.  Write
+                # the marker here, while the enable is known to have succeeded.
+                await self.hass.async_add_executor_job(
+                    self._persist_sell_back_to_grid_state
                 )
             except Exception as err:  # noqa: BLE001
                 # _sell_back_to_grid_saved is deliberately not reset: it is
@@ -3995,6 +4103,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._unsub_startup is not None:
             self._unsub_startup()
             self._unsub_startup = None
+        # Issue #23: best-effort for a clean unload only.  This is a synchronous
+        # @callback and cannot await, so the stop is handed to the event loop as
+        # a task and may not finish before HA exits — nothing may depend on it.
+        # Correctness rests on _restore_sell_back_to_grid_after_restart(), which
+        # runs off the persisted marker.  Public entry point on purpose: the
+        # lock is not held here, and asyncio.Lock is not reentrant.
+        if self._sell_back_to_grid_saved:
+            self.hass.async_create_task(self._stop_manual_selling())
 
     async def _async_update_data(self) -> dict[str, Any]:
         """DataUpdateCoordinator callback — returns current state."""
