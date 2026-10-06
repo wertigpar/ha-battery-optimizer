@@ -2685,6 +2685,30 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return False
 
+    async def _evaluate_forced_sell(self) -> None:
+        """Start/stop manual selling based on the last plan, on a 5-min tick.
+
+        Issue #23 cause A: _manage_manual_selling() used to run only at the
+        tail of a full optimizer run. With optimizer_interval larger than the
+        sell window the window opened and closed between runs and nothing was
+        ever sold. This is the tick-driven entry point the reconcile timer
+        calls; it reads the clock itself so the caller needs no arguments.
+        """
+        if not self._emaldo_control_enabled or self._last_result is None:
+            return
+        await self._manage_manual_selling(self._last_result, dt_util.now())
+
+    @callback
+    def _forced_sell_tick_callback(self, _now) -> None:
+        """Periodic forced-sell evaluation.
+
+        Mirrors _pv_reconcile_callback: a cheap synchronous guard plus a
+        scheduled task, so the timer callback never blocks the event loop.
+        """
+        if not self._emaldo_control_enabled or self._last_result is None:
+            return
+        self.hass.async_create_task(self._evaluate_forced_sell())
+
     async def _manage_manual_selling(
         self, result: OptimizationResult, now: datetime
     ) -> None:
@@ -3285,6 +3309,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         unsub = async_track_time_interval(
             self.hass,
             self._pv_reconcile_callback,
+            timedelta(minutes=5),
+        )
+        self._unsub_listeners.append(unsub)
+
+        # 6b) Forced sell window evaluation — every 5 min so a sell window
+        #     shorter than optimizer_interval still fires (issue #23 cause A).
+        #     Independent of the PV reconcile timer: forced sell and PV sell
+        #     are different features with different config flags.
+        unsub = async_track_time_interval(
+            self.hass,
+            self._forced_sell_tick_callback,
             timedelta(minutes=5),
         )
         self._unsub_listeners.append(unsub)
