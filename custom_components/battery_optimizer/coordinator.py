@@ -370,6 +370,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_sent_slots: list[int] | None = None
         # Manual selling (forced sell) actuator state
         self._manual_selling_active: bool = False
+        # Issue #23 cause B: Emaldo refuses Manual selling while Sell back to
+        # grid is off, so the window exports nothing.  True once we turned it
+        # on, so the stop path knows to turn it off again; None = never
+        # touched, False = already on and therefore the user's.
+        self._sell_back_to_grid_saved: bool | None = None
+        self._sell_back_to_grid_switch_id_cached: str | None = None
         # Serialises the forced-sell start/stop sequence.  Two callers now
         # reach it: the tail of an optimizer run and the 5-min forced-sell
         # tick.  Without this lock a tick that decides to stop can interleave
@@ -2742,6 +2748,52 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         self.hass.async_create_task(self._evaluate_forced_sell())
 
+    def _sell_back_to_grid_switch_id(self) -> str:
+        """Entity id of Emaldo's Sell back to grid switch.
+
+        Emaldo refuses Manual selling while this is off (issue #23 cause B),
+        so forced sell manages it for the duration of the window.  Grid-code,
+        anti-islanding and contractual export caps are enforced by the Emaldo
+        device itself at the HV layer, below this component, so the switch is
+        a user preference rather than a regulatory interlock.
+        """
+        if self._sell_back_to_grid_switch_id_cached is None:
+            resolved = self._resolve_emaldo_entity(
+                "sell_back_to_grid", domain="switch"
+            )
+            if resolved is not None:
+                self._sell_back_to_grid_switch_id_cached = resolved
+            else:
+                # Deliberately not cached: the Emaldo entity registry can still
+                # be empty on the first tick after boot, and pinning the
+                # fallback for the session would mean a resolved entity_id is
+                # never used.
+                return "switch.power_store_sell_back_to_grid"
+        return self._sell_back_to_grid_switch_id_cached
+
+    async def _restore_sell_back_to_grid(self) -> None:
+        """Undo a Sell back to grid enable - only one this component made.
+
+        Issue #23 cause B.  ``_sell_back_to_grid_saved`` is the sole
+        permission: the window-open path sets it only when it actually flipped
+        the switch, so a switch the user turned on themselves is never taken
+        away again.
+
+        The flag is cleared after the call rather than before, so a failed
+        restore is retried by the next stop the 5-min tick issues.
+        """
+        if not self._sell_back_to_grid_saved:
+            return
+        sell_back_id = self._sell_back_to_grid_switch_id()
+        try:
+            await self.hass.services.async_call(
+                "switch", "turn_off", {"entity_id": sell_back_id}, blocking=True,
+            )
+            _LOGGER.info("Restored %s to off after the window", sell_back_id)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Failed to restore %s: %s", sell_back_id, err)
+        self._sell_back_to_grid_saved = None
+
     async def _manage_manual_selling(
         self, result: OptimizationResult, now: datetime
     ) -> None:
@@ -2786,6 +2838,44 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         if self._manual_selling_active:
             return  # already running; re-check handled by plan re-run
+        # Issue #23 cause B: Emaldo refuses Manual selling while Sell back to
+        # grid is off, so the window exports nothing.  Enable it for the window
+        # and remember that we did, so the stop path can put the user's setting
+        # back.  Ahead of the start below because the prerequisite has to be
+        # in place for the switch call to mean anything.
+        sell_back_id = self._sell_back_to_grid_switch_id()
+        sb_state = self.hass.states.get(sell_back_id)
+        sb_on: bool | None = None
+        if sb_state is not None and sb_state.state in ("on", "off"):
+            sb_on = sb_state.state == "on"
+        if sb_on is None:
+            # Same deference as _ensure_pv_switch_matches_plan: with no real
+            # state there is no telling "the user owns it" from "we owe a
+            # restore", so no write and nothing remembered.
+            _LOGGER.debug(
+                "Sell back to grid state unknown (entity=%s) - deferring enable",
+                sell_back_id,
+            )
+        elif not sb_on:
+            try:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": sell_back_id}, blocking=True,
+                )
+                self._sell_back_to_grid_saved = True
+                _LOGGER.info(
+                    "Temporarily enabled %s for the forced-sell window",
+                    sell_back_id,
+                )
+            except Exception as err:  # noqa: BLE001
+                # _sell_back_to_grid_saved is deliberately not reset: it is
+                # still None after a first failed attempt (nothing to restore)
+                # and still True if the switch had already been enabled, so a
+                # restore stays owed.  A prerequisite that will not flip must
+                # not skip the sale - the window is time-boxed, so a lost sale
+                # is recoverable.
+                _LOGGER.error(
+                    "Could not enable %s for forced sell: %s", sell_back_id, err
+                )
         switch_id = self._resolve_emaldo_entity(
             "manual_selling", domain="switch"
         ) or "switch.power_store_manual_selling"
@@ -2826,6 +2916,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         this directly instead of re-entering _stop_manual_selling.
         """
         if not self._manual_selling_active:
+            # A start that failed after the enable left Sell back to grid on
+            # with no sale running, so the restore is keyed on our own flag,
+            # not on the sale being active.
+            await self._restore_sell_back_to_grid()
             return
         self._manual_selling_active = False
         switch_id = self._resolve_emaldo_entity(
@@ -2837,6 +2931,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Failed to stop manual selling: %s", err)
+        # Issue #23 cause B: withdraw the enable we made - after the sale
+        # itself has stopped, never before.
+        await self._restore_sell_back_to_grid()
 
     async def _push_schedule(
         self,
