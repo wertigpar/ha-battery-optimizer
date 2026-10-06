@@ -12,7 +12,8 @@ from datetime import date, datetime, timedelta
 import json
 import logging
 import math
-import os
+import os
+import tempfile
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -172,7 +173,21 @@ from .cost_history import (
 from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
 from .plan_export import render_analysis
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger(__name__)
+
+# Issue #23: the restart marker has three states, not two.  "No marker" means
+# nothing is owed, so the one-shot restore guard may latch.  A marker that
+# exists but cannot be parsed means we do not know, and latching on that would
+# disable the safety net for the rest of the session - the very failure this
+# marker exists to survive, since its own write can be cut short by a power cut.
+# Collapsing the two (a bare None for any read error) did exactly that.
+_SELL_BACK_MARKER_UNREADABLE = object()
+
+# The restore holds _forced_sell_lock across its service call, so a wedged
+# switch.turn_off would stall the first optimizer run and every forced-sell
+# tick queued behind it, with no diagnostic.  Bounded so the attempt fails
+# loudly and the next tick retries.
+_SELL_BACK_RESTORE_TIMEOUT_S = 30
 
 
 def _current_slot_index() -> int:
@@ -1623,27 +1638,79 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._runtime_state_path,
             )
 
-    def _load_sell_back_to_grid_state(self) -> bool | None:
-        """True when a previous session left Sell back to grid enabled for us."""
+    def _load_sell_back_to_grid_state(self) -> bool | None | object:
+        """Read the restart marker.
+
+        True/False for a readable marker, None when there is no marker file at
+        all, _SELL_BACK_MARKER_UNREADABLE when a file is there but is not a
+        marker (truncated write, hand edit, wrong shape).  The last two must
+        stay distinct - see the sentinel's comment.
+        """
         try:
             with open(self._sell_back_to_grid_state_path, encoding="utf-8") as fh:
                 data = json.load(fh)
+        except FileNotFoundError:
+            return None
         except (OSError, ValueError):
-            return None
+            return _SELL_BACK_MARKER_UNREADABLE
         if not isinstance(data, dict):
-            return None
+            return _SELL_BACK_MARKER_UNREADABLE
         value = data.get("we_enabled")
-        return value if isinstance(value, bool) else None
+        return value if isinstance(value, bool) else _SELL_BACK_MARKER_UNREADABLE
 
-    def _persist_sell_back_to_grid_state(self) -> None:
-        """Record that we left Sell back to grid on, for restart recovery."""
-        if not self._sell_back_to_grid_saved:
+    def _write_sell_back_to_grid_marker(self, enabled: bool) -> None:
+        """Write the marker atomically.  Raises OSError on failure.
+
+        The payload goes to a temp file in the same directory and is then
+        os.replace()d onto the target, which is atomic on POSIX and on Windows.
+        A plain open(path, "w") truncates in place, so a power cut part way
+        through json.dump leaves a partial file that reads back as corrupt -
+        and a corrupt read is not "nothing to restore", so that window is
+        exactly the one this marker exists to cover.
+        """
+        path = self._sell_back_to_grid_state_path
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=os.path.dirname(path) or ".",
+                prefix=os.path.basename(path) + ".",
+                suffix=".tmp",
+                delete=False,
+            ) as fh:
+                tmp_path = fh.name
+                json.dump(
+                    {"we_enabled": enabled, "at": dt_util.now().isoformat()}, fh
+                )
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_path, path)
+            tmp_path = None
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    def _persist_sell_back_to_grid_state(self, force: bool = False) -> None:
+        """Record that we left Sell back to grid on, for restart recovery.
+
+        force lets the window-open path write the marker before the enable has
+        been verified, so a crash in between leaves a marker (one redundant
+        turn_off at the next startup) instead of an enable nobody recorded.
+        _sell_back_to_grid_saved is still only set once the switch is on.
+        """
+        if not (force or self._sell_back_to_grid_saved):
             return
         try:
-            with open(self._sell_back_to_grid_state_path, "w", encoding="utf-8") as fh:
-                json.dump({"we_enabled": True, "at": dt_util.now().isoformat()}, fh)
+            self._write_sell_back_to_grid_marker(True)
         except OSError:
-            _LOGGER.warning(
+            # ERROR, not warning: the in-memory flag keeps this session
+            # retrying, but an unclean restart from here strands the switch
+            # with no record anywhere.
+            _LOGGER.error(
                 "Could not persist sell-back-to-grid state to %s",
                 self._sell_back_to_grid_state_path,
             )
@@ -1654,24 +1721,46 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             os.remove(self._sell_back_to_grid_state_path)
         except FileNotFoundError:
             return
-        except OSError:
+        except OSError as err:
+            # An undeletable marker is still readable, so every later boot
+            # would re-issue turn_off forever.  Overwrite it with the disabled
+            # marker instead: the restore then latches on read and never
+            # touches the switch again.
             _LOGGER.warning(
-                "Could not clear sell-back-to-grid state at %s",
-                self._sell_back_to_grid_state_path,
+                "Could not remove sell-back-to-grid state at %s (%s); writing "
+                "the disabled marker instead",
+                self._sell_back_to_grid_state_path, err,
             )
+            try:
+                self._write_sell_back_to_grid_marker(False)
+            except OSError:
+                _LOGGER.error(
+                    "Could not clear sell-back-to-grid state at %s",
+                    self._sell_back_to_grid_state_path,
+                )
 
     async def _restore_sell_back_to_grid_after_restart(self) -> None:
         """Put Sell back to grid back off after a restart mid-window.
 
         async_shutdown cannot await, so a power loss skips every in-session
-        restore path.  This runs once from run_optimizer's startup restore
-        instead, driven purely by the marker file, and is idempotent: no marker
-        means nothing to undo.  Retried until it succeeds — a failed turn_off
-        leaves both the marker and the one-shot guard alone, so the next run
-        (and the next restart) tries again rather than stranding the switch ON.
+        restore path.  This runs off the persisted marker alone and is
+        idempotent: no marker means nothing to undo.
 
-        Takes _forced_sell_lock so a forced-sell tick cannot be enabling the
-        switch at the same moment.  Deliberately does NOT call
+        Driven from run_optimizer *and* from the 5-min forced-sell tick.  The
+        startup watcher gives up without ever calling run_optimizer when
+        Emaldo's SoC is still unreadable after a reboot - precisely the state a
+        reboot during a sell window leaves behind - so with run_optimizer as
+        the only caller the switch stayed ON for up to optimizer_interval.
+
+        Retried until it settles.  The one-shot guard latches only on a genuine
+        "no marker": never on a marker that could not be read, which would
+        switch this safety net off for the rest of the session, and never on a
+        service call that failed or timed out, which keeps the marker so the
+        next tick tries again rather than stranding the switch ON.
+
+        Takes _forced_sell_lock so the actuator cannot be flipping the switch
+        at the same moment; the lock is not reentrant, so callers reach this
+        without holding it.  Deliberately does NOT call
         _restore_sell_back_to_grid: that is keyed on the in-memory flag, which
         is exactly what the restart lost.
         """
@@ -1680,19 +1769,58 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         marker = await self.hass.async_add_executor_job(
             self._load_sell_back_to_grid_state
         )
+        if marker is _SELL_BACK_MARKER_UNREADABLE:
+            _LOGGER.error(
+                "Sell back to grid marker at %s could not be read; not treating "
+                "that as 'nothing to restore' - retrying on the next tick",
+                self._sell_back_to_grid_state_path,
+            )
+            return
         if not marker:
             self._sell_back_to_grid_restored = True
             return
         async with self._forced_sell_lock:
+            # Turning the switch off mid-window withdraws the very
+            # prerequisite the running sale depends on, so Emaldo would then
+            # refuse the sale.  Leave the marker so the window's own teardown -
+            # or the tick after the window closes - handles the restore.  No
+            # plan at all means no live window, and the stranded switch is
+            # exactly the case this feature exists for.
+            result = getattr(self, "_last_result", None)
+            window = getattr(result, "sell_slots", None) or []
+            if window:
+                now = dt_util.now()
+                now_slot = int(now.hour * 4 + now.minute // 15)
+                if window[0] <= now_slot <= window[-1]:
+                    _LOGGER.info(
+                        "Sell back to grid left on: forced-sell window is live "
+                        "(slots %s-%s), restoring once it closes",
+                        window[0], window[-1],
+                    )
+                    return
             sell_back_id = self._sell_back_to_grid_switch_id()
             try:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": sell_back_id}, blocking=True,
+                # Bounded: the lock is held across this call, so a wedged
+                # switch.turn_off would otherwise stall the first optimizer run
+                # and every forced-sell tick queued behind it, with no clue.
+                await asyncio.wait_for(
+                    self.hass.services.async_call(
+                        "switch", "turn_off", {"entity_id": sell_back_id},
+                        blocking=True,
+                    ),
+                    timeout=_SELL_BACK_RESTORE_TIMEOUT_S,
                 )
+            except (TimeoutError, asyncio.TimeoutError) as err:
+                _LOGGER.error(
+                    "Timed out after %ss restoring %s to off after an unclean "
+                    "restart; keeping the marker and retrying on the next tick: %s",
+                    _SELL_BACK_RESTORE_TIMEOUT_S, sell_back_id, err,
+                )
+                return
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error(
                     "Failed to restore %s to off after an unclean restart, "
-                    "retrying on the next run: %s", sell_back_id, err,
+                    "retrying on the next tick: %s", sell_back_id, err,
                 )
                 return  # keep the marker so the next attempt retries
             await self.hass.async_add_executor_job(
@@ -2850,7 +2978,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         first, so a mid-window disable still queues the teardown instead of
         orphaning the sale, while an install with nothing active still
         allocates no coroutine and no task.
+
+        Also the retry driver for the post-restart restore (issue #23), and
+        deliberately above every other guard: right after a reboot
+        _last_result is normally None and the startup watcher may never reach
+        run_optimizer at all, so any guard on a usable plan or on forced sell
+        being enabled would leave the switch stranded until the next
+        checkpoint.  The restore latches itself once settled, so this costs one
+        boolean per tick for an install that never uses the feature.
         """
+        if not self._sell_back_to_grid_restored:
+            # No lock held here: asyncio.Lock is not reentrant and the
+            # coroutine below takes it itself.
+            self.hass.async_create_task(
+                self._restore_sell_back_to_grid_after_restart()
+            )
         if not self._forced_sell_enabled:
             if self._manual_selling_active or self._sell_back_to_grid_saved:
                 self.hass.async_create_task(self._evaluate_forced_sell())
@@ -2982,6 +3124,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 sell_back_id,
             )
         elif not sb_on:
+            # Issue #23: the in-memory flag below cannot survive a power loss
+            # and nothing else records that the switch is ours.  Write the
+            # marker BEFORE the enable: a crash in between then leaves a
+            # marker, which costs one redundant turn_off at the next startup,
+            # instead of an enable nobody recorded, which is what strands the
+            # switch.  force=True because the flag is deliberately not set
+            # until the switch is verified on below.
+            await self.hass.async_add_executor_job(
+                self._persist_sell_back_to_grid_state, True
+            )
             try:
                 await self.hass.services.async_call(
                     "switch", "turn_on", {"entity_id": sell_back_id}, blocking=True,
@@ -2991,19 +3143,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Temporarily enabled %s for the forced-sell window",
                     sell_back_id,
                 )
-                # Issue #23: the in-memory flag above cannot survive a power
-                # loss, and nothing else records that the switch is ours.  Write
-                # the marker here, while the enable is known to have succeeded.
-                await self.hass.async_add_executor_job(
-                    self._persist_sell_back_to_grid_state
-                )
             except Exception as err:  # noqa: BLE001
-                # _sell_back_to_grid_saved is deliberately not reset: it is
-                # still None after a first failed attempt (nothing to restore)
-                # and still True if the switch had already been enabled, so a
-                # restore stays owed.  A prerequisite that will not flip must
-                # not skip the sale - the window is time-boxed, so a lost sale
-                # is recoverable.
+                # _sell_back_to_grid_saved stays None: nothing was flipped, so
+                # nothing is owed this session, and the flag must only claim a
+                # restore once the switch is actually on.  The marker written
+                # above still makes the next startup issue one harmless
+                # turn_off.  A prerequisite that will not flip must not skip
+                # the sale - the window is time-boxed, so a lost sale is
+                # recoverable.
                 _LOGGER.error(
                     "Could not enable %s for forced sell: %s", sell_back_id, err
                 )
