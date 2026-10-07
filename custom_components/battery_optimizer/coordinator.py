@@ -189,6 +189,22 @@ _SELL_BACK_MARKER_UNREADABLE = object()
 # loudly and the next tick retries.
 _SELL_BACK_RESTORE_TIMEOUT_S = 30
 
+# Issue #23: switch.turn_on does NOT raise when Emaldo refuses to start the
+# sale - the reporter measured Manual selling reading back off for three
+# minutes with no export - so a start that silently failed cannot be told
+# from a sale that finished itself unless the running state was observed.
+# Seconds, not ticks: turn_on is a blocking verified write, so a sale that is
+# going to run reads on within a second or two.  A seconds grace therefore
+# covers exactly the case that needs it - the optimizer run tail re-entering
+# this path seconds after the 5-min tick issued the start - while a tick-count
+# grace would add a whole extra 5-min interval to every window, most of a
+# single-slot (15 min) window.
+_MANUAL_SELLING_START_GRACE_S = 90
+# turn_on attempts allowed per window.  More than one because a refusal can
+# be transient; bounded because retrying a switch that keeps refusing buys
+# nothing and spends the window.
+_MANUAL_SELLING_MAX_START_ATTEMPTS = 3
+
 
 def _current_slot_index() -> int:
     """Return the current 15-minute slot index (0-95)."""
@@ -408,6 +424,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # served", and it resets by value: a different date or a different
         # window is a different key, so the next window is servable again.
         self._manual_selling_served: tuple[date, tuple[int, ...]] | None = None
+        # Issue #23: True once the manual-selling switch has been seen ON, i.e.
+        # the sale is provably running rather than merely requested.  A refused
+        # start leaves the switch off, and "the switch reads off" alone cannot
+        # tell that apart from a sale that ended itself - the difference between
+        # a served window and a silently lost one.
+        self._manual_selling_seen_on: bool = False
+        # When the latest turn_on was issued; gates the start grace above.
+        self._manual_selling_started_at: datetime | None = None
+        # Attempts already spent on the window named in _manual_selling_start_
+        # window, so a retry is bounded and a replan onto a different window
+        # gets its own budget instead of inheriting an exhausted one.
+        self._manual_selling_start_attempts: int = 0
+        self._manual_selling_start_window: tuple[date, tuple[int, ...]] | None = None
         self._sell_back_to_grid_switch_id_cached: str | None = None
         # Serialises the forced-sell start/stop sequence.  Two callers now
         # reach it: the tail of an optimizer run and the 5-min forced-sell
@@ -3366,10 +3395,24 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Flag set only after the switch is verified on, so a failed or
         # interrupted start never leaves a flag claiming to be selling.
         self._manual_selling_active = True
-        # And the window is now SERVED — the target is staged and the sale is
-        # under way, whether Emaldo carries it out or stops itself early.  A
-        # later tick that finds the switch already off must not re-open it.
-        self._manual_selling_served = (now.date(), tuple(window))
+        # A new start, so nothing leaks in from the last one.
+        self._manual_selling_seen_on = False
+        self._manual_selling_started_at = now
+        self._manual_selling_start_window = (now.date(), tuple(window))
+        # Counted HERE, where the attempt actually happens, so a retry does
+        # not reset its own budget.  The give-up verdict belongs to the
+        # reconcile above, which runs before this path and reads the count
+        # this line leaves behind.
+        self._manual_selling_start_attempts += 1
+        # The window is SERVED only once the sale is OBSERVED running, read back
+        # right here.  Stamping it on the turn_on call alone was the trap:
+        # turn_on does not raise when Emaldo refuses the sale, so a refused start
+        # consumed the window with nothing sold and no retry.  _manual_selling_
+        # seen_on is what a later reconcile reads, and only this read-back or a
+        # tick that caught the sale running can set it.
+        if self._manual_selling_is_on():
+            self._manual_selling_seen_on = True
+            self._manual_selling_served = (now.date(), tuple(window))
         _LOGGER.info(
             "Manual selling started: %d slots, target %.1f kWh",
             len(window), result.sell_target_kwh,
@@ -3392,6 +3435,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or "switch.power_store_manual_selling"
         )
 
+    def _manual_selling_switch_state(self) -> str | None:
+        """Raw state of Emaldo's manual-selling switch, or None if unreadable.
+
+        None covers a missing entity as well as unknown/unavailable: the caller
+        must change nothing on an unreadable state rather than guess that a
+        running sale finished.
+        """
+        state = self.hass.states.get(self._manual_selling_switch_id())
+        return state.state if state is not None else None
+
+    def _manual_selling_is_on(self) -> bool:
+        """Whether Emaldo's manual-selling switch reads a definite on - i.e.
+        the sale is running, not merely requested.
+        """
+        return self._manual_selling_switch_state() == "on"
+
     def _manual_selling_is_off(self) -> bool:
         """Whether Emaldo's manual-selling switch reads a definite off.
 
@@ -3399,8 +3458,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         False, because the caller must change nothing on an unreadable state
         rather than guess that a running sale finished.
         """
-        state = self.hass.states.get(self._manual_selling_switch_id())
-        return state is not None and state.state == "off"
+        return self._manual_selling_switch_state() == "off"
 
     async def _check_manual_selling_self_completion_locked(
         self, result: OptimizationResult, now: datetime
@@ -3410,11 +3468,20 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         The manual-selling API takes the planned sell energy as its input and
         stops on its own once that amount has been exported (issue #23, measured:
         a 4 kWh target over 18:30-19:00 finished itself at 18:54).  So while
-        _manual_selling_active is True and the switch reads off, the planned
-        energy is already sold and the only thing left is this component's own
-        bookkeeping.
+        _manual_selling_active is True and the switch reads off, the sale has
+        ended - but WHICH way it ended is what this has to decide first:
 
-        Two consequences, both deliberate:
+        - Seen on, then off: the planned energy is sold and only this
+          component's own bookkeeping is left.
+        - Never seen on: the sale was REFUSED, not finished.  turn_on does not
+          raise on a refusal (issue #23's measured evidence: the switch read
+          back off for three minutes with no export), so "off" here looks
+          exactly like a completion.  Treating it as one consumes the window
+          with nothing sold and no retry - the same money bug, moved rather
+          than removed.  So the window is NOT stamped served and the start is
+          retried instead.
+
+        Three consequences of the real completion, all deliberate:
 
         - Sell back to grid is restored HERE, not at window close.  It is ours
           and it is on for the rest of the window otherwise, i.e. up to ~2 h of
@@ -3423,25 +3490,85 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
           (if it is not already), so the next tick cannot open a second sale for
           the same window.  Turning the flag off is what made this necessary;
           clearing it alone is the double-export bug.
-
-        No turn_off: that command exists only to interrupt a sale still running,
-        and there is nothing left to interrupt.  _restore_sell_back_to_grid()
-        clears the persisted marker on success, so no restart recovery is owed
-        for a sale that already finished.
+        - No turn_off: that command exists only to interrupt a sale still
+          running, and there is nothing left to interrupt.
+          _restore_sell_back_to_grid() clears the persisted marker on success,
+          so no restart recovery is owed for a sale that already finished.
         """
         if not self._manual_selling_active:
             return
-        if not self._manual_selling_is_off():
+        state = self._manual_selling_switch_state()
+        if state == "on":
+            # Provably running, which is the whole point: this is what makes a
+            # later "off" mean finished rather than never-started.  The served
+            # stamp goes here rather than at the turn_on call for the same reason.
+            if not self._manual_selling_seen_on:
+                self._manual_selling_seen_on = True
+                self._manual_selling_served = (
+                    now.date(), tuple(result.sell_slots or ())
+                )
             return
+        if state != "off":
+            # unknown / unavailable / missing entity: cannot tell.  Guessing
+            # either way is a money bug - one eats the window, the other sells it
+            # twice.
+            return
+        if self._manual_selling_seen_on:
+            self._manual_selling_active = False
+            self._manual_selling_served = (
+                now.date(), tuple(result.sell_slots or ())
+            )
+            _LOGGER.info(
+                "Manual selling finished on its own (planned energy exported); "
+                "restoring Sell back to grid without waiting for window end"
+            )
+            await self._restore_sell_back_to_grid()
+            return
+        # Reads off and was never seen on: the sale never started.  Issue #23's
+        # own measured evidence - turn_on does not raise when Emaldo refuses -
+        # makes this the shape a transient or rejected start leaves behind, and
+        # it is NOT a completion.
+        started_at = self._manual_selling_started_at
+        waited = 0.0 if started_at is None else (now - started_at).total_seconds()
+        if waited < _MANUAL_SELLING_START_GRACE_S:
+            _LOGGER.debug(
+                "Manual selling was requested %.0fs ago and its switch still "
+                "reads off; inside the start grace, not calling it a failed "
+                "start yet",
+                waited,
+            )
+            return
+        window = tuple(result.sell_slots or ())
+        key = (now.date(), window)
+        if self._manual_selling_start_window != key:
+            # A different window: its own budget, not the one the previous
+            # window exhausted.
+            self._manual_selling_start_window = key
+            self._manual_selling_start_attempts = 0
+        if (
+            self._manual_selling_start_attempts
+            >= _MANUAL_SELLING_MAX_START_ATTEMPTS
+        ):
+            _LOGGER.error(
+                "Manual selling never started for window %s on %s after %d "
+                "attempts (switch stayed off); nothing was exported. Holding "
+                "the flag so no further sale is opened for this window.",
+                window, now.date(), self._manual_selling_start_attempts,
+            )
+            return
+        _LOGGER.warning(
+            "Manual selling did not start for window %s on %s (attempt %d of "
+            "%d): the switch reads off and was never seen on, so the sale was "
+            "refused rather than completed. Retrying without marking the "
+            "window served.",
+            window, now.date(), self._manual_selling_start_attempts + 1,
+            _MANUAL_SELLING_MAX_START_ATTEMPTS,
+        )
+        # Cleared WITHOUT stamping _manual_selling_served, so the next tick
+        # re-enters the start path and re-issues the staging plus turn_on.  Sell
+        # back to grid is deliberately NOT restored: the retry is for this same
+        # window and needs the prerequisite still in place.
         self._manual_selling_active = False
-        self._manual_selling_served = (
-            now.date(), tuple(result.sell_slots or ())
-        )
-        _LOGGER.info(
-            "Manual selling finished on its own (planned energy exported); "
-            "restoring Sell back to grid without waiting for window end"
-        )
-        await self._restore_sell_back_to_grid()
 
     async def _stop_manual_selling_locked(self) -> None:
         """Stop an active manual sale; caller already holds the lock.
