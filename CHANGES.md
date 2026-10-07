@@ -65,6 +65,22 @@
   bounded by the same 30 s timeout as the restart path, with at most one tick
   task in flight so a slow restore cannot queue another every 5 minutes.
 
+- **Forced-sell per-slot sizing is now derived from the configured inverter
+  power** — the charge step and the sell ceiling were both pinned to a literal
+  2.5 kWh per 15-minute slot, and the `max_charge_kw` / `max_discharge_kw`
+  fields carried 2.5 in a *kW* position, so the configured power was ignored.
+  Both now read the declared `DEFAULT_MAX_CHARGE_KW` /
+  `DEFAULT_MAX_DISCHARGE_KW` (10.0 kW) and multiply by the slot duration, which
+  lands on exactly 2.5 kWh per slot — so **nothing changes at the declared
+  default**, and a user who configured another power now gets sizing that
+  follows their number instead of a frozen 2.5. Files: `optimizer.py`,
+  `coordinator.py`. Regression tests: `tests/test_forced_sell.py`.
+
+  Assumption: Emaldo's grid power limit is *not* set, so the inverter really
+  does run at the full configured power for the whole slot. If a grid power
+  limit is ever configured in Emaldo, the achievable per-slot energy is lower
+  than these figures and the sizing will need to be clamped to it.
+
 ### Changed
 
 - **Forced sell is evaluated on a 5-minute tick, not only after an optimizer

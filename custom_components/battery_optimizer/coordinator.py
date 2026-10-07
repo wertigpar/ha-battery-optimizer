@@ -63,6 +63,8 @@ from .const import (
     DEFAULT_SOC_RECOVERY_BUFFER_PCT,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_TRANSFER_FEE_BUY,
+    DEFAULT_MAX_CHARGE_KW,
+    DEFAULT_MAX_DISCHARGE_KW,
     LOW_SOC_RERUN_MARGIN_PCT,
     LOW_SOC_RERUN_THROTTLE_MIN,
     IDLE_GAP_RERUN_THROTTLE_MIN,
@@ -884,8 +886,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return BatteryConfig(
             capacity_kwh=c.get(CONF_BATTERY_CAPACITY_KWH, 5.0),
-            max_charge_kw=c.get(CONF_MAX_CHARGE_KW, 2.5),
-            max_discharge_kw=c.get(CONF_MAX_DISCHARGE_KW, 2.5),
+            max_charge_kw=c.get(CONF_MAX_CHARGE_KW, DEFAULT_MAX_CHARGE_KW),
+            max_discharge_kw=c.get(
+                CONF_MAX_DISCHARGE_KW, DEFAULT_MAX_DISCHARGE_KW
+            ),
             charge_efficiency=c.get(CONF_CHARGE_EFFICIENCY, 0.95),
             discharge_efficiency=c.get(CONF_DISCHARGE_EFFICIENCY, 0.95),
             soc_min=c.get(CONF_SOC_MIN, 20),

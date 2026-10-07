@@ -23,6 +23,8 @@ from .const import (
     PUBLISH_CUTOFF_SLOT,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_TRANSFER_FEE_BUY,
+    DEFAULT_MAX_CHARGE_KW,
+    DEFAULT_MAX_DISCHARGE_KW,
     DEFAULT_GRID_CHARGE_SOLAR_AWARE,
 )
 
@@ -40,8 +42,15 @@ class BatteryConfig:
     """Battery and fee parameters."""
 
     capacity_kwh: float = 5.0
-    max_charge_kw: float = 2.5
-    max_discharge_kw: float = 2.5
+    # Inverter maximum charge/discharge power, as configured by the user.
+    # Emaldo runs the inverter at full power when grid charging or grid
+    # discharging, so these kW values also fix the per-slot energy — see
+    # ``max_charge_per_slot_kwh`` / ``max_discharge_per_slot_kwh``.
+    # Assumption: Emaldo's grid power limit is NOT set.  With a limit in
+    # place the inverter would move less than this per slot and both
+    # per-slot figures would overstate what is actually available.
+    max_charge_kw: float = DEFAULT_MAX_CHARGE_KW
+    max_discharge_kw: float = DEFAULT_MAX_DISCHARGE_KW
     charge_efficiency: float = 0.95
     discharge_efficiency: float = 0.95
     soc_min: float = 20.0      # percent
@@ -1239,9 +1248,10 @@ def _plan_forced_sell_slots(
       Solar-surplus discharge slots (net load <= 0) also keep legacy
       behavior: the battery absorbs excess solar, no sell headroom.
     - No sale at the final slot (s+1 >= total_slots): no recharge remains.
-    - Battery tier: per-slot 2.5 kWh, capped by remaining usable capacity and
-      the daily budget; sells only while the round-trip exceeds the cheapest
-      forward buy minus wear (``forced_sell_min_profit``).
+    - Battery tier: per-slot ceiling is the configured discharge power over
+      the slot duration (``max_discharge_per_slot_kwh``), capped by remaining
+      usable capacity and the daily budget; sells only while the round-trip
+      exceeds the cheapest forward buy minus wear (``forced_sell_min_profit``).
     """
     if not cfg.forced_sell_enabled:
         return {}
@@ -1269,6 +1279,12 @@ def _plan_forced_sell_slots(
     # same power value.  Same power basis as the Case-A headroom below, which
     # also reads ``cfg.max_discharge_kw``; keeping one basis stops the sell
     # target being staged above what the inverter can move in the slot.
+    #
+    # Documented assumption: Emaldo's grid power limit is NOT set, so full
+    # ``max_discharge_kw`` really is available in every slot.  If a grid power
+    # limit is ever configured in Emaldo, the achievable per-slot energy is
+    # lower than the figure derived here and the sell/charge sizing must be
+    # clamped to that limit.
     per_slot_kwh = cfg.max_discharge_per_slot_kwh
     sell_plan: dict[int, tuple[float, str]] = {}
     window_open = False
@@ -1384,7 +1400,9 @@ def _plan_forced_sell_charge(
         )
         if profit < cfg.forced_sell_min_profit:
             return {}
-    step_kwh = min(2.5, required_kwh)
+    # Grid charge, so the step is sized from the configured charge power over
+    # the slot duration (same no-grid-power-limit assumption as the sell cap).
+    step_kwh = min(cfg.max_charge_per_slot_kwh, required_kwh)
     if step_kwh <= 0.05:
         return {}
     return {c_star: step_kwh}
