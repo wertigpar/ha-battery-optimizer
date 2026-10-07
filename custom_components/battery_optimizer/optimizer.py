@@ -1263,7 +1263,13 @@ def _plan_forced_sell_slots(
     wear = cfg.wear_cost_per_kwh
     remaining = usable_kwh
     total_battery = 0.0
-    per_slot_kwh = 2.5  # max sell per 15-min slot (plan constraint)
+    # Max sell per 15-min slot = the configured discharge power over the slot
+    # duration.  Emaldo's manual-selling mode discharges at the inverter's full
+    # power unless a grid power limit is set, so ``max_discharge_kw`` is that
+    # same power value.  Same power basis as the Case-A headroom below, which
+    # also reads ``cfg.max_discharge_kw``; keeping one basis stops the sell
+    # target being staged above what the inverter can move in the slot.
+    per_slot_kwh = cfg.max_discharge_per_slot_kwh
     sell_plan: dict[int, tuple[float, str]] = {}
     window_open = False
 
