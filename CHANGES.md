@@ -32,10 +32,14 @@
 
 - **An unclean restart could strand the switch on** — `async_shutdown` cannot
   await, so nothing runs after a power loss. The window-open path now writes a
-  marker to `battery_optimizer_sell_back_to_grid.json` in the HA config
-  directory, and the restore is driven from the next `run_optimizer()` and from
-  every forced-sell tick until it settles. A failed restore keeps the marker and
-  is retried; the marker is cleared only after `switch.turn_off` succeeds.
+  marker to `battery_optimizer_sell_back_to_grid_<entry id>.json` in the HA
+  config directory (scoped per config entry, since the switch belongs to one
+  entry's Emaldo device), and the restore is driven from the next
+  `run_optimizer()` and from every forced-sell tick until it settles. A failed
+  restore keeps the marker and is retried; the marker is cleared only after
+  `switch.turn_off` succeeds — and also when the enable it was written for
+  never happened, so a failed enable cannot make the next boot turn off a
+  switch this component never turned on.
 
 - **The forced-sell actuator was not safe to call from two places** — the new
   tick and the optimizer-run tail both reach `_manage_manual_selling()`, which
@@ -45,25 +49,39 @@
   could recover from. The start/stop sequence is now serialised behind an
   `asyncio.Lock` (`_manage_manual_selling_locked` /
   `_stop_manual_selling_locked`, neither reentrant, so internal stops call the
-  locked variant) and the flag is set only after `turn_on` succeeds. Three
-  further tick defects came out of the same review: the tick refuses a plan
-  older than `optimizer_interval + 15` minutes instead of reinterpreting an old
-  plan's `sell_slots` against today's clock; a plan that turns PV-only
-  mid-window now stops instead of leaving the switch on and re-entering the no-op
-  every 5 minutes; and the tick is gated on `forced_sell_enabled` so installs
-  without the feature allocate neither a coroutine nor a task.
+  locked variant) and the flag is set only after `turn_on` succeeds. Further
+  tick defects came out of the same review: the tick refuses to start a sale from
+  a plan older than `optimizer_interval + 15` minutes instead of reinterpreting
+  an old plan's `sell_slots` against today's clock — anchored on the last
+  optimizer *attempt*, since `_last_run` only advances when a run produces a new
+  plan and is therefore stale by design while the plan is being followed; that
+  gate applies to starting a sale only, never to stopping one, so a running sale
+  cannot outlive its window; a plan that turns PV-only mid-window now stops
+  instead of leaving the switch on and re-entering the no-op every 5 minutes;
+  the tick is gated on `forced_sell_enabled` so installs without the feature
+  allocate neither a coroutine nor a task; the gate reads the config entry live
+  rather than an `__init__` snapshot, so enabling the feature from the options UI
+  takes effect without restarting Home Assistant; and the in-session restore is
+  bounded by the same 30 s timeout as the restart path, with at most one tick
+  task in flight so a slow restore cannot queue another every 5 minutes.
 
 ### Changed
 
 - **Forced sell is evaluated on a 5-minute tick, not only after an optimizer
   run.** This is a behaviour change: forced sell can now act when no optimizer
   run happened. The flip side is that a sell window shorter than 5 minutes could
-  still be missed. Real windows are 45–120 min (6–8 slots), so this is
+  still be missed. Real windows are 3–8 slots (45–120 min), so this is
   theoretical, but the tick resolution is now the floor.
 - `switch.power_store_sell_back_to_grid` is now written by the component during
-  a forced-sell window only, and only if it was the component that turned it on.
+  a forced-sell window, and by the restart-recovery pass — which by design runs
+  outside any window, since that is the case where the plan is gone. Either way
+  only a flip the component made itself is ever undone.
 - Restart recovery is driven by the tick as well as the startup run, so an
-  unclean restart can leave the switch on for up to 5 minutes.
+  unclean restart is normally picked up within one tick (5 minutes). The one
+  exception is a restart during a live sell window: turning the switch off then
+  would withdraw the prerequisite the running sale depends on, so recovery is
+  deliberately deferred until the window closes — up to ~120 minutes with the
+  default `optimizer_interval`.
 
 ### Verification gaps
 

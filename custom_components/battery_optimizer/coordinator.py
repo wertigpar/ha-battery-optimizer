@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta
 import json
 import logging
 import math
-import os
+import os
 import tempfile
 from typing import Any
 
@@ -173,7 +173,7 @@ from .cost_history import (
 from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
 from .plan_export import render_analysis
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger(__name__)
 
 # Issue #23: the restart marker has three states, not two.  "No marker" means
 # nothing is owed, so the one-shot restore guard may latch.  A marker that
@@ -371,6 +371,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_result: OptimizationResult | None = None
         self._last_result_tomorrow: OptimizationResult | None = None
         self._last_run: datetime | None = None
+        # Issue #23: when the optimizer last ATTEMPTED a run, which is not the
+        # same as _last_run.  _last_run only advances when a run produced a new
+        # plan, and during an evening peak a plan that is being followed is
+        # skipped by _should_reoptimize (SoC deviation within tolerance) — so
+        # _last_run can stay hours old while everything is perfectly healthy.
+        # The forced-sell age gate reads this instead; see _evaluate_forced_sell.
+        self._last_optimizer_attempt: datetime | None = None
         self._last_reason: str = ""
         self._last_sources: list[str] | None = None
         self._last_user_winners: list[SlotWinner] | None = None
@@ -399,6 +406,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # later stop can recover from.  NOT reentrant: the _locked helpers
         # below assume it is already held.
         self._forced_sell_lock: asyncio.Lock = asyncio.Lock()
+        # At most one forced-sell tick task per coordinator.  Every restore
+        # holds _forced_sell_lock across a bounded service call, so a tick
+        # queued while the previous one is still working would block on the
+        # lock; at 5-minute intervals a slow restore then piles up coroutines
+        # one per interval.  Set by _forced_sell_tick_callback when it queues
+        # the task, cleared in _evaluate_forced_sell's finally.  Per instance,
+        # not module level: two config entries may share an Emaldo device, and
+        # a module-level flag would let one entry's tick suppress the other's.
+        self._forced_sell_tick_in_flight: bool = False
         # Balancing state tracking
         self._balancing_sensor: str | None = None
         # Pinned Emaldo entry (from config, or auto-detected)
@@ -431,9 +447,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # power loss skips every restore path.  Its own sidecar rather than a
         # runtime_state.json field: that file is day-scoped (rebuild_runtime
         # rejects a stale last_run and needs plan_slots), while this marker has
-        # to outlive the day and is not a plan.
+        # to outlive the day and is not a plan.  Scoped to the config entry:
+        # the switch belongs to one entry's Emaldo device, so a single shared
+        # filename would let one entry's tick or restart restore turn off the
+        # other entry's switch — and each would latch off the other's marker.
         self._sell_back_to_grid_state_path = self.hass.config.path(
-            "battery_optimizer_sell_back_to_grid.json"
+            self._sell_back_to_grid_marker_name(entry.entry_id)
         )
         self._sell_back_to_grid_restored = False
         # Solar forecast scale — resolved per run, applied at the forecast
@@ -511,13 +530,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._emaldo_control_enabled: bool = self.config.get(
             CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
         )
-        # Forced sell (manual selling) enable/disable.  Gates the 5-min tick so
-        # installs without the feature — the default — allocate neither a
-        # coroutine nor a task every 5 minutes, mirroring _pv_strategy_enabled
-        # on the PV reconcile loop.
-        self._forced_sell_enabled: bool = self.config.get(
-            CONF_FORCED_SELL_ENABLED, DEFAULT_FORCED_SELL_ENABLED
-        )
+        # Forced sell (manual selling) enable/disable is read live through the
+        # _forced_sell_enabled property — see its comment.  It gates the
+        # 5-min tick so installs without the feature — the default — allocate
+        # neither a coroutine nor a task every 5 minutes, mirroring
+        # _pv_strategy_enabled on the PV reconcile loop.
         # Low-SoC forced re-run throttle
         self._last_low_soc_rerun: datetime | None = None
         # L2 idle-gap replan throttle
@@ -534,6 +551,27 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def config(self) -> dict[str, Any]:
         """Merged config data + options."""
         return {**self._entry.data, **self._entry.options}
+
+    @property
+    def _forced_sell_enabled(self) -> bool:
+        """Whether forced sell is enabled — read live, never snapshotted.
+
+        An __init__ snapshot is wrong here: _async_options_updated() refreshes
+        the listeners and re-runs the optimizer but never reloads the config
+        entry, so a snapshot taken at setup stays at its setup value for the
+        whole session.  Enabling forced sell from the options UI then leaves a
+        dead tick until HA restarts (issue #23 cause A unfixed for that user),
+        and the disable-teardown is unreachable for the same reason.
+
+        ``config`` reads ``self._entry.options`` on every access, and Home
+        Assistant mutates the ConfigEntry object in place in async_update_entry
+        rather than replacing it, so this is the current value.  The same
+        property is what makes the option flow change visible without a
+        restart.
+        """
+        return bool(
+            self.config.get(CONF_FORCED_SELL_ENABLED, DEFAULT_FORCED_SELL_ENABLED)
+        )
 
     def _config_int(self, key: str, fallback: int) -> int:
         """Return a config value as an int, falling back when unavailable."""
@@ -1638,6 +1676,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._runtime_state_path,
             )
 
+    @staticmethod
+    def _sell_back_to_grid_marker_name(entry_id: str) -> str:
+        """Filename of the restart marker for one config entry.
+
+        Scoped by entry id because the switch is per entry: with one shared
+        filename, two entries on the same Emaldo device would each clear the
+        other's enable and latch off a marker the other entry had already
+        cleared.
+        """
+        return f"battery_optimizer_sell_back_to_grid_{entry_id}.json"
+
     def _load_sell_back_to_grid_state(self) -> bool | None | object:
         """Read the restart marker.
 
@@ -1701,15 +1750,23 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         been verified, so a crash in between leaves a marker (one redundant
         turn_off at the next startup) instead of an enable nobody recorded.
         _sell_back_to_grid_saved is still only set once the switch is on.
+
+        Called from the window-open path only — nothing re-persists on a later
+        tick, deliberately: a config dir that cannot be written to would then
+        retry a doomed fsync once per 5-minute tick for the life of the
+        install.  The consequence is spelled out in the OSError branch.
         """
         if not (force or self._sell_back_to_grid_saved):
             return
         try:
             self._write_sell_back_to_grid_marker(True)
         except OSError:
-            # ERROR, not warning: the in-memory flag keeps this session
-            # retrying, but an unclean restart from here strands the switch
-            # with no record anywhere.
+            # ERROR, not warning: nothing retries this write, so the window
+            # flips the switch with no marker on disk and only the in-memory
+            # flag knows.  A clean unload still restores it, but an unclean
+            # restart from here strands the switch ON with no record anywhere.
+            # Nothing to do about it from here — re-persisting per tick would
+            # not help this session either, and would spam the log.
             _LOGGER.error(
                 "Could not persist sell-back-to-grid state to %s",
                 self._sell_back_to_grid_state_path,
@@ -2197,6 +2254,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             reason: Why this run was triggered.
             force: If False, skip if conditions haven't changed enough.
         """
+        # Issue #23: stamp the ATTEMPT before every guard below.  The SoC gate,
+        # _should_reoptimize and the no_change_skip return all mean "we looked
+        # and the plan in hand still stands" — and during an evening peak a
+        # plan that is being followed is skipped, so _last_run (which only
+        # advances when a new plan was produced) goes stale in exactly the
+        # steady state forced sell depends on.  The forced-sell age gate reads
+        # this timestamp instead.  Stamped on entry, so it also advances on a
+        # run that bails out below.
+        self._last_optimizer_attempt = dt_util.now()
         await self._maybe_sweep_expired_rules(reason)
         await self._restore_runtime_state()
         # Issue #23: the real safety net for an unclean restart mid-window —
@@ -2941,31 +3007,67 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         without an age gate this would reinterpret an hours-old plan's
         sell_slots against today's clock and sell at stale prices.
 
+        The gate is anchored on _last_optimizer_attempt, NOT _last_run.
+        _last_run is only assigned when a run actually produced a new plan, and
+        _should_reoptimize returns False whenever the SoC deviation is within
+        tolerance — i.e. while the plan is being FOLLOWED, which is the normal
+        steady state during an evening peak.  A plan that keeps being skipped
+        therefore keeps _last_run stale, and gating on it starved the very
+        windows this fix exists for: with the default optimizer_interval the
+        gate closed after 135 minutes and every later sell window was silently
+        skipped.  "When did we last try to run the optimizer" is the liveness
+        question the gate is actually asking — if the optimizer has not even
+        attempted a run for longer than one interval, its view of the day is
+        not current enough to open a sale on.  _last_run remains the fallback
+        for the restored-state case, where a restart has rehydrated a plan but
+        no attempt has happened yet.
+
+        A sale must still be stoppable when that gate closes, so the stop path
+        runs outside it: a plan too old to start from is still the plan that
+        describes the running window, and only ever tears down.  The gate
+        cannot starve the teardown.
+
         Disabling forced sell mid-window stops the sale rather than orphaning
         it: a bare ``return`` would leave the manual-selling switch on and the
         Sell back to grid enable un-restored, with the sale running past its
         window and nothing managing it.  So when the feature is off and
         something is still active, tear down.  Deliberately above the
-        _last_result/_last_run/age gates — teardown must work even with no
-        usable plan.
+        _last_result/age gates — teardown must work even with no usable plan.
         """
-        if not self._forced_sell_enabled:
-            if self._manual_selling_active or self._sell_back_to_grid_saved:
-                # Public entry point on purpose: this coroutine does not hold
-                # _forced_sell_lock, and asyncio.Lock is not reentrant.
-                await self._stop_manual_selling()
-            return
-        if not self._emaldo_control_enabled or self._last_result is None:
-            return
-        if self._last_run is None:
-            return
-        opt_interval = self._config_int(
-            CONF_OPTIMIZER_INTERVAL, DEFAULT_OPTIMIZER_INTERVAL
-        )
-        if dt_util.now() - self._last_run > timedelta(minutes=opt_interval + 15):
-            _LOGGER.debug("Last plan too old to act on for forced sell")
-            return
-        await self._manage_manual_selling(self._last_result, dt_util.now())
+        try:
+            if not self._forced_sell_enabled:
+                if self._manual_selling_active or self._sell_back_to_grid_saved:
+                    # Public entry point on purpose: this coroutine does not
+                    # hold _forced_sell_lock, and asyncio.Lock is not reentrant.
+                    await self._stop_manual_selling()
+                return
+            if not self._emaldo_control_enabled or self._last_result is None:
+                return
+            anchor = self._last_optimizer_attempt or self._last_run
+            if anchor is None:
+                return
+            opt_interval = self._config_int(
+                CONF_OPTIMIZER_INTERVAL, DEFAULT_OPTIMIZER_INTERVAL
+            )
+            plan_too_old = (
+                dt_util.now() - anchor > timedelta(minutes=opt_interval + 15)
+            )
+            if plan_too_old and not (
+                self._manual_selling_active or self._sell_back_to_grid_saved
+            ):
+                _LOGGER.debug("Last plan too old to act on for forced sell")
+                return
+            # start_allowed=False: too old to open a sale from, but the window
+            # still gets its chance to close.  Both flags unset would have
+            # taken the early return above, so nothing running is disturbed.
+            await self._manage_manual_selling(
+                self._last_result, dt_util.now(), start_allowed=not plan_too_old
+            )
+        finally:
+            # The callback sets this before queueing the task (see
+            # _forced_sell_tick_callback); released here so the next tick can
+            # run, including when the body raised.
+            self._forced_sell_tick_in_flight = False
 
     @callback
     def _forced_sell_tick_callback(self, _now) -> None:
@@ -2973,11 +3075,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Mirrors _pv_reconcile_callback: a cheap synchronous guard plus a
         scheduled task, so the timer callback never blocks the event loop.
-        The _forced_sell_enabled guard keeps the tick free for installs that
-        never enabled the feature — but it checks the two active-state flags
-        first, so a mid-window disable still queues the teardown instead of
-        orphaning the sale, while an install with nothing active still
+        The _forced_sell_enabled guard (a live read of the config entry, not a
+        setup-time snapshot — see the property) keeps the tick free for installs
+        that never enabled the feature — but it checks the two active-state
+        flags first, so a mid-window disable still queues the teardown instead
+        of orphaning the sale, while an install with nothing active still
         allocates no coroutine and no task.
+
+        One tick task at a time: a tick still running (waiting on
+        _forced_sell_lock behind a slow restore, say) makes this callback a
+        no-op, so a slow restore cannot accumulate one queued coroutine per
+        5-minute interval.  The restore scheduling below is deliberately not
+        behind that guard — it is the safety net for a switch stranded by a
+        power cut and must keep its own cadence.
 
         Also the retry driver for the post-restart restore (issue #23), and
         deliberately above every other guard: right after a reboot
@@ -2993,12 +3103,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass.async_create_task(
                 self._restore_sell_back_to_grid_after_restart()
             )
+        if self._forced_sell_tick_in_flight:
+            return  # a tick is still working; never queue a second one
         if not self._forced_sell_enabled:
             if self._manual_selling_active or self._sell_back_to_grid_saved:
+                self._forced_sell_tick_in_flight = True
                 self.hass.async_create_task(self._evaluate_forced_sell())
             return
         if not self._emaldo_control_enabled or self._last_result is None:
             return
+        self._forced_sell_tick_in_flight = True
         self.hass.async_create_task(self._evaluate_forced_sell())
 
     def _sell_back_to_grid_switch_id(self) -> str:
@@ -3036,14 +3150,31 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         restore leaves it set, so the next stop the 5-min tick issues retries
         it; clearing it on failure would discard the only record that a restore
         is owed and strand the switch ON with nothing left to act on.
+
+        Bounded by _SELL_BACK_RESTORE_TIMEOUT_S, exactly like the restart path:
+        the caller holds _forced_sell_lock across this call, so an unbounded
+        one stalls the optimizer run and every tick queued behind it.  A
+        timeout is treated like any other failure — flag and marker both stay,
+        so the next tick retries.
         """
         if not self._sell_back_to_grid_saved:
             return
         sell_back_id = self._sell_back_to_grid_switch_id()
         try:
-            await self.hass.services.async_call(
-                "switch", "turn_off", {"entity_id": sell_back_id}, blocking=True,
+            await asyncio.wait_for(
+                self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": sell_back_id},
+                    blocking=True,
+                ),
+                timeout=_SELL_BACK_RESTORE_TIMEOUT_S,
             )
+        except (TimeoutError, asyncio.TimeoutError) as err:
+            _LOGGER.error(
+                "Timed out after %ss restoring %s to off; keeping the marker "
+                "and retrying on the next forced-sell tick: %s",
+                _SELL_BACK_RESTORE_TIMEOUT_S, sell_back_id, err,
+            )
+            return
         except Exception as err:  # noqa: BLE001
             _LOGGER.error(
                 "Failed to restore %s to off, retrying on the next forced-sell "
@@ -3062,18 +3193,28 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.info("Restored %s to off after the window", sell_back_id)
 
     async def _manage_manual_selling(
-        self, result: OptimizationResult, now: datetime
+        self,
+        result: OptimizationResult,
+        now: datetime,
+        start_allowed: bool = True,
     ) -> None:
         """Start/stop emaldo manual selling per the forced-sell plan.
 
         Entry point for both callers (optimizer run tail and the 5-min tick).
         Takes _forced_sell_lock so the two cannot interleave, then delegates.
+
+        start_allowed=False is the tick's stop-only pass: the plan is too old
+        to open a sale from, but its stop branches still run, because a sale
+        that has to end must not be held hostage by the age gate.
         """
         async with self._forced_sell_lock:
-            await self._manage_manual_selling_locked(result, now)
+            await self._manage_manual_selling_locked(result, now, start_allowed)
 
     async def _manage_manual_selling_locked(
-        self, result: OptimizationResult, now: datetime
+        self,
+        result: OptimizationResult,
+        now: datetime,
+        start_allowed: bool = True,
     ) -> None:
         """Body of _manage_manual_selling; caller already holds the lock.
 
@@ -3081,13 +3222,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         number, then toggles the manual_selling switch (verified write).
         Guards: integration disabled, no device id, plan window over,
         plan without forced sell, PV-only window (no battery target —
-        inverter auto-exports surplus).
+        inverter auto-exports surplus), start not allowed (stale plan).
         """
         if not self._emaldo_control_enabled:
             await self._stop_manual_selling_locked()
             return
-        if not self.resolve_emaldo_device():
-            return  # fail-safe: no selling, device just idles
         window = result.sell_slots or []
         if result.sell_target_kwh <= 0:
             # PV-only window: the inverter exports on its own.  Stop rather
@@ -3099,9 +3238,20 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not window:
             await self._stop_manual_selling_locked()
             return
+        # Deliberately BELOW every stop branch: they need no device, so
+        # resolve_emaldo_device() returning False must not strand a sale that is
+        # live — losing the binding mid-window used to strand both switches.
         now_slot = int(now.hour * 4 + now.minute // 15)
         if now_slot < window[0] or now_slot > window[-1]:
             await self._stop_manual_selling_locked()
+            return
+        # It gates opening a new sale only: fail-safe, no selling, device idles.
+        if not self.resolve_emaldo_device():
+            return
+        if not start_allowed:
+            # Stale plan (issue #23): outside the window it has already stopped
+            # above; inside, the window is still allowed to close but nothing
+            # new may be opened from it.
             return
         if self._manual_selling_active:
             return  # already running; re-check handled by plan re-run
@@ -3118,11 +3268,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if sb_on is None:
             # Same deference as _ensure_pv_switch_matches_plan: with no real
             # state there is no telling "the user owns it" from "we owe a
-            # restore", so no write and nothing remembered.
+            # restore", so no write and nothing remembered.  Return without
+            # staging the target either: the sale cannot satisfy its
+            # prerequisite without the switch, and _manual_selling_active
+            # would short-circuit every later tick at the guard below, leaving
+            # the enable unapplied for the rest of the window behind a DEBUG
+            # line.  Bailing here leaves the tick's next pass free to retry.
             _LOGGER.debug(
-                "Sell back to grid state unknown (entity=%s) - deferring enable",
-                sell_back_id,
+                "Sell back to grid state unknown (entity=%s) - deferring the "
+                "forced-sell start to the next tick", sell_back_id,
             )
+            return
         elif not sb_on:
             # Issue #23: the in-memory flag below cannot survive a power loss
             # and nothing else records that the switch is ours.  Write the
@@ -3147,10 +3303,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # _sell_back_to_grid_saved stays None: nothing was flipped, so
                 # nothing is owed this session, and the flag must only claim a
                 # restore once the switch is actually on.  The marker written
-                # above still makes the next startup issue one harmless
+                # above must therefore go too — it exists to record OUR flip,
+                # and no flip happened.  Left in place it would outlive the
+                # window and make the next startup issue a turn_off against a
+                # switch we never turned on, taking away a setting the user owns.
+                # The crash case is unaffected: a power cut between the write
+                # and the enable leaves a marker, which is one harmless
                 # turn_off.  A prerequisite that will not flip must not skip
                 # the sale - the window is time-boxed, so a lost sale is
                 # recoverable.
+                await self.hass.async_add_executor_job(
+                    self._clear_sell_back_to_grid_state
+                )
                 _LOGGER.error(
                     "Could not enable %s for forced sell: %s", sell_back_id, err
                 )
