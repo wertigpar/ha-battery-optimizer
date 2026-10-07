@@ -397,6 +397,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # on, so the stop path knows to turn it off again; None = never
         # touched, False = already on and therefore the user's.
         self._sell_back_to_grid_saved: bool | None = None
+        # Issue #23: identity of the window whose sale this session already
+        # served, as (date, tuple(sell_slots)).  Emaldo stops a manual sale by
+        # ITSELF once the staged target has been exported (measured: 4 kWh over
+        # 18:30-19:00 finished itself at 18:54), so self-completion is the normal
+        # path, not an edge case.  Clearing _manual_selling_active on its own
+        # would let the next tick re-enter the start path and open a SECOND sale
+        # for the same window — a double export.  This key is what separates
+        # "a sale for this window is running" from "this window is already
+        # served", and it resets by value: a different date or a different
+        # window is a different key, so the next window is servable again.
+        self._manual_selling_served: tuple[date, tuple[int, ...]] | None = None
         self._sell_back_to_grid_switch_id_cached: str | None = None
         # Serialises the forced-sell start/stop sequence.  Two callers now
         # reach it: the tail of an optimizer run and the 5-min forced-sell
@@ -3224,6 +3235,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan without forced sell, PV-only window (no battery target —
         inverter auto-exports surplus), start not allowed (stale plan).
         """
+        # Ahead of every branch below, including the stop ones: self-completion
+        # is the NORMAL end of a sale, and the stop branches would issue the
+        # turn_off that only exists to interrupt one still running.
+        await self._check_manual_selling_self_completion_locked(result, now)
         if not self._emaldo_control_enabled:
             await self._stop_manual_selling_locked()
             return
@@ -3255,6 +3270,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         if self._manual_selling_active:
             return  # already running; re-check handled by plan re-run
+        # Issue #23: Emaldo ends a manual sale by itself once the staged target
+        # has been exported, so _manual_selling_active goes False on its own
+        # with the window still open.  Without this key the next tick would see
+        # an open window, no active sale, and open a SECOND one — exporting the
+        # battery twice for one window.  Cleared by value: a new date or a
+        # different window is a different key, so tomorrow's window sells again.
+        if self._manual_selling_served == (now.date(), tuple(window)):
+            _LOGGER.debug(
+                "Forced-sell window %s on %s already served; not starting "
+                "another sale", window, now.date(),
+            )
+            return
         # Issue #23 cause B: Emaldo refuses Manual selling while Sell back to
         # grid is off, so the window exports nothing.  Enable it for the window
         # and remember that we did, so the stop path can put the user's setting
@@ -3318,9 +3345,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.error(
                     "Could not enable %s for forced sell: %s", sell_back_id, err
                 )
-        switch_id = self._resolve_emaldo_entity(
-            "manual_selling", domain="switch"
-        ) or "switch.power_store_manual_selling"
+        switch_id = self._manual_selling_switch_id()
         number_id = self._resolve_emaldo_entity(
             "manual_selling_target", domain="number"
         ) or "number.power_store_manual_selling_target"
@@ -3341,6 +3366,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Flag set only after the switch is verified on, so a failed or
         # interrupted start never leaves a flag claiming to be selling.
         self._manual_selling_active = True
+        # And the window is now SERVED — the target is staged and the sale is
+        # under way, whether Emaldo carries it out or stops itself early.  A
+        # later tick that finds the switch already off must not re-open it.
+        self._manual_selling_served = (now.date(), tuple(window))
         _LOGGER.info(
             "Manual selling started: %d slots, target %.1f kWh",
             len(window), result.sell_target_kwh,
@@ -3350,6 +3379,69 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Stop an active manual sale. Public entry point; takes the lock."""
         async with self._forced_sell_lock:
             await self._stop_manual_selling_locked()
+
+    def _manual_selling_switch_id(self) -> str:
+        """Entity id of Emaldo's Manual selling switch.
+
+        Same resolve-or-fallback shape as _sell_back_to_grid_switch_id, and
+        deliberately not cached: the Emaldo entity registry can still be empty
+        on the first tick after boot.
+        """
+        return (
+            self._resolve_emaldo_entity("manual_selling", domain="switch")
+            or "switch.power_store_manual_selling"
+        )
+
+    def _manual_selling_is_off(self) -> bool:
+        """Whether Emaldo's manual-selling switch reads a definite off.
+
+        Only "off" counts.  unknown / unavailable / a missing entity all read
+        False, because the caller must change nothing on an unreadable state
+        rather than guess that a running sale finished.
+        """
+        state = self.hass.states.get(self._manual_selling_switch_id())
+        return state is not None and state.state == "off"
+
+    async def _check_manual_selling_self_completion_locked(
+        self, result: OptimizationResult, now: datetime
+    ) -> None:
+        """Notice that Emaldo ended the sale itself; caller holds the lock.
+
+        The manual-selling API takes the planned sell energy as its input and
+        stops on its own once that amount has been exported (issue #23, measured:
+        a 4 kWh target over 18:30-19:00 finished itself at 18:54).  So while
+        _manual_selling_active is True and the switch reads off, the planned
+        energy is already sold and the only thing left is this component's own
+        bookkeeping.
+
+        Two consequences, both deliberate:
+
+        - Sell back to grid is restored HERE, not at window close.  It is ours
+          and it is on for the rest of the window otherwise, i.e. up to ~2 h of
+          unrequested grid export after the planned energy is already sold.
+        - _manual_selling_active is cleared but the window is recorded as served
+          (if it is not already), so the next tick cannot open a second sale for
+          the same window.  Turning the flag off is what made this necessary;
+          clearing it alone is the double-export bug.
+
+        No turn_off: that command exists only to interrupt a sale still running,
+        and there is nothing left to interrupt.  _restore_sell_back_to_grid()
+        clears the persisted marker on success, so no restart recovery is owed
+        for a sale that already finished.
+        """
+        if not self._manual_selling_active:
+            return
+        if not self._manual_selling_is_off():
+            return
+        self._manual_selling_active = False
+        self._manual_selling_served = (
+            now.date(), tuple(result.sell_slots or ())
+        )
+        _LOGGER.info(
+            "Manual selling finished on its own (planned energy exported); "
+            "restoring Sell back to grid without waiting for window end"
+        )
+        await self._restore_sell_back_to_grid()
 
     async def _stop_manual_selling_locked(self) -> None:
         """Stop an active manual sale; caller already holds the lock.
@@ -3364,15 +3456,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._restore_sell_back_to_grid()
             return
         self._manual_selling_active = False
-        switch_id = self._resolve_emaldo_entity(
-            "manual_selling", domain="switch"
-        ) or "switch.power_store_manual_selling"
-        try:
-            await self.hass.services.async_call(
-                "switch", "turn_off", {"entity_id": switch_id}, blocking=True,
+        switch_id = self._manual_selling_switch_id()
+        if self._manual_selling_is_off():
+            # Emaldo already stopped itself once the staged target was exported;
+            # turn_off is for INTERRUPTING a running sale, so there is nothing
+            # to interrupt.  _restore_sell_back_to_grid() below is still owed —
+            # keyed on our own flag, not on the sale being active.
+            _LOGGER.debug(
+                "Manual selling already finished by itself; not sending turn_off"
             )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Failed to stop manual selling: %s", err)
+        else:
+            try:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": switch_id}, blocking=True,
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error("Failed to stop manual selling: %s", err)
         # Issue #23 cause B: withdraw the enable we made - after the sale
         # itself has stopped, never before.
         await self._restore_sell_back_to_grid()
