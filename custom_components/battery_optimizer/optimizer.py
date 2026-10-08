@@ -42,10 +42,13 @@ class BatteryConfig:
     """Battery and fee parameters."""
 
     capacity_kwh: float = 5.0
-    # Inverter maximum charge/discharge power, as configured by the user.
-    # Emaldo runs the inverter at full power when grid charging or grid
-    # discharging, so these kW values also fix the per-slot energy — see
-    # ``max_charge_per_slot_kwh`` / ``max_discharge_per_slot_kwh``.
+    # Inverter maximum charge/discharge CAPABILITY in kW, as configured by
+    # the user — what the hardware can deliver, never a requested level.
+    # Emaldo exposes no other power control and runs the inverter at full
+    # power when grid charging or grid discharging, so these kW values also
+    # fix the per-slot energy (kW x 0.25 h) — see ``max_charge_per_slot_kwh``
+    # / ``max_discharge_per_slot_kwh``.  Under-sizing is safe but leaves
+    # headroom unsold; over-sizing plans sell energy the inverter cannot.
     # Assumption: Emaldo's grid power limit is NOT set.  With a limit in
     # place the inverter would move less than this per slot and both
     # per-slot figures would overstate what is actually available.

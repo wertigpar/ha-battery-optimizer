@@ -70,6 +70,9 @@ DEFAULT_VAT_MULTIPLIER = 1.255       # 25.5% Finnish electricity VAT
 DEFAULT_TRANSFER_FEE_BUY = 0.0776    # €/kWh transfer + tax, VAT-inclusive
 DEFAULT_SALES_COMMISSION = 0.003     # €/kWh retailer commission on feed-in
 DEFAULT_BATTERY_CAPACITY_KWH = 15.0
+# Inverter MAXIMUM CAPABILITY in kW, not a target or a requested setpoint.
+# Emaldo's inverter API exposes no other power control, so forced selling
+# always runs at this power (~10 kW is typical for Emaldo inverters).
 DEFAULT_MAX_CHARGE_KW = 10.0
 DEFAULT_MAX_DISCHARGE_KW = 10.0
 DEFAULT_CHARGE_EFFICIENCY = 0.9
