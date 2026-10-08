@@ -153,8 +153,9 @@ def render_analysis(snapshot: dict, *, currency: str = "EUR") -> str:
                           "Device's own AI schedule, same inputs"])
     scenarios.append(["Baseline (no battery)", _fmt(baseline_cost),
                       "Grid imports only after sunset; surplus solar sold"])
-    scenarios.append(["Optimizer plan", _fmt(actual_cost),
-                      "Battery charged from solar; load covered by solar+battery"])
+    scenarios.append(["Optimizer plan", _fmt(baseline_cost - net_profit),
+                      "Battery charged from solar; load covered by solar+battery; "
+                      "incl. battery wear"])
     lines.append("## Plan cost comparison")
     lines.append("")
     lines.append(_table(["Scenario", f"Cost ({currency})", "What it does"], scenarios))
@@ -257,8 +258,9 @@ def render_analysis(snapshot: dict, *, currency: str = "EUR") -> str:
                       "Device's own AI schedule, same inputs"))
     order.append((baseline_cost, "Baseline (no battery)",
                   "Grid imports only after sunset; surplus solar sold"))
-    order.append((actual_cost, "Optimizer plan",
-                  "Battery charged from solar; load covered by solar+battery"))
+    order.append((baseline_cost - net_profit, "Optimizer plan",
+                  "Battery charged from solar; load covered by solar+battery; "
+                  "incl. battery wear"))
     order.sort(key=lambda row: row[0])
     n = len(order)
     order_rows = []
