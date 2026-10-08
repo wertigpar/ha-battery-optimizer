@@ -191,6 +191,12 @@ _SELL_BACK_MARKER_UNREADABLE = object()
 # loudly and the next tick retries.
 _SELL_BACK_RESTORE_TIMEOUT_S = 30
 
+# The forced-sell stop holds _forced_sell_lock across its own switch.turn_off,
+# and the sell-back-to-grid restore runs only AFTER that call returns, so an
+# unbounded stop wedges the lock and strands the restore permanently.  Bounded
+# for the same reason, and on a timeout the restore below still runs.
+_MANUAL_SELLING_STOP_TIMEOUT_S = 30
+
 # Issue #23: switch.turn_on does NOT raise when Emaldo refuses to start the
 # sale - the reporter measured Manual selling reading back off for three
 # minutes with no export - so a start that silently failed cannot be told
@@ -3598,8 +3604,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         else:
             try:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": switch_id}, blocking=True,
+                # Bounded: the forced-sell lock is held across this call and
+                # the restore below depends on it returning, so an unbounded
+                # turn_off would stall the lock and skip the restore outright.
+                await asyncio.wait_for(
+                    self.hass.services.async_call(
+                        "switch", "turn_off", {"entity_id": switch_id},
+                        blocking=True,
+                    ),
+                    timeout=_MANUAL_SELLING_STOP_TIMEOUT_S,
+                )
+            except (TimeoutError, asyncio.TimeoutError) as err:
+                _LOGGER.error(
+                    "Timed out after %ss stopping manual selling on %s; "
+                    "withdrawing sell back to grid anyway: %s",
+                    _MANUAL_SELLING_STOP_TIMEOUT_S, switch_id, err,
                 )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error("Failed to stop manual selling: %s", err)
