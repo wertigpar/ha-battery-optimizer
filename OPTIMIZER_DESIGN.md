@@ -173,7 +173,7 @@ Effective buy and sell prices (€/kWh) are derived from raw Nordpool spot price
 
 ## Forced Sell (Manual Sell Arbitrage)
 
-**Default-off.** `forced_sell_max_energy > 0` enables the plan step; the actuator dispatches Emaldo services. Two tiers per slot:
+**Default-off.** `forced_sell_enabled` gates the plan step; `forced_sell_max_kwh_pd` caps the daily energy budget in kWh/day, where 0 means no limit (unlimited). The actuator dispatches Emaldo services. Two tiers per slot:
 
 **Battery tier** — discharge stored energy to grid via the emaldo `manual_selling` switch (staged target in `manual_selling_target`). Economics per kWh sold:
 ```
