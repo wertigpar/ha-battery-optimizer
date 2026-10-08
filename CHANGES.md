@@ -99,26 +99,6 @@
   deliberately deferred until the window closes — up to ~120 minutes with the
   default `optimizer_interval`.
 
-### Verification gaps
-
-None of these are blockers.
-
-- No live Home Assistant test. `homeassistant` is not importable in the local
-  environment, so the config flow and the real service calls are covered by
-  `load_coordinator()` stub tests only. First real proof is a device deploy.
-- The idempotent restore is unit-tested against a mocked `hass`. A genuine power
-  loss mid-window on real hardware is untested.
-- The `sell_back_to_grid` entity id is unverified against a live Emaldo: if
-  Emaldo names the unique-id suffix differently the registry lookup returns
-  `None` and the fallback applies, correct only if the default matches their
-  slug.
-- Interaction with the PV sell switch is untested. Both switches are now driven
-  by the component on independent 5-minute timers, and nothing exercises them
-  diverging inside the same window.
-- `runtime_state.json` was deliberately not reused for the restore marker. If a
-  future change needs one store for all persisted coordinator state, this
-  sidecar should be folded in then.
-
 ## v0.3.22
 
 ### Added
