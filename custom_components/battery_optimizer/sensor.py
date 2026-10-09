@@ -51,6 +51,12 @@ from .rules import sources_summary
 
 _LOGGER = logging.getLogger(__name__)
 
+# Noise floor for a per-slot grid import reading, in kWh. Below this the
+# slot carries no usable import signal. Shared by grid_charge (which also
+# requires a SoC rise) and solar_charge (which requires no import), so the
+# two accumulators stay complementary.
+GRID_IMPORT_NOISE_FLOOR_KWH = 0.001
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -328,21 +334,18 @@ class RealizedCostTodaySensor(_RealizedCostBaseSensor):
             ik = r.get("import_kwh", 0.0)
             sd_kwh = sd / 100.0 * capacity
 
-            # D3: grid_charge is MEASURED, not planned.  The import meter is
-            # the only source of truth for how much energy actually came off
-            # the grid, and it counts in EVERY slot -- not only the ones the
-            # plan happened to label "charge".  Classifying by planned action
-            # silently dropped the part of the overnight charge that landed in
-            # an "idle" or "discharge" slot, so a real ~9.2 kWh charge reported
-            # as 4.02 kWh (issue #26 comment 5932659688).  0.001 kWh is the
-            # same noise floor the old charge branch used.
-            if ik > 0.001:
+            # Measured, not planned.  The planner's action label says nothing
+            # about whether the battery actually gained charge, so the SoC
+            # delta decides and the import meter supplies the quantity.
+            # Import in a slot with no SoC rise is house load, and is not
+            # booked as battery charge.
+            if ik > GRID_IMPORT_NOISE_FLOOR_KWH and sd_kwh > 0:
                 grid_charge += ik
 
             if act in ("charge", "charge_floor"):
                 # Reached only when there was NO import, so a battery rise
                 # here is solar.  Nothing changes for the other actions.
-                if ik <= 0.001 and sd_kwh > 0:
+                if ik <= GRID_IMPORT_NOISE_FLOOR_KWH and sd_kwh > 0:
                     solar_charge += sd_kwh
             elif act == "discharge":
                 if sd_kwh < 0:
