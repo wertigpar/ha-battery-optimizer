@@ -30,6 +30,13 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Energy the forced-sell planner deliberately keeps in the battery on top of
+# ``soc_min``: the sale never aims at the floor itself, it stops one
+# reserve-length short of it so the window cannot strand the house with an
+# empty battery.  Absolute kWh, not a percentage, so it does not rescale with
+# capacity.
+_FORCED_SELL_RESERVE_KWH = 1.0
+
 # Deepest un-fixable floor violation seen in the current episode.  Module
 # state survives across optimizer runs so repeated runs don't re-log the
 # same condition; only a deeper dip re-logs.  Reset when a run finds the
@@ -1223,13 +1230,53 @@ def _correct_soc_for_pv_sells(
         sp.soc_after = round(soc / cap * 100.0, 1)
 
 
+def _correct_soc_for_forced_sell(
+    slots: list[SlotPlan],
+    sell_plan: dict[int, tuple[float, str]],
+    cfg: BatteryConfig,
+) -> None:
+    """Recompute soc_after for slots affected by a forced (manual) sell.
+
+    The optimizer builds soc_after from the plan's charge / discharge /
+    idle actions.  A forced sell withdraws battery energy that NO slot action
+    accounts for, so from the first sell slot onward the trajectory is that
+    much too high — the energy left the battery but the plan still reads as
+    though it is there.  ``coordinator.py`` (~829) and ``sensor.py``
+    (~203/782/812) read ``soc_after``, so the gap reaches the dashboard and
+    every downstream consumer.
+
+    Same shape and same reason as ``_correct_soc_for_pv_sells``, which rewrites
+    the trajectory forward when a sell decision diverts solar away from the
+    battery; forced sell is applied at the same late stage and needs the same
+    treatment.  The correction is a cumulative shift by the energy withdrawn
+    rather than a re-simulation: the plan's per-slot actions are already fixed
+    and already handed to the device, so only the missing withdrawal has to be
+    accounted for.
+
+    Mutates SlotPlan.soc_after in-place.
+    """
+    if not sell_plan:
+        return
+    cap = cfg.capacity_kwh
+    first_sell = min(sell_plan)
+    withdrawn_kwh = 0.0
+    for sp in sorted(slots, key=lambda s: s.index):
+        if sp.index < first_sell:
+            continue
+        withdrawn_kwh += sell_plan.get(sp.index, (0.0, ""))[0]
+        soc = sp.soc_after * cap / 100.0 - withdrawn_kwh
+        # A withdrawal only lowers the trajectory, so soc_max cannot be
+        # exceeded; the floor clamp is a guard, not an expected outcome — the
+        # sell budget already stops above soc_min + the reserve.
+        sp.soc_after = max(soc, 0.0) / cap * 100.0
+
+
 def _plan_forced_sell_slots(
     cfg: BatteryConfig,
     buy_prices: list[float],
     sell_prices: list[float],
     result_slots: list[SlotPlan],
     start_slot: int,
-    start_soc_kwh: float | None,
     round_trip_factor: float,
     *,
     total_slots: int = SLOTS_PER_DAY,
@@ -1252,19 +1299,20 @@ def _plan_forced_sell_slots(
       behavior: the battery absorbs excess solar, no sell headroom.
     - No sale at the final slot (s+1 >= total_slots): no recharge remains.
     - Battery tier: per-slot ceiling is the configured discharge power over
-      the slot duration (``max_discharge_per_slot_kwh``), capped by remaining
-      usable capacity and the daily budget; sells only while the round-trip
-      exceeds the cheapest forward buy minus wear (``forced_sell_min_profit``).
+      the slot duration (``max_discharge_per_slot_kwh``), capped by the
+      energy actually in the battery AT that slot and by the daily budget;
+      sells only while the round-trip exceeds the cheapest forward buy minus
+      wear (``forced_sell_min_profit``).
+
+    The budget is read per slot from ``result_slots[s].soc_after`` rather than
+    from one start-of-window SoC figure: between ``start_slot`` and the sell
+    slot the plan may have charged or discharged, and a single start-of-window
+    number is wrong in both directions — it under-sells a battery that topped
+    up on the way, and it over-sells a battery that drained, draining past the
+    floor.  The window's own earlier withdrawals are subtracted from that
+    per-slot reading so slot N cannot re-spend what slot N-1 already took.
     """
     if not cfg.forced_sell_enabled:
-        return {}
-    if start_soc_kwh is None:
-        return {}
-    usable_kwh = max(
-        0.0,
-        start_soc_kwh - cfg.capacity_kwh * cfg.soc_min / 100.0 - 1.0,
-    )
-    if usable_kwh <= 0.0:
         return {}
     budget_kwh = (
         cfg.forced_sell_max_kwh_pd
@@ -1274,7 +1322,9 @@ def _plan_forced_sell_slots(
     min_profit = cfg.forced_sell_min_profit
     min_price = cfg.forced_sell_min_price
     wear = cfg.wear_cost_per_kwh
-    remaining = usable_kwh
+    capacity = cfg.capacity_kwh
+    soc_min_kwh = capacity * cfg.soc_min / 100.0
+    withdrawn_kwh = 0.0
     total_battery = 0.0
     # Max sell per 15-min slot = the configured discharge power over the slot
     # duration.  Emaldo's manual-selling mode discharges at the inverter's full
@@ -1336,15 +1386,27 @@ def _plan_forced_sell_slots(
             if window_open:
                 break
             continue
-        if remaining <= 0.05:
+        # Energy still sellable HERE: what the plan's own trajectory holds in
+        # this slot, less what the window has already withdrawn, less the floor
+        # and the reserve on top of it.  Reading soc_after for the slot being
+        # sold — not the SoC at the start of the window — is what keeps the
+        # staged energy inside the battery at the moment it is staged.
+        available_kwh = max(
+            0.0,
+            result_slots[s].soc_after * capacity / 100.0
+            - withdrawn_kwh
+            - soc_min_kwh
+            - _FORCED_SELL_RESERVE_KWH,
+        )
+        if available_kwh <= 0.05:
             break
-        step = min(slot_cap, remaining, budget_kwh - total_battery)
+        step = min(slot_cap, available_kwh, budget_kwh - total_battery)
         if step <= 0.05:
             break
         window_open = True
         sell_plan[s] = (step, "battery")
         total_battery += step
-        remaining -= step
+        withdrawn_kwh += step
 
     return sell_plan
 
@@ -2786,7 +2848,6 @@ def optimize(
         sell_prices,
         result_slots,
         start_slot,
-        current_soc_kwh,
         cfg.round_trip_factor,
         total_slots=n,
     )
@@ -2830,6 +2891,10 @@ def optimize(
                         * cfg.round_trip_factor
                         - c_ref
                     ) * kwh
+        # The sale moved energy out of the battery, so the trajectory has to
+        # follow from the first sell slot onward — see
+        # _correct_soc_for_forced_sell.
+        _correct_soc_for_forced_sell(result_slots, sell_plan, cfg)
         charge_plan = _plan_forced_sell_charge(
             cfg,
             buy_prices,
