@@ -1399,7 +1399,17 @@ def _plan_forced_sell_slots(
             - _FORCED_SELL_RESERVE_KWH,
         )
         if available_kwh <= 0.05:
-            break
+            # Not terminal while the window is still closed.  The
+            # budget this replaced was monotonically decreasing, so
+            # exhaustion really did end the window; `available_kwh`
+            # is not — it rises while the plan charges later in
+            # the day — so "nothing here" means "not yet", and
+            # breaking threw away every later slot the battery could
+            # have backed.  Once the window IS open, running the pack
+            # dry does end it, so the sale cannot resume after a hole.
+            if window_open:
+                break
+            continue
         step = min(slot_cap, available_kwh, budget_kwh - total_battery)
         if step <= 0.05:
             break
@@ -2893,7 +2903,12 @@ def optimize(
                     ) * kwh
         # The sale moved energy out of the battery, so the trajectory has to
         # follow from the first sell slot onward — see
-        # _correct_soc_for_forced_sell.
+        # _correct_soc_for_forced_sell.  This runs AFTER OptimizationResult
+        # was built and works because ``result`` holds this very slot list
+        # BY REFERENCE: the in-place correction shows up in result.slots,
+        # but every total computed during construction (day1_totals, the
+        # trace, the emaldo simulation inputs) saw the PRE-correction
+        # values.  Correct, and load-bearing — do not reorder.
         _correct_soc_for_forced_sell(result_slots, sell_plan, cfg)
         charge_plan = _plan_forced_sell_charge(
             cfg,
