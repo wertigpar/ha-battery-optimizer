@@ -751,6 +751,7 @@ def _apply_soc_safeguard(
     start_slot: int,
     initial_soc_kwh: float,
     total_slots: int = SLOTS_PER_DAY,
+    charge_targets: dict[int, int] | None = None,
 ) -> list[int]:
     """Insert keep-alive charge slots so SoC never falls below soc_min.
 
@@ -791,6 +792,7 @@ def _apply_soc_safeguard(
             plan_actions, net_loads, solar_15min, cfg,
             start_slot=start_slot, initial_soc_kwh=initial_soc_kwh,
             total_slots=total_slots,
+            charge_targets=charge_targets,
         )
         violation_slot = next(
             (
@@ -2484,14 +2486,42 @@ def optimize(
     # Discharge over-commit correction: the two-cycle budget double-counts
     # the battery — initial_usable + post_solar_usable can exceed physical
     # capacity above the floor, so an at-budget plan drains below
-    # soc_min + reserve.  Forward-sim the true trajectory and drop the
-    # cheapest committed discharge slot until the min SoC holds the floor
-    # target.  Re-simulate after each drop.  Runs BEFORE the safeguard so
-    # the safeguard never sees a plan that violates the floor (no keep-alive
-    # top-up on top of a fix).
+    # soc_min + reserve.  Forward-sim the true trajectory and REPAIR the dip
+    # until the min SoC holds the floor target.  Re-simulate after each
+    # repair.  Runs BEFORE the safeguard so the safeguard never sees a plan
+    # that violates the floor (no keep-alive top-up on top of a fix).
+    #
+    # The repair is TWO-SIDED, because a violation has two distinct causes
+    # that need opposite remedies and this guard used to apply the energy-OUT
+    # remedy to both:
+    #
+    #   energy OUT — the committed discharge run drains below the floor by
+    #     itself.  Remedy: un-commit the cheapest discharge slot.
+    #   energy IN  — the run's trough holds, but the horizon's cumulative
+    #     standby drain then pulls everything after it under the floor.
+    #     Remedy: buy exactly that deficit back from the grid.
+    #
+    # Over a long horizon the second cause dominates.  192 slots carry twice
+    # the idle drain of 96, and the far tail — not the day's own discharge —
+    # is where the battery runs out.  Paying for that drain by deleting peak
+    # discharge is what made this guard gut the evening peak whenever the
+    # horizon crossed a second day, and because EVERY plan taken over that
+    # horizon lost the same slots, the peak displacement became invisible to
+    # any counterfactual computed from those plans.
     floor_target_kwh = cfg.capacity_kwh * cfg.soc_floor_target_pct / 100.0
-    _guard = 0
-    while _guard < n:
+    # "charge to N%" targets for the top-ups this guard inserts.  A plain
+    # grid-charge slot targets soc_max, which would over-buy by orders of
+    # magnitude for a deficit of a few hundred watt-hours; a top-up carries
+    # its own target so it buys only what it was inserted for.  Read back by
+    # the trajectory simulator and by the result builder, so the plan, the
+    # forecast and the emitted schedule all agree on the same byte.
+    guard_charge_targets: dict[int, int] = {}
+    _guard = 0     # discharge slots un-committed
+    _topups = 0    # deficit-sized grid-charge slots inserted
+    # A slot can be mutated at most twice (a discharge un-committed, then the
+    # vacated slot later taken as a top-up), so 2n iterations always reach a
+    # fixed point.  In practice the loop exits on satisfaction far sooner.
+    while _guard + _topups < 2 * n:
         dis_slots_a = sorted(
             (s for s, a in plan_actions.items() if a == "discharge"),
             key=lambda s: (round(buy_prices[s], 4), -s),
@@ -2501,7 +2531,7 @@ def optimize(
         traj_a = _simulate_soc_trajectory(
             plan_actions, net_loads, solar_15min, cfg,
             start_slot=start_slot, initial_soc_kwh=current_soc_kwh,
-            total_slots=n,
+            total_slots=n, charge_targets=guard_charge_targets,
         )
         # The floor check applies to the discharge-affected region only,
         # from the first discharge slot onward.  A dip before that point is
@@ -2514,17 +2544,119 @@ def optimize(
         # slot and empties the plan.  The trough of the discharge run is the
         # over-commit this correction exists to trim.
         first_dis = min(s for s, a in plan_actions.items() if a == "discharge")
-        if min(traj_a[first_dis:]) >= floor_target_kwh:
+        violation = min(
+            (s for s in range(first_dis, n) if traj_a[s] < floor_target_kwh),
+            default=None,
+        )
+        if violation is None:
             break
-        _drop = dis_slots_a[0]
-        del plan_actions[_drop]
+        # Which cause is this?  Past the last discharge slot nothing the plan
+        # commits draws the battery down any further, so the only cause left
+        # is the horizon's own standby drain — an energy-IN deficit, which
+        # can be bought.  Beyond the first day that attribution is airtight:
+        # no discharge run committed for day 1 can reach a day-2 slot.  Inside
+        # day 1 it is NOT airtight — the violation may equally be day 1's own
+        # over-committed run, which trimming does fix — so funding is
+        # deliberately not offered there, which leaves the one-day plan
+        # exactly as the validated single-horizon planner produced it.
+        _run_end = max(s for s, a in plan_actions.items() if a == "discharge")
+        _topup = None
+        _deficit = 0.0
+        if violation > _run_end and violation >= SLOTS_PER_DAY:
+            # How deep is the dip, and where can it be bought?
+            _deficit = floor_target_kwh - min(traj_a[violation:])
+            # The added energy is silently ABSORBED wherever the trajectory is
+            # already pinned at soc_max between the top-up and the dip, so a
+            # slot only works if the raised trajectory has clear headroom for
+            # that whole stretch.  Without this test the loop places a top-up
+            # on the cheapest slot upstream of the dip, the battery refills
+            # from solar before the energy arrives, the dip does not move, and
+            # the loop re-inserts top-ups until it hits its iteration bound.
+            # _headroom[i] is the running maximum of the trajectory from i to
+            # the dip, computed once so the test stays O(n).
+            _soc_before = {
+                s: (current_soc_kwh if s == start_slot else traj_a[s - 1])
+                for s in range(start_slot, violation + 1)
+            }
+            _headroom = [0.0] * (violation + 2)
+            for _i in range(violation, -1, -1):
+                _headroom[_i] = max(traj_a[_i], _headroom[_i + 1])
+            _topup = min(
+                (
+                    s for s in _soc_before
+                    # Grid slots only.  A solar-surplus slot is already
+                    # credited free surplus by the idle branch; turning it
+                    # into a charge swaps free solar for a grid buy and can
+                    # LOWER the trajectory from that slot on — the one shape
+                    # of "add" that is not monotone.  Paying grid power to
+                    # charge on a slot with free solar is wrong anyway.
+                    if net_loads[s] >= 0
+                    and plan_actions.get(s)
+                    not in ("charge", "charge_floor", "discharge")
+                    # The headroom test also covers "no room to charge":
+                    # _deficit is always positive, so it already forces
+                    # _soc_before[s] (which _headroom bounds) below
+                    # soc_max.  A separate soc_max filter on the
+                    # candidate was therefore unreachable and is gone.
+                    and _headroom[max(s - 1, 0)] + _deficit <= soc_max_kwh
+                ),
+                key=lambda s: (round(buy_prices[s], 4), -s),
+                default=None,
+            )
+        # Funding is only the better remedy when the energy it buys is
+        # cheaper than the discharge it preserves.  Preserving one discharge
+        # slot keeps delivering load_kwh AC, so the household does not buy
+        # load_kwh at buy[s] — that is the trim cost.  Funding it instead
+        # means buying the stored energy back and paying the round trip
+        # twice — that is the fund cost.  Divide both by load_kwh and the
+        # test is just  buy[t] < buy[s] * round_trip_factor.
+        #
+        # This matters whenever the top-up site is not cheaper than the
+        # discharge it preserves — flat-price days being the clearest
+        # case, where the two sites cost the same and the round trip alone
+        # makes funding the loser.  Measured over a 4000-plan sweep this
+        # gate refuses 271 of 1036 offers; over the main randomized space
+        # (seed 20261011, 1500 plans) it never fires, because there is
+        # always a materially cheaper top-up site.
+        _trim_unit = buy_prices[dis_slots_a[0]] * cfg.discharge_efficiency
+        _fund_unit = (
+            buy_prices[_topup] / cfg.charge_efficiency
+            if _topup is not None else math.inf
+        )
+        if _topup is not None and _fund_unit <= _trim_unit:
+            # Size the top-up to the deficit it has to cover.  The target is
+            # the entering SoC plus that deficit, rounded UP to a whole
+            # percent because the emaldo slot value is a percent, and capped
+            # at soc_max.  Rounding up can only overshoot, and overshooting
+            # keeps the repair monotone; rounding down could leave the dip in
+            # place and stall the loop.
+            #
+            # The slot always gains, so no further clamp is needed:
+            # _need_pct is strictly above the entering SoC percent, and
+            # ceil() of a value strictly greater than _x_ is itself strictly
+            # greater than _x_, so the integer is already above it.  The soc_max
+            # cap cannot lower it back, because the headroom filter already
+            # requires the entering SoC to be strictly below soc_max.  (An
+            # explicit bump here was unreachable code and is gone.)
+            _need_pct = (
+                (_soc_before[_topup] + _deficit) / cfg.capacity_kwh * 100.0
+            )
+            _target_pct = min(int(cfg.soc_max), int(math.ceil(_need_pct)))
+            plan_actions[_topup] = "charge"
+            guard_charge_targets[_topup] = _target_pct
+            _topups += 1
+            continue
+        # Energy OUT — or funding it would cost more than the discharge it
+        # preserves.  Un-commit the cheapest committed discharge slot.
+        del plan_actions[dis_slots_a[0]]
         _guard += 1
 
-    if _guard:
+    if _guard or _topups:
         _LOGGER.debug(
-            "Over-commit correction: dropped %d discharge slot(s) to hold "
-            "floor %.1f%% (double-counted budget)",
-            _guard, cfg.soc_floor_target_pct,
+            "Over-commit correction: dropped %d discharge slot(s) and added "
+            "%d deficit-sized grid-charge slot(s) to hold floor %.1f%% "
+            "(double-counted budget / horizon standby drain)",
+            _guard, _topups, cfg.soc_floor_target_pct,
         )
 
     # Step 3b: SoC floor safeguard — keep-alive charging.
@@ -2535,7 +2667,7 @@ def optimize(
     safeguard_slots = _apply_soc_safeguard(
         plan_actions, buy_prices, net_loads, solar_15min, cfg,
         start_slot=start_slot, initial_soc_kwh=current_soc_kwh,
-        total_slots=n,
+        total_slots=n, charge_targets=guard_charge_targets,
     )
 
     # Step 4: Build the result
@@ -2628,10 +2760,23 @@ def optimize(
                 export_kwh = max(0.0, surplus_ac - absorb_ac)
                 n_idle += 1
             elif action == "charge":
-                slot_value = charge_target
+                # A guard-inserted top-up carries its own "charge to
+                # N%" target so it buys only the deficit it was
+                # inserted for.  Ordinary grid-charge slots keep the
+                # plan-wide soc_max target, so with no top-ups in the
+                # plan this block is unchanged.
+                _topup_pct = guard_charge_targets.get(s)
+                if _topup_pct is None:
+                    slot_value = charge_target
+                    _charge_to_kwh = soc_max_kwh
+                else:
+                    slot_value = _soc_to_charge_target(_topup_pct)
+                    _charge_to_kwh = (
+                        cfg.capacity_kwh * _topup_pct / 100.0
+                    )
                 # Fix 1+3: compute actual energy from SoC headroom
                 max_bat_kwh = cfg.max_charge_per_slot_kwh * cfg.charge_efficiency
-                headroom = max(0.0, soc_max_kwh - soc + idle_drain)
+                headroom = max(0.0, _charge_to_kwh - soc + idle_drain)
                 actual_bat_kwh = min(max_bat_kwh, headroom)
                 soc = min(soc + actual_bat_kwh - idle_drain, soc_max_kwh)
                 actual_grid_kwh = actual_bat_kwh / cfg.charge_efficiency
