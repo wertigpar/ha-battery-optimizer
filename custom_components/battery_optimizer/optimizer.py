@@ -1423,11 +1423,13 @@ def _plan_forced_sell_slots(
     return sell_plan
 
 
-# Tie-break tolerance for the forced-sell tail gate, in the same money units as
-# the cost comparison it guards.  A window whose two sides agree to within
-# floating-point noise is refused, not kept: selling has to be strictly the
-# cheaper side to be worth the wear and the complexity.
-_FORCED_SELL_GATE_EPS = 1e-9
+# The gate keeps a window only when selling is STRICTLY the cheaper side
+# (`cost_selling < cost_keeping`).  No tolerance is applied, and none is
+# needed: ``_forced_sell_tail_cost`` is a step function of the starting SoC
+# (a 0.25 pp change moves the tail cost by ~1.65-1.72 SEK), so the two sides
+# never land within floating-point noise of each other unless they are
+# genuinely equal -- and equal means keep, which the strict comparison refuses.
+# A tolerance here would only claim a precision the arithmetic does not have.
 
 
 def _forced_sell_tail_cost(
@@ -1512,7 +1514,7 @@ def _gate_forced_sell_plan(
     future_grid_charge_needed: float | None,
     solar_confidence_ratio: float | None,
     total_slots: int,
-) -> dict[int, tuple[float, str]]:
+) -> tuple[dict[int, tuple[float, str]], float]:
     """Accept or reject a candidate forced-sell window as a whole.
 
     ``_plan_forced_sell_slots`` only NOMINATES a window now.  It prices each
@@ -1533,17 +1535,19 @@ def _gate_forced_sell_plan(
     accepts or rejects the whole window, so it costs two planner runs per
     ``optimize()``, not two per sell slot.
 
-    Returns ``sell_plan`` unchanged when the sale is kept, or an empty dict when
-    it is refused.
+    Returns ``(sell_plan, margin)``: the (possibly empty) window, and
+    ``cost_keeping - cost_selling`` -- the sale's net benefit in the gate's own
+    units.  Positive means the gate kept it; the published ``sell_profit`` is
+    this number, so the sensor cannot disagree with the decision (B4).
+
+    ``_plan_forced_sell_slots`` never nominates a sale at the final slot (no
+    recharge remains), so ``tail_start`` is always inside the horizon and the
+    tail re-plan always has a slot to start from.  The branch that used to
+    return the window ungated when it was not was dead code; it is gone.
     """
     if not sell_plan:
-        return sell_plan
+        return sell_plan, 0.0
     tail_start = max(sell_plan) + 1
-    if tail_start >= total_slots:
-        # No horizon left to re-plan.  ``_plan_forced_sell_slots`` already
-        # refuses a sale in the final slot, so this is a guard, not a branch
-        # that fires in practice.
-        return sell_plan
 
     withdrawn_kwh = sum(kwh for kwh, _tier in sell_plan.values())
     revenue = sum(
@@ -1574,24 +1578,35 @@ def _gate_forced_sell_plan(
         cfg, buy_prices, sell_prices, solar_15min, tail_start, keep_pct,
         **passthrough,
     )
-    cost_selling = _forced_sell_tail_cost(
-        cfg, buy_prices, sell_prices, solar_15min, tail_start, sell_pct,
-        **passthrough,
-    ) - revenue
+    # B3: the withdrawal discharges the battery to sell it, and that cycle
+    # costs wear just like any other discharge.  Both tail re-plans book wear
+    # on THEIR discharges, but the forced sell itself sits outside both tails,
+    # so its wear was unbooked -- 0.5 SEK/kWh = 1.30 SEK on the 2.6 kWh
+    # fixture window.  Charging it to the selling side (a cost of selling, so
+    # it goes on the cost side) can only make the gate stricter, which is the
+    # safe direction: a sale that cannot cover its own wear is refused.
+    cost_selling = (
+        _forced_sell_tail_cost(
+            cfg, buy_prices, sell_prices, solar_15min, tail_start, sell_pct,
+            **passthrough,
+        )
+        - revenue
+        + cfg.wear_cost_per_kwh * withdrawn_kwh
+    )
 
-    if cost_selling >= cost_keeping - _FORCED_SELL_GATE_EPS:
+    if cost_selling >= cost_keeping:
         _LOGGER.info(
             "Forced sell refused: tail costs %.4f with the sale vs %.4f "
             "keeping it (slots=%s, battery=%.1f kWh)",
             cost_selling, cost_keeping, sorted(sell_plan), withdrawn_kwh,
         )
-        return {}
+        return {}, cost_keeping - cost_selling
     _LOGGER.info(
         "Forced sell confirmed: tail costs %.4f with the sale vs %.4f "
         "keeping it (slots=%s, battery=%.1f kWh)",
         cost_selling, cost_keeping, sorted(sell_plan), withdrawn_kwh,
     )
-    return sell_plan
+    return sell_plan, cost_keeping - cost_selling
 
 
 def _plan_forced_sell_charge(
@@ -3172,13 +3187,35 @@ def optimize(
     result.thirdparty_pv_slots = pv_flags
 
     # ── Forced (manual) sell: battery-only peak arbitrage ──
-    # Probes are excluded deliberately: probe results feed _find_plateau_edge
-    # via total_profit, which never contained the sell, and
-    # _build_night_drain_plan reads probe slot ACTIONS, where a "force_sell"
-    # action would silently shrink the night-drain window.  This is also the
-    # recursion guard for the tail re-plan inside _gate_forced_sell_plan, whose
-    # two runs pass _probe=True AND enable_forced_sell=False.
+    # The guard is `enable_forced_sell and not _probe`, and BOTH halves do
+    # real work -- they are not two spellings of the same thing (B2):
+    #
+    #   enable_forced_sell=False  -- passed by _forced_sell_tail_cost, the
+    #       tail re-plan inside the gate.  That is the recursion guard for the
+    #       gate's own two runs: neither re-plans a sale, so the gate cannot
+    #       re-enter itself.
+    #
+    #   not _probe               -- a SEPARATE guard on the probe path.
+    #       _probe_result (called from _find_plateau_edge and
+    #       _build_night_drain_plan) runs optimize() with _probe=True and
+    #       enable_forced_sell left at its default True.  Without `not _probe`
+    #       those probes would plan a sale, and:
+    #         * _find_plateau_edge reads total_profit, which would then carry
+    #           the sale revenue and corrupt the plateau edge;
+    #         * _build_night_drain_plan reads probe slot ACTIONS, where a
+    #           "force_sell" entry silently shrinks the night-drain window.
+    #       Dropping `not _probe` also deepens planner recursion 2 -> 3 and
+    #       breaks test_tail_replan_does_not_deepen_planner_recursion, so it
+    #       is not available as a "simplification" -- the probe has to stay
+    #       clean.
+    #
+    # Measured marginal effect of the `not _probe` half, over the 1500-plan
+    # differential space at 96: 1480 plans identical, 20 changed, the guard
+    # winning +68.449 SEK net (reviewer measured 35 plans / +51.22 at the gate
+    # commit 308fd7a, before the guard fix and B3-B6).  Kept, and reported here
+    # rather than smuggled in under a recursion-guard label.
     sell_plan: dict[int, tuple[float, str]] = {}
+    gate_margin = 0.0
     if enable_forced_sell and not _probe:
         sell_plan = _plan_forced_sell_slots(
             cfg,
@@ -3194,7 +3231,7 @@ def optimize(
         # SoC the window leaves behind, and keeps the sale only when that is
         # strictly cheaper than keeping the energy -- which is the one thing
         # "cheapest forward buy" cannot see.
-        sell_plan = _gate_forced_sell_plan(
+        sell_plan, gate_margin = _gate_forced_sell_plan(
             cfg,
             buy_prices,
             sell_prices,
@@ -3224,32 +3261,40 @@ def optimize(
         day1_sell_revenue = 0.0
         day1_sell_profit = 0.0
         day1_sell_target = 0.0
+        all_day1 = all(s < SLOTS_PER_DAY for s in sell_plan)
         for s, (kwh, _tier) in sell_plan.items():
             result_slots[s].action = "force_sell"
             result_slots[s].slot_value = SLOT_IDLE  # device idles/exports
             result_slots[s].sell_kwh = kwh
             result_slots[s].sell_source = "battery"
             result.sell_revenue += sell_prices[s] * kwh
-            if c_ref_idx is not None:
-                c_ref = buy_prices[c_ref_idx]
-                result.sell_profit += (
-                    (sell_prices[s] - cfg.wear_cost_per_kwh)
-                    * cfg.round_trip_factor
-                    - c_ref
-                ) * kwh
             # sell_* accumulate onto the result after construction, so the
             # day-1 snapshot has to be extended here too (issue #25).
             if day1_totals is not None and s < SLOTS_PER_DAY:
                 day1_sell_revenue += sell_prices[s] * kwh
                 if _tier == "battery":
                     day1_sell_target += kwh
-                if c_ref_idx is not None:
-                    c_ref = buy_prices[c_ref_idx]
-                    day1_sell_profit += (
-                        (sell_prices[s] - cfg.wear_cost_per_kwh)
-                        * cfg.round_trip_factor
-                        - c_ref
-                    ) * kwh
+        # B4: the published ``sell_profit`` is the gate's own margin
+        # (``cost_keeping - cost_selling``), so the number the sensor reports
+        # cannot disagree in sign with the decision that produced this plan.
+        # The gate only ever keeps a window it prices as net-positive, so a
+        # kept sale always ships a positive number and a refused one ships 0
+        # (the window is empty and this block does not run).
+        result.sell_profit = gate_margin
+        if day1_totals is not None:
+            if all_day1:
+                day1_sell_profit = gate_margin
+            elif c_ref_idx is not None:
+                # Cross-day window: the margin is a whole-window figure and
+                # cannot be split by day without re-running the gate per day.
+                # The day-1 slice keeps the c_ref closed form -- known gap.
+                c_ref = buy_prices[c_ref_idx]
+                day1_sell_profit = sum(
+                    ((sell_prices[s] - cfg.wear_cost_per_kwh)
+                     * cfg.round_trip_factor - c_ref)
+                    * result_slots[s].sell_kwh
+                    for s in sell_plan if s < SLOTS_PER_DAY
+                )
         # The sale moved energy out of the battery, so the trajectory has to
         # follow from the first sell slot onward — see
         # _correct_soc_for_forced_sell.  This runs AFTER OptimizationResult
