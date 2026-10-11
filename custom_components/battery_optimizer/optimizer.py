@@ -1421,6 +1421,177 @@ def _plan_forced_sell_slots(
     return sell_plan
 
 
+# Tie-break tolerance for the forced-sell tail gate, in the same money units as
+# the cost comparison it guards.  A window whose two sides agree to within
+# floating-point noise is refused, not kept: selling has to be strictly the
+# cheaper side to be worth the wear and the complexity.
+_FORCED_SELL_GATE_EPS = 1e-9
+
+
+def _forced_sell_tail_cost(
+    cfg: BatteryConfig,
+    buy_prices: list[float],
+    sell_prices: list[float],
+    solar_15min: list[float],
+    start_slot: int,
+    start_soc_pct: float,
+    *,
+    enable_pv_strategy: bool,
+    emaldo_modes: list[int] | None,
+    case_a_floor: float | None,
+    solar_regime_engaged: bool,
+    future_min_buy: float | None,
+    future_grid_charge_needed: float | None,
+    solar_confidence_ratio: float | None,
+    total_slots: int,
+) -> float:
+    """Cost of re-planning the tail of the day from one starting SoC.
+
+    The tail gate prices the alternative to a forced sale by actually re-planning
+    what follows it.  A sale changes exactly one thing about the remainder of the
+    day: ``start_soc_pct`` worth of stored energy is gone.  Prices, load, solar,
+    fees and every planner option are handed through unchanged, so the only
+    difference between two calls is the energy on hand -- which is exactly the
+    quantity the closed-form ``c_ref`` gate could not see.  Re-planning from the
+    reduced SoC therefore charges the buy-back at the day's real prices,
+    including an intervening expensive load period the reference buy skipped
+    (issue #23 comment 6061738993: a 15:45 sale at 1.45 SEK/kWh followed by a
+    17:00-21:00 buy at 2.4-2.7 SEK/kWh).
+
+    Returns ``baseline_cost - total_profit``, which is the ``actual_cost`` the
+    main run accumulates, so the two sides of the gate are like-for-like:
+    ``baseline_cost`` is the no-battery grid cost for identical inputs and is
+    identical in both calls, and ``total_profit`` is ``baseline_cost -
+    actual_cost``.
+
+    ``enable_forced_sell=False`` and ``_probe=True`` are what stop the
+    recursion -- a probe never re-plans and never plans a sale of its own, so
+    the nesting depth is bounded by the one call this adds to the top-level
+    ``optimize()`` frame.  ``enable_night_drain=False`` matches ``_probe_result``:
+    the tail starts after the sell window, so a night-drain plan would only
+    distort the comparison, and both sides of the comparison get the same
+    treatment.
+    """
+    cf = optimize(
+        buy_prices,
+        sell_prices,
+        solar_15min,
+        cfg,
+        start_slot=start_slot,
+        initial_soc_pct=start_soc_pct,
+        enable_pv_strategy=enable_pv_strategy,
+        emaldo_modes=emaldo_modes,
+        enable_night_drain=False,
+        _probe=True,
+        case_a_floor=case_a_floor,
+        solar_regime_engaged=solar_regime_engaged,
+        future_min_buy=future_min_buy,
+        future_grid_charge_needed=future_grid_charge_needed,
+        solar_confidence_ratio=solar_confidence_ratio,
+        total_slots=total_slots,
+        enable_forced_sell=False,
+    )
+    return cf.baseline_cost - cf.total_profit
+
+
+def _gate_forced_sell_plan(
+    cfg: BatteryConfig,
+    buy_prices: list[float],
+    sell_prices: list[float],
+    solar_15min: list[float],
+    result_slots: list[SlotPlan],
+    sell_plan: dict[int, tuple[float, str]],
+    *,
+    enable_pv_strategy: bool,
+    emaldo_modes: list[int] | None,
+    case_a_floor: float | None,
+    solar_regime_engaged: bool,
+    future_min_buy: float | None,
+    future_grid_charge_needed: float | None,
+    solar_confidence_ratio: float | None,
+    total_slots: int,
+) -> dict[int, tuple[float, str]]:
+    """Accept or reject a candidate forced-sell window as a whole.
+
+    ``_plan_forced_sell_slots`` only NOMINATES a window now.  It prices each
+    candidate slot against ``c_ref``, the cheapest buy over the whole remaining
+    day, which cannot see a dearer load period intervening before that cheap
+    buy -- so it approved a 15:45 sale at 1.45 SEK/kWh whose energy the
+    17:00-21:00 block then paid 2.55 SEK/kWh to replace.
+
+    This is the decision.  Two re-plans of the tail, from the SoC the window
+    leaves behind and from the SoC it would have left had it not fired:
+
+        cost_selling = tail(post-sale SoC) - sale revenue
+        cost_keeping = tail(pre-sale SoC)
+
+    Identical horizon, identical options, identical prices -- the only
+    difference is the energy.  The window is kept when selling is strictly the
+    cheaper side.  Evaluated ONCE per plan, not per candidate slot: the gate
+    accepts or rejects the whole window, so it costs two planner runs per
+    ``optimize()``, not two per sell slot.
+
+    Returns ``sell_plan`` unchanged when the sale is kept, or an empty dict when
+    it is refused.
+    """
+    if not sell_plan:
+        return sell_plan
+    tail_start = max(sell_plan) + 1
+    if tail_start >= total_slots:
+        # No horizon left to re-plan.  ``_plan_forced_sell_slots`` already
+        # refuses a sale in the final slot, so this is a guard, not a branch
+        # that fires in practice.
+        return sell_plan
+
+    withdrawn_kwh = sum(kwh for kwh, _tier in sell_plan.values())
+    revenue = sum(
+        sell_prices[s] * kwh for s, (kwh, _tier) in sell_plan.items()
+    )
+    pct_per_kwh = 100.0 / cfg.capacity_kwh
+    # ``result_slots`` still carries the PRE-correction trajectory here --
+    # ``_correct_soc_for_forced_sell`` runs after this gate -- so this reading is
+    # the SoC the battery holds as the tail begins if it had kept the energy.
+    # ``p - 1``, not ``p``: ``optimize(start_slot=p, initial_soc_pct=X)`` plans
+    # slot p itself from X, so X has to be the energy entering slot p, which is
+    # what the previous slot left behind.  Reading ``soc_after[p]`` would charge
+    # the sale for the parent's own action at slot p as well.
+    keep_pct = result_slots[tail_start - 1].soc_after
+    sell_pct = keep_pct - withdrawn_kwh * pct_per_kwh
+
+    passthrough = {
+        "enable_pv_strategy": enable_pv_strategy,
+        "emaldo_modes": emaldo_modes,
+        "case_a_floor": case_a_floor,
+        "solar_regime_engaged": solar_regime_engaged,
+        "future_min_buy": future_min_buy,
+        "future_grid_charge_needed": future_grid_charge_needed,
+        "solar_confidence_ratio": solar_confidence_ratio,
+        "total_slots": total_slots,
+    }
+    cost_keeping = _forced_sell_tail_cost(
+        cfg, buy_prices, sell_prices, solar_15min, tail_start, keep_pct,
+        **passthrough,
+    )
+    cost_selling = _forced_sell_tail_cost(
+        cfg, buy_prices, sell_prices, solar_15min, tail_start, sell_pct,
+        **passthrough,
+    ) - revenue
+
+    if cost_selling >= cost_keeping - _FORCED_SELL_GATE_EPS:
+        _LOGGER.info(
+            "Forced sell refused: tail costs %.4f with the sale vs %.4f "
+            "keeping it (slots=%s, battery=%.1f kWh)",
+            cost_selling, cost_keeping, sorted(sell_plan), withdrawn_kwh,
+        )
+        return {}
+    _LOGGER.info(
+        "Forced sell confirmed: tail costs %.4f with the sale vs %.4f "
+        "keeping it (slots=%s, battery=%.1f kWh)",
+        cost_selling, cost_keeping, sorted(sell_plan), withdrawn_kwh,
+    )
+    return sell_plan
+
+
 def _plan_forced_sell_charge(
     cfg: BatteryConfig,
     buy_prices: list[float],
@@ -1728,6 +1899,7 @@ def optimize(
     solar_confidence_ratio: float | None = None,
     case_a_floor: float | None = None,
     total_slots: int = SLOTS_PER_DAY,
+    enable_forced_sell: bool = True,
 ) -> OptimizationResult:
     """Run greedy optimization over a requested slot horizon.
 
@@ -1748,6 +1920,9 @@ def optimize(
         start_slot: First slot to plan; earlier slots get "none".
         initial_soc_pct: Current SoC %. None → use soc_min.
         total_slots: Horizon length; minimum is one 96-slot day.
+        enable_forced_sell: Plan manual forced-sell slots. False runs the
+            ordinary plan and returns no sell slots; used by the forced-sell
+            tail re-plan so the comparison cannot recurse.
 
     Returns:
         OptimizationResult with total_slots SlotPlans.
@@ -2852,15 +3027,44 @@ def optimize(
     result.thirdparty_pv_slots = pv_flags
 
     # ── Forced (manual) sell: battery-only peak arbitrage ──
-    sell_plan = _plan_forced_sell_slots(
-        cfg,
-        buy_prices,
-        sell_prices,
-        result_slots,
-        start_slot,
-        cfg.round_trip_factor,
-        total_slots=n,
-    )
+    # Probes are excluded deliberately: probe results feed _find_plateau_edge
+    # via total_profit, which never contained the sell, and
+    # _build_night_drain_plan reads probe slot ACTIONS, where a "force_sell"
+    # action would silently shrink the night-drain window.  This is also the
+    # recursion guard for the tail re-plan inside _gate_forced_sell_plan, whose
+    # two runs pass _probe=True AND enable_forced_sell=False.
+    sell_plan: dict[int, tuple[float, str]] = {}
+    if enable_forced_sell and not _probe:
+        sell_plan = _plan_forced_sell_slots(
+            cfg,
+            buy_prices,
+            sell_prices,
+            result_slots,
+            start_slot,
+            cfg.round_trip_factor,
+            total_slots=n,
+        )
+        # D1: the closed-form c_ref gate inside the planner only nominates
+        # candidates now.  The decision re-plans the tail of the day from the
+        # SoC the window leaves behind, and keeps the sale only when that is
+        # strictly cheaper than keeping the energy -- which is the one thing
+        # "cheapest forward buy" cannot see.
+        sell_plan = _gate_forced_sell_plan(
+            cfg,
+            buy_prices,
+            sell_prices,
+            solar_15min,
+            result_slots,
+            sell_plan,
+            enable_pv_strategy=enable_pv_strategy,
+            emaldo_modes=emaldo_modes,
+            case_a_floor=case_a_floor,
+            solar_regime_engaged=solar_regime_engaged,
+            future_min_buy=future_min_buy,
+            future_grid_charge_needed=future_grid_charge_needed,
+            solar_confidence_ratio=solar_confidence_ratio,
+            total_slots=n,
+        )
     if sell_plan:
         sell_slots = sorted(sell_plan)
         result.sell_slots = sell_slots
