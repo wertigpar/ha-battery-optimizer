@@ -214,6 +214,37 @@ _MANUAL_SELLING_START_GRACE_S = 90
 _MANUAL_SELLING_MAX_START_ATTEMPTS = 3
 
 
+def _stage_sell_target_kwh(target_kwh: float) -> float:
+    """Round a planned forced-sell target DOWN to a whole kWh, or refuse it.
+
+    ``ha-emaldo``'s ``EmaldoManualSellingSwitch._current_target()`` applies
+    ``int(round(...))`` to whatever the optimizer stages, so the staged
+    number is an upper bound on what the device will export, never a lower
+    one. Issue #23 comment 6065753666: 1.55 kWh of plan became 2 kWh, the
+    device exported at 9 kW until SoC reached 13 percent against a 15
+    percent floor, and the next run bought ~1 kWh back at 2.43 SEK/kWh.
+
+    One rule, applied in both directions:
+
+    - Staging MORE than the plan says is left is always the wrong error,
+      so the target is floored. The ``1e-9`` keeps an already-whole number
+      that arrived as ``1.9999999999999998`` from binary float arithmetic
+      rounding to itself instead of down by one.
+    - ``max(1, floor(x))`` would fix the overshoot by rounding UP, which
+      is the same defect in the other direction: at 0.6 kWh of plan it
+      would stage 1 kWh and overshoot by 0.4. A remainder below one whole
+      kWh is therefore refused rather than rounded, and the caller treats
+      0.0 as "do not open a sale".
+
+    Returns the kWh to stage: a whole number in ``[1, target_kwh]``, or
+    0.0 when the plan cannot be honoured without overshooting.
+    """
+    if target_kwh <= 0.0:
+        return 0.0
+    whole = math.floor(target_kwh + 1e-9)
+    return whole if whole >= 1.0 else 0.0
+
+
 def _current_slot_index() -> int:
     """Return the current 15-minute slot index (0-95)."""
     now = dt_util.now()
@@ -3388,12 +3419,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         number_id = self._resolve_emaldo_entity(
             "manual_selling_target", domain="number"
         ) or "number.power_store_manual_selling_target"
+        staged_kwh = _stage_sell_target_kwh(result.sell_target_kwh)
+        if staged_kwh <= 0.0:
+            # D2: the remaining plan cannot be honoured in whole kWh without
+            # exporting more than is left (see the helper). Emaldo rounds
+            # whatever is staged with int(round(...)), so any value at all
+            # here can overshoot. Opening a sale we cannot size correctly is
+            # worse than not selling at all -- the window is time-boxed, so
+            # the next run re-evaluates it.
+            _LOGGER.info(
+                "Not starting forced sell: %.2f kWh left cannot be staged "
+                "in whole kWh without overshooting the SoC floor",
+                result.sell_target_kwh,
+            )
+            return
         try:
             # Stage target first (number entity merges intended target while
             # switch is off), then enable the verified-write switch.
             await self.hass.services.async_call(
                 "number", "set_value",
-                {"entity_id": number_id, "value": result.sell_target_kwh},
+                {"entity_id": number_id, "value": staged_kwh},
                 blocking=True,
             )
             await self.hass.services.async_call(
@@ -3425,7 +3470,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._manual_selling_served = (now.date(), tuple(window))
         _LOGGER.info(
             "Manual selling started: %d slots, target %.1f kWh",
-            len(window), result.sell_target_kwh,
+            len(window), staged_kwh,
         )
 
     async def _stop_manual_selling(self) -> None:
