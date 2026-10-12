@@ -43,6 +43,18 @@
   192 slots. Files: `optimizer.py`. Regression tests:
   `tests/test_overcommit_guard_horizon.py`.
 
+- **The round-trip gate prices wear at its full cost, not scaled by the
+  round-trip factor** — the battery-tier gate used
+  `(sell - wear) * round_trip_factor - c_ref`, which multiplied wear by
+  `round_trip_factor` (0.9025) and under-penalised it by about 19%, nominating
+  cycles that lose money on wear. The exact condition for a charge-then-
+  discharge cycle to pay is `sell * round_trip_factor > buy + wear`, so the
+  comparison is now `sell * round_trip_factor - wear - c_ref`. Differential
+  against the scaled-wear form over 1500 plans: net better by 144 SEK at 96 and
+  by 199 (mirror) / 336 (random) SEK at 192, with zero SoC-envelope and zero
+  over-sell violations, and the exact form never adds a sale the old form
+  lacked — it only refuses, which is the safe direction.
+
 ### Added
 
 - **Standby drain is measured, reported, and funded when it threatens the SoC
