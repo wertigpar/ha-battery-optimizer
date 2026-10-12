@@ -46,6 +46,8 @@ CONF_SOLAR_FORECAST_MODE = "solar_forecast_mode"
 CONF_SOLAR_FORECAST_SCALE = "solar_forecast_scale"
 CONF_GRID_CHARGE_SOLAR_AWARE = "grid_charge_solar_aware"
 CONF_SOLAR_ACTUAL_SENSOR = "solar_actual_sensor"
+CONF_ENABLE_PV_CUT_WHEN_FULL = "enable_pv_cut_when_full"
+CONF_PV_CUT_RESUME_SOC = "pv_cut_resume_soc"
 
 CONF_GRID_IMPORT_SENSOR = "grid_import_sensor"
 CONF_GRID_EXPORT_SENSOR = "grid_export_sensor"
@@ -184,6 +186,8 @@ DEFAULT_FORCED_SELL_ENABLED = False
 DEFAULT_FORCED_SELL_MAX_KWH_PD = 0.0   # 0 = unlimited
 DEFAULT_FORCED_SELL_MIN_PROFIT = 0.02  # €/kWh after wear + round-trip
 DEFAULT_FORCED_SELL_MIN_PRICE = 0.0    # absolute sell-price floor (€/kWh)
+DEFAULT_ENABLE_PV_CUT_WHEN_FULL = False
+DEFAULT_PV_CUT_RESUME_SOC = 97.0       # percent; resume third-party PV below this
 
 # ── Emaldo slot encoding (mirrors emaldo_lib.const) ─────────────────
 SLOT_NO_OVERRIDE = 0x80  # 128 — follow base schedule

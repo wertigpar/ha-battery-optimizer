@@ -63,6 +63,8 @@ from .const import (
     CONF_LOAD_ENERGY_SENSOR,
     CONF_ENABLE_PV_STRATEGY,
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
+    CONF_ENABLE_PV_CUT_WHEN_FULL,
+    CONF_PV_CUT_RESUME_SOC,
     CONF_SOLAR_FORECAST_MODE,
     CONF_SOLAR_FORECAST_SCALE,
     CONF_GRID_CHARGE_SOLAR_AWARE,
@@ -130,6 +132,8 @@ from .const import (
     DEFAULT_FORCED_SELL_MAX_KWH_PD,
     DEFAULT_FORCED_SELL_MIN_PROFIT,
     DEFAULT_FORCED_SELL_MIN_PRICE,
+    DEFAULT_ENABLE_PV_CUT_WHEN_FULL,
+    DEFAULT_PV_CUT_RESUME_SOC,
     CONF_STALE_PUSH_RETRY_COUNT,
     DEFAULT_STALE_PUSH_RETRY_COUNT,
 )
@@ -352,6 +356,24 @@ def _build_schema(
                     CONF_SOLAR_ACTUAL_SENSOR, DEFAULT_SOLAR_ACTUAL_SENSOR
                 ),
             ): str,
+            # ── Full-battery third-party PV cut (issue #28; default-off) ──
+            # Stops Emaldo's top-off charge pulses at 100 % SoC by cutting the
+            # third-party PV switch while the battery is full. Harmless on
+            # systems without third-party PV: it only acts when PV is present
+            # and the battery cannot absorb another kWh.
+            vol.Optional(
+                CONF_ENABLE_PV_CUT_WHEN_FULL,
+                default=d.get(
+                    CONF_ENABLE_PV_CUT_WHEN_FULL,
+                    DEFAULT_ENABLE_PV_CUT_WHEN_FULL,
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_PV_CUT_RESUME_SOC,
+                default=d.get(
+                    CONF_PV_CUT_RESUME_SOC, DEFAULT_PV_CUT_RESUME_SOC
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
             vol.Optional(
                 CONF_GRID_IMPORT_SENSOR,
                 default=d.get(

@@ -48,7 +48,11 @@
           "forced_sell_min_price": "Min sell price (€/kWh)",
           "forced_sell_min_price_description": "Absolute sell-price floor. Slots below this never sell.",
           "stale_push_retry_count": "Stale-push retries (0-5)",
-          "stale_push_retry_count_description": "Retry the schedule push this many extra times (30 s backoff each) when the Emaldo realtime stream is stale, so the override reaches a connected window (issue #24). 0 = one-shot push-through."
+          "stale_push_retry_count_description": "Retry the schedule push this many extra times (30 s backoff each) when the Emaldo realtime stream is stale, so the override reaches a connected window (issue #24). 0 = one-shot push-through.",
+           "enable_pv_cut_when_full": "Cut third-party PV while the battery is full",
+           "enable_pv_cut_when_full_description": "When the battery is at full SoC with solar surplus, turn Third Party PV off so Emaldo stops its top-off charge pulses (which start the cooling fan ~100-150 times per sunny day). PV resumes when SoC drops below the resume threshold, solar fades, or a charge slot needs it. Default off. Harmless on systems without third-party PV: it only acts when PV is present and the battery cannot absorb another kWh (issue #28).",
+           "pv_cut_resume_soc": "Resume third-party PV below this SoC (%)",
+           "pv_cut_resume_soc_description": "SoC threshold at which third-party PV is switched back on after a full-battery cut. Default 97."
         }
       }
     },
@@ -127,7 +131,11 @@
                 "forced_sell_min_price": "Min sell price (€/kWh)",
                 "forced_sell_min_price_description": "Absolute sell-price floor. Slots below this never sell.",
                 "stale_push_retry_count": "Stale-push retries (0-5)",
-                "stale_push_retry_count_description": "Retry the schedule push this many extra times (30 s backoff each) when the Emaldo realtime stream is stale, so the override reaches a connected window (issue #24). 0 = one-shot push-through."
+                "stale_push_retry_count_description": "Retry the schedule push this many extra times (30 s backoff each) when the Emaldo realtime stream is stale, so the override reaches a connected window (issue #24). 0 = one-shot push-through.",
+           "enable_pv_cut_when_full": "Cut third-party PV while the battery is full",
+           "enable_pv_cut_when_full_description": "When the battery is at full SoC with solar surplus, turn Third Party PV off so Emaldo stops its top-off charge pulses (which start the cooling fan ~100-150 times per sunny day). PV resumes when SoC drops below the resume threshold, solar fades, or a charge slot needs it. Default off. Harmless on systems without third-party PV: it only acts when PV is present and the battery cannot absorb another kWh (issue #28).",
+           "pv_cut_resume_soc": "Resume third-party PV below this SoC (%)",
+           "pv_cut_resume_soc_description": "SoC threshold at which third-party PV is switched back on after a full-battery cut. Default 97."
         }
       }
     }

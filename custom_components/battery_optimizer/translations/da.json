@@ -48,7 +48,11 @@
           "forced_sell_min_price": "Min. salgspris (€/kWh)",
           "forced_sell_min_price_description": "Absolut salgsprisgulv. Slots under dette sælges aldrig.",
           "stale_push_retry_count": "Forsøg ved fastlåst strøm (0-5)",
-          "stale_push_retry_count_description": "Når Emaldo-realtidsstrømmen er fastlåst, forsøg så mange ekstra gange (30 s pause imellem). 0 = ét forsøg uden fornyede forsøg."
+          "stale_push_retry_count_description": "Når Emaldo-realtidsstrømmen er fastlåst, forsøg så mange ekstra gange (30 s pause imellem). 0 = ét forsøg uden fornyede forsøg.",
+          "enable_pv_cut_when_full": "Cut third-party PV while the battery is full",
+          "enable_pv_cut_when_full_description": "When the battery is at full SoC with solar surplus, turn Third Party PV off so Emaldo stops its top-off charge pulses (which start the cooling fan ~100-150 times per sunny day). PV resumes when SoC drops below the resume threshold, solar fades, or a charge slot needs it. Default off. Harmless on systems without third-party PV: it only acts when PV is present and the battery cannot absorb another kWh (issue #28).",
+          "pv_cut_resume_soc": "Resume third-party PV below this SoC (%)",
+          "pv_cut_resume_soc_description": "SoC threshold at which third-party PV is switched back on after a full-battery cut. Default 97."
         }
       }
     },
@@ -118,16 +122,20 @@
           "precharge_horizon_days_description": "1 = forudlad kun før offentliggørelsen af næste dags priser (det billige vindue lukker ved prisoffentliggørelsen). 2 = sikr også mod en sandsynlig dag+2-prisspids: hvis morgendagens optimerede plan ville lade batteriet stå lavt, lad forsigtigt op i aften med billig netenergi, så den ukendte dag+2 starter med en sikkerhedsbuffer.",
           "precharge_publish_hour": "Offentliggørelsestime for næste dags priser (lokal, 0–23)",
           "precharge_publish_hour_description": "Time (lokal tid, 24t), hvornår Nord Pool typisk offentliggør næste dags priser. Lad stå tom for automatik: grænsen beregnes ud fra din Home Assistant-tidszone og bliver korrekt for alle Nord Pool-markeder. Angiv kun, hvis din priskilde offentliggør på et andet tidspunkt.",
-            "forced_sell_enabled": "Aktiver tvangssalg (manuel salgsarbitrage)",
-            "forced_sell_enabled_description": "To-lags eksport ved pristoppe: batteriet sælger lagret energi via emaldos manuelle salgskontakt; PV-laget frigiver soloverskud til idle for automatisk eksport. Fra som standard. Tvunget salg tænder \"Salg tilbage til nettet\" i vinduet og slukker det bagefter. En kontakt, du selv holder tændt, røres ikke.",
-            "forced_sell_max_kwh_pd": "Maks. energi til tvangssalg (kWh/dag)",
-            "forced_sell_max_kwh_pd_description": "Dagligt energibudget for tvangssalg (batteri + PV-lag). 0 = ingen grænse.",
-            "forced_sell_min_profit": "Min. fortjeneste pr. solgt kWh (€/kWh)",
-            "forced_sell_min_profit_description": "Batteri-lag: (salg − slid) × rundtur − erstatningskøb skal overstige dette. PV-lag: salg − erstatningskøb × rundtur (intet slid).",
-            "forced_sell_min_price": "Min. salgspris (€/kWh)",
-            "forced_sell_min_price_description": "Absolut salgsprisgulv. Slots under dette sælges aldrig.",
-            "stale_push_retry_count": "Forsøg ved fastlåst strøm (0-5)",
-            "stale_push_retry_count_description": "Når Emaldo-realtidsstrømmen er fastlåst, forsøg så mange ekstra gange (30 s pause imellem). 0 = ét forsøg uden fornyede forsøg."
+          "forced_sell_enabled": "Aktiver tvangssalg (manuel salgsarbitrage)",
+          "forced_sell_enabled_description": "To-lags eksport ved pristoppe: batteriet sælger lagret energi via emaldos manuelle salgskontakt; PV-laget frigiver soloverskud til idle for automatisk eksport. Fra som standard. Tvunget salg tænder \"Salg tilbage til nettet\" i vinduet og slukker det bagefter. En kontakt, du selv holder tændt, røres ikke.",
+          "forced_sell_max_kwh_pd": "Maks. energi til tvangssalg (kWh/dag)",
+          "forced_sell_max_kwh_pd_description": "Dagligt energibudget for tvangssalg (batteri + PV-lag). 0 = ingen grænse.",
+          "forced_sell_min_profit": "Min. fortjeneste pr. solgt kWh (€/kWh)",
+          "forced_sell_min_profit_description": "Batteri-lag: (salg − slid) × rundtur − erstatningskøb skal overstige dette. PV-lag: salg − erstatningskøb × rundtur (intet slid).",
+          "forced_sell_min_price": "Min. salgspris (€/kWh)",
+          "forced_sell_min_price_description": "Absolut salgsprisgulv. Slots under dette sælges aldrig.",
+          "stale_push_retry_count": "Forsøg ved fastlåst strøm (0-5)",
+          "stale_push_retry_count_description": "Når Emaldo-realtidsstrømmen er fastlåst, forsøg så mange ekstra gange (30 s pause imellem). 0 = ét forsøg uden fornyede forsøg.",
+          "enable_pv_cut_when_full": "Cut third-party PV while the battery is full",
+          "enable_pv_cut_when_full_description": "When the battery is at full SoC with solar surplus, turn Third Party PV off so Emaldo stops its top-off charge pulses (which start the cooling fan ~100-150 times per sunny day). PV resumes when SoC drops below the resume threshold, solar fades, or a charge slot needs it. Default off. Harmless on systems without third-party PV: it only acts when PV is present and the battery cannot absorb another kWh (issue #28).",
+          "pv_cut_resume_soc": "Resume third-party PV below this SoC (%)",
+          "pv_cut_resume_soc_description": "SoC threshold at which third-party PV is switched back on after a full-battery cut. Default 97."
         }
       }
     }

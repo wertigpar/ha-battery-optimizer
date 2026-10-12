@@ -121,6 +121,7 @@ from .const import (
     DEFAULT_BASE_LOAD_KW,
     DEFAULT_IDLE_STRATEGY,
     DEFAULT_SOC_GUARD_INTERVAL,
+    DEFAULT_SOC_MAX,
     DEFAULT_OPTIMIZER_INTERVAL,
     IDLE_FULL_CONTROL,
     IDLE_SOLAR_GUARD,
@@ -136,6 +137,10 @@ DEFAULT_FORCED_SELL_MIN_PROFIT,
     CONF_STALE_PUSH_RETRY_COUNT,
     DEFAULT_STALE_PUSH_RETRY_COUNT,
     STALE_PUSH_RETRY_BACKOFF_S,
+    CONF_ENABLE_PV_CUT_WHEN_FULL,
+    CONF_PV_CUT_RESUME_SOC,
+    DEFAULT_ENABLE_PV_CUT_WHEN_FULL,
+    DEFAULT_PV_CUT_RESUME_SOC,
 )
 from .const import currency_for_timezone
 from .optimizer import (
@@ -605,6 +610,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_pv_transitions: list[CALLBACK_TYPE] = []
         # Last known PV switch state — used for reconciliation
         self._pv_switch_state: bool | None = None
+        # Full-battery third-party PV cut latch (issue #28). Once it fires at
+        # soc_max it stays on until SoC drops below pv_cut_resume_soc, so the
+        # switch does not toggle as the battery hovers at full. Restored to
+        # False on restart and when the feature is disabled.
+        self._pv_cut_latch: bool = False
         # Emaldo control enable/disable
         self._emaldo_control_enabled: bool = self.config.get(
             CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
@@ -1200,7 +1210,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """p10/p50 dispersion ratio for the requested day, or None if unavailable.
 
         Kept separate from _get_solcast_forecast so that method's list return
-        type and all six existing call sites stay untouched.  The HA state
+        type and all seven existing call sites stay untouched.  The HA state
         cache makes the second read cheap.
 
         Two guards short-circuit before the (expensive) ``detailedForecast``
@@ -4525,11 +4535,63 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Failed to %s PV switch '%s': %s", service, entity_id, err
             )
 
+    def _pv_cut_active(self, result: OptimizationResult) -> bool:
+        """Whether the full-battery third-party PV cut is active (issue #28).
+
+        Latched: once it fires at soc_max it stays on until SoC drops below
+        pv_cut_resume_soc, so the switch does not toggle as the battery hovers
+        at full. Returns False (and clears the latch) when the feature is
+        disabled, on a cloudy day (no surplus, so no pulses), or when the
+        current slot is a charge -- the battery needs third-party PV then.
+
+        Cutting PV at full SoC cannot deprive the house of energy: a full
+        battery cannot absorb another kWh, so the surplus is exported via the
+        other path regardless. The only open question (issue #28) is whether
+        Emaldo still discharges to cover house load while PV is off at 100 %
+        SoC; the SoC-threshold resume is the part that depends on it.
+        """
+        if not self.config.get(
+            CONF_ENABLE_PV_CUT_WHEN_FULL, DEFAULT_ENABLE_PV_CUT_WHEN_FULL
+        ):
+            self._pv_cut_latch = False
+            return False
+        if result is None:
+            return False
+        # Cloudy day: no surplus, no pulses -- never cut.
+        solar_today = self._get_solcast_forecast("today")
+        total_solar_kwh = sum(solar_today) * 0.25  # SLOT_DURATION_HOURS
+        min_forecast = self.config.get(
+            CONF_SOLAR_SELL_MIN_FORECAST_KWH, DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH
+        )
+        if total_solar_kwh < min_forecast:
+            self._pv_cut_latch = False
+            return False
+        now_slot = _current_slot_index()
+        if now_slot >= len(result.slots):
+            return self._pv_cut_latch
+        action = result.slots[now_slot].action
+        if action in ("charge", "charge_floor"):
+            # Battery needs third-party PV to charge -- do not cut.
+            self._pv_cut_latch = False
+            return False
+        soc_max = self.config.get(CONF_SOC_MAX, DEFAULT_SOC_MAX)
+        resume_soc = self.config.get(CONF_PV_CUT_RESUME_SOC, DEFAULT_PV_CUT_RESUME_SOC)
+        soc = self._last_known_soc
+        if soc is None:
+            soc = result.slots[now_slot].soc_after
+        if not self._pv_cut_latch:
+            if soc >= soc_max:
+                self._pv_cut_latch = True
+        elif soc < resume_soc:
+            self._pv_cut_latch = False
+        return self._pv_cut_latch
+
     def _desired_pv_state_now(self, result: OptimizationResult | None) -> bool:
         """Return the effective desired PV switch state for the current slot.
 
-        This folds in all runtime guards (strategy disabled, cloudy-day guard)
-        so both immediate apply and periodic reconciliation use identical logic.
+        This folds in all runtime guards (strategy disabled, cloudy-day guard,
+        full-battery PV cut) so both immediate apply and periodic reconciliation
+        use identical logic.
         """
         if not self._pv_strategy_enabled or result is None:
             return True
@@ -4545,6 +4607,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         now_slot = _current_slot_index()
         pv_slots = result.thirdparty_pv_slots
+        if self._pv_cut_active(result):
+            return False
         return pv_slots[now_slot] if now_slot < len(pv_slots) else True
 
     async def _ensure_pv_switch_matches_plan(self, desired_on: bool) -> None:
@@ -4599,7 +4663,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         if not self._pv_strategy_enabled:
-            # Strategy is off — restore PV to on.
+            # Strategy is off — restore PV to on and clear the cut latch.
+            self._pv_cut_latch = False
             await self._ensure_pv_switch_matches_plan(True)
             return
 
@@ -4610,6 +4675,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             CONF_SOLAR_SELL_MIN_FORECAST_KWH, DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH
         )
         if total_solar_kwh < min_forecast:
+            # Cloudy day: no surplus, no pulses — clear the cut latch.
+            self._pv_cut_latch = False
             _LOGGER.debug(
                 "PV strategy: solar forecast %.1f kWh < %.1f kWh threshold — "
                 "strategy inactive today",
@@ -4621,8 +4688,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now_slot = _current_slot_index()
         pv_slots = result.thirdparty_pv_slots
 
-        # Apply current slot's desired state.
-        current_pv_on = pv_slots[now_slot] if now_slot < len(pv_slots) else True
+        # Apply current slot's desired state. This is cut-aware (issue #28): when the
+        # battery is full the cut overrides the sell strategy so PV stays off.
+        current_pv_on = self._desired_pv_state_now(result)
         await self._ensure_pv_switch_matches_plan(current_pv_on)
 
         # Schedule transition callbacks for each upcoming state change.
@@ -4651,6 +4719,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             def _make_transition_cb(switch_on: bool) -> CALLBACK_TYPE:
                 @callback
                 def _transition(_now) -> None:
+                    # Full-battery cut overrides the sell-strategy transition
+                    # (issue #28): if the battery is full when this boundary
+                    # fires, keep PV off so Emaldo stops its top-off pulses.
+                    if self._last_result is not None and self._pv_cut_active(
+                        self._last_result
+                    ):
+                        switch_on = False
                     self.hass.async_create_task(self._set_pv_switch(switch_on))
                 return _transition
 
