@@ -3288,6 +3288,12 @@ def optimize(
                 # Cross-day window: the margin is a whole-window figure and
                 # cannot be split by day without re-running the gate per day.
                 # The day-1 slice keeps the c_ref closed form -- known gap.
+                # This is the partitionable shape: today + tomorrow must
+                # reconstruct the continuous total, so the day-1 slice cannot
+                # simply be the whole margin (that would put zero on day 2,
+                # which is the exact failure mode the day-split test exists
+                # to catch). The valuation basis differs from the published
+                # whole-window sell_profit by construction, not by error.
                 c_ref = buy_prices[c_ref_idx]
                 day1_sell_profit = sum(
                     ((sell_prices[s] - cfg.wear_cost_per_kwh)

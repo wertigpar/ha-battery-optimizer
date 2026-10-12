@@ -1,5 +1,48 @@
 # Changes
 
+## v0.3.24
+
+### Fixed
+
+- **Forced sell is valued by what it actually costs** — the gate priced a
+  sale against the cheapest buy price left in the day, so it ignored any
+  pricier load period between the sale and that buy. On issue #23 a
+  15:45 sale at 1.45 SEK/kWh was followed by a 17:00-21:00 buy at
+  2.4-2.7 SEK/kWh: predicted +0.57, measured about -3. The planner now
+  only nominates candidates, and the sale is kept only if re-planning the
+  day from the state of charge the sale leaves behind lowers total system
+  cost. The gate also books the sale's own wear, so a marginal sale that
+  merely breaks even on energy is refused on wear grounds.
+  Consequence, expected and not a regression: forced sell fires far
+  less often, and on some days not at all.
+
+- **The staged forced-sell target can no longer overshoot the SoC floor** —
+  the raw planned figure was sent to `number.set_value` and Emaldo rounds
+  it with `int(round(...))`, so a 1.55 kWh plan became 2 kWh. Measured in
+  #23: the battery sold down to 13 percent against a 15 percent floor and
+  the next run bought about 1 kWh back at 2.43 SEK/kWh. The staged target
+  is now floored, and a remainder below one whole kWh is refused rather
+  than rounded up, so the window is simply not opened.
+
+- **`grid_charge_kwh` counts measured grid energy, not planned charge
+  slots** — the breakdown accumulated by planned slot action, so grid
+  energy that reached the battery in a slot the plan labelled `idle` was
+  counted nowhere and the reported total was always exactly the planned
+  charge sum. Measured in #26: 4.02 kWh reported against a SoC rise
+  implying about 9.2 kWh.
+
+- **The over-commit floor guard now funds standby drain instead of
+  deleting peak discharge** — over a long planning horizon the battery's
+  own standby drain accumulated against the SoC floor and the guard
+  answered by shedding the expensive evening-peak discharge from the
+  plan, which is the load the guard exists to protect. It now funds the
+  drain with a top-up charge at the cheapest available slot, which is
+  strictly monotone: trimming remains available when funding cannot win.
+  Floor guarantee preserved — baseline and fix both show zero floor and
+  zero over-sell violations over 400-plan and 2000-plan sweeps at 96 and
+  192 slots. Files: `optimizer.py`. Regression tests:
+  `tests/test_overcommit_guard_horizon.py`.
+
 ## v0.3.23
 
 ### Fixed
