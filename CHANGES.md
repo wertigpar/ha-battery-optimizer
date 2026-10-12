@@ -43,6 +43,34 @@
   192 slots. Files: `optimizer.py`. Regression tests:
   `tests/test_overcommit_guard_horizon.py`.
 
+### Added
+
+- **Standby drain is measured, reported, and funded when it threatens the SoC
+  floor** — the battery's own idle draw (`idle_power_kw x 0.25` per slot) is now
+  carried through the SoC trajectory and the over-commit guard answers it by
+  funding a top-up charge at the cheapest available slot instead of deleting the
+  evening-peak discharge. It is reported per slot as `idle_drain_kwh` on the
+  realized-cost sensors. It is a physical standby loss no decision can remove, so
+  it is deliberately not costed into the realized cost total: costing it would
+  penalise every plan for a loss that is unavoidable in the autonomous loop.
+
+- **Forced sell is reported on its own, separate from the autonomous
+  optimization cost** — `sell_profit`, `sell_target_kwh` and the sell revenue
+  are tracked as a discretionary, user-initiated action and are not folded into
+  `realized_cost_today`, so the autonomous plan's cost stays comparable day to
+  day without a forced-sale overlay. The gate that decides whether a window fires
+  is now the same number the sensor publishes, so the reported profit cannot
+  disagree in sign with the decision that produced it.
+
+- **Plan accuracy is a differential metric, so its `unknown` state means
+  "not enough data yet", not a fault** — it compares planned charge, discharge
+  and solar kWh for the slots elapsed since the previous optimizer run against
+  the actual Emaldo sensor delta over the same window. It is therefore only
+  available once a run has completed and a later run has elapsed slots to
+  compare, and it reads `unknown` between runs or when the current slot has not
+  advanced past the last run. It is not computed on the first run and is not a
+  sign of a problem when it is empty.
+
 ## v0.3.23
 
 ### Fixed
