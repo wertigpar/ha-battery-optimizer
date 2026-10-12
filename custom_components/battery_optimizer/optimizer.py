@@ -1384,7 +1384,15 @@ def _plan_forced_sell_slots(
         c_ref = buy_prices[cheapest]
 
         # Battery tier: round-trip must beat the reference forward buy.
-        if (sell - wear) * round_trip_factor - c_ref < min_profit:
+        # Exact form: a charge-then-discharge cycle turns 1 kWh bought at c_ref
+        # into round_trip_factor kWh sold at sell, minus wear_cost_per_kwh of
+        # throughput.  Profit = sell * round_trip_factor - wear - c_ref, so the
+        # cycle pays when sell * round_trip_factor > c_ref + wear.
+        # The previous (sell - wear) * round_trip_factor - c_ref scaled wear by
+        # round_trip_factor (0.81) and so under-penalised it by ~19%, nominating
+        # cycles that lose money on wear.  See
+        # superpowers/sdd/e1-rolling-aggregates-design.md.
+        if sell * round_trip_factor - wear - c_ref < min_profit:
             if window_open:
                 break
             continue
