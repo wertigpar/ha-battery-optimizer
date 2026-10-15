@@ -1278,10 +1278,13 @@ mornings but high evening prices and weak solar. Raise *Safety SoC* for a bigger
 *price ceiling* if you only want to act on genuinely negative/near-zero prices.
 
 > **Forecast continuity.** The pre-charge is a hedge layered on top of the plan,
-> so it runs after the plan is built. It re-simulates the trajectory across the
-> whole two-day horizon, which is what keeps the estimated-SoC curve continuous
-> at midnight — without that, the second half of the chart would start from the
-> SoC the optimizer projected *before* the hedge was applied.
+> so it runs after the plan is built. When a second day is planned it re-simulates
+> the trajectory across the whole horizon and writes the result back into both
+> days, which is what keeps the estimated-SoC curve continuous at midnight —
+> without that, the second half of the chart would start from the SoC the
+> optimizer projected *before* the hedge was applied. With the shipped default
+> (`precharge_horizon_days = 1`) tomorrow's prices are unknown, the hedge runs on
+> today only, and there is no second half to discontinuate.
 
 ---
 
