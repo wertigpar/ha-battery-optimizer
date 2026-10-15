@@ -2584,6 +2584,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_reason = reason
 
         if self.config.get(CONF_PRECHARGE_ENABLED, DEFAULT_PRECHARGE_ENABLED):
+            # tail_result/tail_solar make the forecast continuous across the
+            # day boundary: the pre-charge rewrites today's trajectory, and
+            # tomorrow's copy has to be re-simulated from the SoC that rewrite
+            # leaves behind, not from the pre-pre-charge projection.  Both are
+            # None on a today-only run, which keeps that path unchanged.
             self._apply_speculative_precharge(
                 result, buy_prices, solar, cfg, soc, now_slot,
                 tomorrow_available=bool(prices_tomorrow),
@@ -2592,6 +2597,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if previous_result_tomorrow and previous_result_tomorrow.slots
                     else None
                 ),
+                tail_result=(
+                    self._last_result_tomorrow
+                    if prices_tomorrow is not None
+                    else None
+                ),
+                tail_solar=solar_tomorrow if prices_tomorrow is not None else None,
             )
 
         if prices_tomorrow is not None:
