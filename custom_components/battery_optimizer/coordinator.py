@@ -3001,10 +3001,26 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         tail_slots = tail_result.slots if tail_result is not None else []
         plan_actions = {sp.index: sp.action for sp in result.slots}
         for sp in tail_slots:
-            plan_actions[SLOTS_PER_DAY + sp.index] = sp.action
+            k = SLOTS_PER_DAY + sp.index
+            plan_actions[k] = sp.action
+            if sp.action == "charge" and 0 < sp.slot_value <= 0x80:
+                charge_targets[k] = sp.slot_value
+            elif sp.action == "discharge" and sp.slot_value > 0x80:
+                discharge_targets[k] = 256 - sp.slot_value
+            # Carry day 2's planned target bytes as well, in the encoding the
+            # simulator reads.  Without them every day-2 charge slot falls back
+            # to "charge to soc_max" and every discharge to "stop at soc_min",
+            # so the re-simulated day 2 drifts away from the plan the optimizer
+            # actually produced.  Only tail slots are touched — today's targets
+            # are left exactly as the loop above built them.
 
         sim_solar = list(solar_15min) + list(tail_solar or [])
-        n_sim = max(SLOTS_PER_DAY, len(plan_actions))
+        # Max index, not key count.  plan_actions is built from two
+        # independently sourced halves, so len() only equals max_index + 1
+        # while the indices are contiguous from 0; a sparse or offset tail
+        # would otherwise truncate the trajectory and silently leave the
+        # out-of-range day-2 slots holding their stale soc_after.
+        n_sim = max(SLOTS_PER_DAY, max(plan_actions, default=-1) + 1)
         net_loads = [
             cfg.base_load_kw - (sim_solar[i] if i < len(sim_solar) else 0.0)
             for i in range(n_sim)
