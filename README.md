@@ -126,8 +126,11 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Emaldo battery device** | Emaldo config entry to use. Shown as a dropdown — select the correct system when multiple Emaldo devices are installed. | first found |
 | **Enable PV sell strategy** | Initial default for the live `switch.battery_optimizer_pv_strategy` entity. When `true`, the optimizer will plan PV-to-grid slots on sunny days instead of always charging the battery. See [PV Sell Strategy](#pv-sell-strategy). | `false` |
 | **Min solar forecast for PV sell** | Minimum Solcast forecast (kWh) required to activate PV sell strategy. Below this threshold the strategy is skipped (cloudy day guard). | `10.0` |
+| **Cut third-party PV while the battery is full** | While the battery is full (SoC ≥ **Max SoC**) with solar surplus, turn **Third Party PV** off. Emaldo's own AI retries a short top-up charge roughly every two minutes at 99–100 % SoC; the BMS aborts each attempt after 1–3 s and the cooling fan starts every time (Emaldo support confirms this is expected behaviour with no product setting for it — 56–156 fan starts per sunny day on the reporting system). A full battery cannot absorb more energy, so the surplus is exported either way and holding PV off there cannot deprive the house. See [Full-Battery PV Cut](#full-battery-pv-cut). | `false` |
+| **PV cut resume SoC** | SoC (%) at which Third Party PV is switched back on after a full-battery cut. Below this the battery has headroom again and the surplus is worth keeping. | `97.0` |
 | **Solar forecast mode** | Which Solcast percentile to use for charge planning. `p10` (default) uses the pessimistic 10th-percentile forecast — weather-aware, causes the optimizer to add more grid charge slots on cloudy/uncertain days. `p50` uses the median, which can leave the battery undercharged when actual solar is lower than expected. | `p10` |
 | **Solar forecast scale** | Whole-day multiplier applied to the solar forecast before planning. `0` (default) = auto-tune from the accuracy history (see [Plan Accuracy](#plan-accuracy)); e.g. `0.8` scales the forecast down by 20% when it over-predicts. Manual values are clamped to 0.3–1.2. | `0` (auto) |
+| **Solar-aware grid charging** | How strongly Case B round-trip grid charging is sized against the solar forecast. `1.0` sizes the charge to only what the battery will actually discharge before the first solar-surplus slot, using the pessimistic (P10) forecast, so a cheap night before a sunny day does not buy energy that solar would have supplied anyway. `0` (default) disables it and sizes the charge to `soc_max` as before. See [Solar-Aware Grid Charging](#solar-aware-grid-charging). | `0.0` (off) |
 | **Actual solar sensor** | Entity ID of a cumulative energy counter for actual PV production (e.g. daily inverter yield, Wh or kWh). Used for plan-vs-actual accuracy and the solar-scale auto-tune instead of the Emaldo-internal estimate (balance-derived, distorted by household loads). Empty (default) = Emaldo-internal estimate. | *(empty)* |
 | **Grid import sensor** | Entity ID of a cumulative energy counter for grid import (Wh or kWh) — the basis for the Realized Cost sensors. **Empty (default) = auto-detect** the linked Emaldo unit's `grid_import_today` sensor (model-agnostic, works for any Emaldo model). Override with a lifetime meter (e.g. an EM24 `_total` counter) for a non-Emaldo or cloud-free install. | *(empty — auto)* |
 | **Grid export sensor** | Entity ID of a cumulative energy counter for grid export (Wh or kWh) — the basis for the Realized Cost sensors. **Empty (default) = auto-detect** the linked Emaldo unit's `grid_export_today` sensor (model-agnostic, works for any Emaldo model). Override with a lifetime meter (e.g. an EM24 `_total` counter) for a non-Emaldo or cloud-free install. | *(empty — auto)* |
@@ -136,7 +139,7 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Optimizer re-run interval** | How often (minutes) the optimizer re-runs to refresh the schedule: 15, 30, 60, or 120. | `120` |
 | **Forced sell enabled** | Enable two-tier forced selling at price peaks (manual-sell arbitrage). Battery-tier drives the emaldo `manual_selling` switch (discharge at the configured **Max discharge power**); PV-tier releases solar-surplus slots to idle so the inverter auto-exports. | `false` |
 | **Forced sell max energy (kWh/day)** | Daily forced-sell energy budget in kWh per day (`forced_sell_max_kwh_pd`), split between the battery and PV tiers. `0` means **no limit** — forced selling stays enabled and may sell every eligible slot. | `0.0` |
-| **Forced sell min profit** | Minimum net profit per kWh sold (€/kWh). Battery tier: `(sell − wear) × round-trip − replacement buy` must clear it; PV tier: `sell − replacement buy × round-trip` must clear it (no wear). Defaults to `0.02` when the budget is enabled. | `0.02` |
+| **Forced sell min profit** | Minimum net profit per kWh sold (€/kWh). Battery tier: `sell × η_rt − wear − replacement buy` must clear it (see [Forced Sell](#forced-sell-manual-sell-arbitrage) — wear is charged at full cost, not scaled by η_rt); PV tier: `sell − replacement buy × η_rt` must clear it (no wear). Defaults to `0.02` when the budget is enabled. | `0.02` |
 | **Forced sell min price** | Absolute sell-price floor (€/kWh). Slots below this never sell, regardless of profit gate. | `0.0` |
 
 > **Internal PV-sell tuning constants** (not UI-configurable — edit the `BatteryConfig` dataclass defaults in `optimizer.py` to change): `pv_sell_solar_margin` (default `0.95`, minimum fraction of needed solar energy required to allow selling), `pv_sell_min_price_spread` (default `0.0`, absolute sell-price floor in €/kWh — selling also requires the sell price to exceed the slot's stored value), `pv_sell_margin` (default `1.0`, multiplier on the stored-value sell threshold — `1.05` requires a 5% premium over storage before exporting), `solar_forecast_margin` (default `0.85`, fraction of discharge-slot surplus solar credited to the grid-charge balance).
@@ -331,6 +334,32 @@ Today`) is detected by `counter_delta_kwh`: the post-reset fraction is
 returned best-effort with a `reset_crossed` flag and such records are
 excluded from the auto-tune so the tuning data never mixes reset spans with
 clean spans. A cumulative counter (`Total Energy`) never trips this.
+
+### Solar-Aware Grid Charging
+
+**Default-off since v0.3.22.** Case B round-trip grid charging buys energy off-grid
+overnight to displace an expensive morning peak. The problem is that the size of
+that charge is easy to over-set. As soon as any profitable round-trip slot exists
+in the night, the charge target becomes *"fill from the current SoC up to
+`soc_max`"* — and a sunny day will fill the battery from solar well before noon
+anyway. The grid energy then does not get used; it sits above what the house
+needs and the solar that would have gone into the battery is exported instead.
+You have bought at, say, 1.17 €/kWh and sold the same kWh of your own PV at
+0.70–0.85 €/kWh, and paid wear on top.
+
+**What the setting changes.** With `grid_charge_solar_aware` at `1.0`, the charge
+is sized to what the battery will actually discharge **between the charge slot and
+the first solar-surplus slot**, minus the energy already held above the SoC floor
+that will cover part of it. On a day where solar fills the battery anyway, that
+number is small and the expensive night charge largely disappears. On a genuinely
+cloudy day the projected solar peak stays low, so the charge is kept exactly where
+it pays off. The sizing uses the pessimistic (P10) forecast, so an over-optimistic
+solar day does not talk the optimizer into buying energy it will not use.
+
+> **Why it is not the default.** It changes planning behaviour for everyone, and on
+> some setups a genuinely cloudy next day is best served by the larger charge. It is
+> opt-in per install, and the setting is a continuous weight (`0`–`1.0`) so you can
+> dial it rather than flip it.
 
 ### Solar Regime
 
@@ -1008,6 +1037,13 @@ Shows the **actual** (not planned) grid cost wave for the day. Two sensors back 
 
 Both depend on the **Grid import sensor** / **Grid export sensor** config options (cumulative kWh counters). Left empty, they auto-detect the linked Emaldo unit's grid counters (any model). Values accrue per 15-minute slot — the first ~30 minutes after a restart only seeds the counter, then recording begins. The Battery dashboard ships with a `history-graph` card using these two entities.
 
+Both sensors also publish a per-slot breakdown of the day's energy:
+
+| Attribute | Meaning |
+|---|---|
+| `grid_charge_kwh` | Energy that reached the battery from the grid. Measured from the **grid import meter** and attributed to the battery only when the SoC actually rose over the slot — not a sum of planned charge slots. Energy imported in a slot the plan happened to label `idle` is still counted here, which is why this can exceed the planned charge sum. |
+| `idle_drain_kwh` | The battery's own standby draw (`idle_power_kw × 0.25` h per slot). A physical loss that no plan can avoid, so it is reported but deliberately **not** costed into the realized cost total — costing it would penalise every plan for an unavoidable loss. |
+
 **Native `history-graph` (no HACS required):**
 
 ```yaml
@@ -1113,11 +1149,73 @@ The coordinator cancels and rebuilds the `async_call_later` transition callbacks
 
 ---
 
+## Full-Battery PV Cut
+
+**Default-off since v0.3.24.** Turn **Third Party PV** off while the battery is
+full, to stop Emaldo's top-off charge attempts.
+
+### Background
+
+On a sunny afternoon, once the battery sits at 99–100 % SoC, the Emaldo Power Core
+AI starts a **short charge attempt roughly every two minutes** to top itself up
+from the solar surplus. The BMS hits the cell charge limit and aborts each attempt
+after 1–3 s. The cooling fan starts every time. Emaldo support has confirmed this
+is expected behaviour — *"the system tries to maintain full charge level by
+starting a short charge… as the cells are already nearly full, they quickly reach
+their charge limit and the charge is aborted"* — and that there is **no app setting
+for it**; disabling Third Party PV would stop it. A hysteresis request has been
+forwarded to Emaldo's product team with no timeline. On the reporting installation
+this was 56–156 fan/relay starts per sunny day, tens of thousands per year. The
+energy involved is negligible (0.1–0.4 kWh/day); the concern is wear.
+
+### Why it is safe
+
+While the battery is full it cannot absorb another kWh, so the surplus is exported
+to the grid either way. Holding PV off at that point does not deprive the house of
+energy — the battery simply covers the load and the inverter exports what would
+have been an export regardless. The cut therefore only ever removes PV when the
+battery is genuinely full, never during a charge slot, and never below
+`pv_cut_resume_soc`. Field-validated on 0.3.24: PV held off for 3 h 50 min from
+100 % SoC with **zero** charge attempts on the battery meter, 8.8 kWh still
+exported, and the switch restored one run after SoC reached 97 %. That test also
+confirmed the battery covers the house load while PV is off at 100 % (SoC fell from
+100 % to 97 % across the window), so the SoC threshold alone is a sufficient resume
+condition.
+
+### How it behaves
+
+| Condition | Third Party PV |
+|---|---|
+| SoC ≥ `soc_max`, solar surplus, slot is not a charge | **off** — the cut |
+| SoC < `pv_cut_resume_soc` | back on |
+| Slot is `charge` / `charge_floor` | back on — the battery needs PV |
+| Cloudy day (no surplus to cut) | back on |
+| HA restart, or the feature switched off | back on |
+
+The cut is **latched**: once it fires at `soc_max` it stays on until SoC drops
+below the resume threshold, so the switch does not toggle while the battery hovers
+at full.
+
+The decision is made in `_desired_pv_state_now()`, which the 5-minute reconcile
+(`_reconcile_pv_switch`) and the immediate apply (`_apply_pv_strategy`) both
+consult. That means the reconcile enforces the cut rather than fighting it, and no
+external automation has to poll the switch to hold it off — anything that turns PV
+back on is corrected on the next tick. It also means there is no separate PV-cut
+switch entity: the same `switch.battery_optimizer_pv_strategy` controls both
+features, and the cut is layered on top of the sell-strategy decision.
+
+> **Note:** without this feature, the optimizer re-asserts PV **on** at every
+> optimizer run — measured at about 64 seconds on one install — so holding the switch
+> off by hand or with your own automation does not work alongside
+> `enable_pv_strategy`. The built-in cut is the practical way to do it.
+
+---
+
 ## Forced Sell (Manual Sell Arbitrage)
 
 **Default-off.** When enabled, the optimizer looks for a **price-peak window** in the remaining day where selling pays more than storing. Two tiers per slot:
 
-- **Battery tier** — the optimizer drives the emaldo `manual_selling` switch (staging the remaining kWh into the `manual_selling_target` number), forcing a battery **discharge** (up to `max_discharge_per_slot_kwh` per 15-minute slot — the configured max discharge power × the slot duration) directly to the grid at the peak sell price. Full economics apply: battery wear + round-trip loss. Gate: `(sell − wear) × η_rt − replacement_buy ≥ forced_sell_min_profit`.
+- **Battery tier** — the optimizer drives the emaldo `manual_selling` switch (staging the remaining kWh into the `manual_selling_target` number), forcing a battery **discharge** (up to `max_discharge_per_slot_kwh` per 15-minute slot — the configured max discharge power × the slot duration) directly to the grid at the peak sell price. Full economics apply: battery wear + round-trip loss. Nomination gate per slot: `sell × η_rt − wear − replacement_buy ≥ forced_sell_min_profit`, where `η_rt = η_charge × η_discharge`. Wear is charged at its full cost rather than scaled by η_rt, because the cycle buys 1 kWh, sells η_rt kWh, and wears 1 kWh of throughput.
 - **PV tier** — solar-surplus slots (battery would otherwise charge from solar) are released to **idle**, so the inverter auto-exports that solar to the grid at spot price. No service call, no wear. Gate: `sell − replacement_buy × η_rt ≥ forced_sell_min_profit`.
 
 The window stops at the earliest of: energy target reached (daily budget `forced_sell_max_kwh_pd`, split across tiers), window end (the optimizer's planned re-charge slot — the energy must be buyable back cheaply later today), or the actuator's stop condition. Selling never drops the battery below the SoC floor safeguard. **Intraday only** — no recharge slot left in the remaining day ⇒ no forced selling.
