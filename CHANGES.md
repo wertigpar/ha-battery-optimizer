@@ -57,6 +57,27 @@
 
 ### Added
 
+- **Third-party PV can be cut while the battery is full** — two new opt-in
+  options, `enable_pv_cut_when_full` (off by default) and `pv_cut_resume_soc`
+  (default 97). On a sunny afternoon the Emaldo Power Core AI retries a short
+  charge roughly every two minutes to top itself up at 99-100 % SoC; the BMS
+  aborts each attempt after 1-3 s and the cooling fan starts every time, which
+  Emaldo support has confirmed as expected behaviour with no product setting
+  for it — 56-156 fan starts per sunny day on the reporting system. While the
+  battery is full the surplus is exported regardless of the switch, so holding
+  Third Party PV off there cannot deprive the house of energy. The decision is
+  made in `_desired_pv_state_now()`, which the 5-minute reconcile and the
+  immediate apply both consult, so nothing has to fight the component for the
+  switch; the cut is latched until SoC drops below the resume threshold, and PV
+  is restored on restart, on a cloudy day, when the current slot needs PV for a
+  charge, and when the feature is switched off. Issue #28, field-validated on
+  0.3.24: PV held off for 3 h 50 min from 100 % SoC with zero charge attempts
+  on the battery meter (against 56-156 per sunny day before), 8.8 kWh exported,
+  and the switch restored one run after SoC reached 97 %. The test also answers
+  the question left open in #28 — the battery carried the house load while PV
+  was off at 100 %, dropping from 100 % to 97 % over the window — so the SoC
+  threshold alone is a sufficient resume condition.
+
 - **Standby drain is measured, reported, and funded when it threatens the SoC
   floor** — the battery's own idle draw (`idle_power_kw x 0.25` per slot) is now
   carried through the SoC trajectory and the over-commit guard answers it by
