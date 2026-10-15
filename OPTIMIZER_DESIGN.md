@@ -210,3 +210,17 @@ Condition: `net ≥ forced_sell_min_profit`. The round-trip term skips the (abse
 - `round_trip_factor` = BatteryConfig property (`round_trip_efficiency`, 0.9025)
 - No `soc_min_kwh` — inline `capacity_kwh * soc_min / 100.0`
 - `pv_slots` empty ⇒ all-True PV tier (identity mask); forced-sell emit is AND-merged, so default-off stays byte-identical.
+
+---
+
+## Speculative Grid Pre-Charge
+
+**Coordinator-level, default-off** (`precharge_enabled`). Not a planning step —
+a hedge layered on top of the finished plan. `_apply_speculative_precharge()`
+merges `speculative_precharge_slots()`'s choice into it, then re-simulates.
+
+The in-place application simulates the **whole** horizon (`total_slots` = today +
+tomorrow) and writes `soc_after` back into both split days. `_split_result_by_day`
+runs first and produces the second day, so the pre-charge receives it as an
+explicit tail; simulating today alone would leave the published forecast stepping
+by the hedge's contribution at midnight, with both boundary slots idle.

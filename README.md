@@ -1277,6 +1277,12 @@ cheap energy. This feature fills that gap by charging to a **safety level** duri
 mornings but high evening prices and weak solar. Raise *Safety SoC* for a bigger buffer; lower the
 *price ceiling* if you only want to act on genuinely negative/near-zero prices.
 
+> **Forecast continuity.** The pre-charge is a hedge layered on top of the plan,
+> so it runs after the plan is built. It re-simulates the trajectory across the
+> whole two-day horizon, which is what keeps the estimated-SoC curve continuous
+> at midnight — without that, the second half of the chart would start from the
+> SoC the optimizer projected *before* the hedge was applied.
+
 ---
 
 #### Dashboard chart — Third-Party PV Schedule

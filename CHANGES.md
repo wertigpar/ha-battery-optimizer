@@ -1,5 +1,33 @@
 # Changes
 
+## v0.3.25
+
+### Fixed
+
+- **The estimated-SoC forecast no longer steps at midnight** — the speculative
+  grid pre-charge re-simulated only today's 96 slots, but the second day had
+  already been split off by `_split_result_by_day`, so the published two-day
+  forecast joined a post-pre-charge day 1 to a pre-pre-charge day 2. On a night
+  when the pre-charge fired this drew a vertical cliff at 00:00 — measured at
+  35.7 points on the reporting install, and growing between two consecutive
+  runs as the hedge topped the battery up further, which shows it tracks the
+  hedge rather than the clock — with both boundary slots marked idle and no
+  physical cause. The second half of the chart also began at a midnight SoC the
+  plan was never going to reach. The pre-charge now simulates the whole horizon
+  and writes the trajectory back into both split days, so the forecast is one
+  continuous curve and tomorrow's half starts from the SoC midnight will
+  actually have. Reachability: the pre-charge is opt-in, and the seam needs it
+  firing alongside a planned second day — in practice the day+2 hedge
+  (`precharge_horizon_days` 2, tomorrow's prices known, and tomorrow's
+  projected end SoC below the safety target). With the shipped default of 1
+  the pre-charge only fires while tomorrow is unknown, and a today-only plan
+  has no second half, so the seam could not appear. No scheduled action
+  changes: charge slots carry a SoC target byte, not an energy quantity, so
+  the battery does exactly what it was told either way. What this corrects is
+  the published forecast — and, from the next run on, the end-of-tomorrow
+  SoC signal the day+2 hedge reads from tomorrow's forecast. Regression tests:
+  `tests/test_day_boundary_continuity.py`.
+
 ## v0.3.24
 
 ### Fixed
