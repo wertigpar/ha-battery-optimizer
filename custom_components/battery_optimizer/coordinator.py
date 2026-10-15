@@ -2890,6 +2890,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         *,
         tomorrow_available: bool,
         tomorrow_end_soc_pct: float | None = None,
+        tail_result: OptimizationResult | None = None,
+        tail_solar: list[float] | None = None,
     ) -> None:
         """Force a safety grid-charge on selected cheap slots, in place.
 
@@ -2898,6 +2900,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         charge target byte (safety SoC%), re-simulates the SoC trajectory so
         soc_after / dashboard forecast stay consistent, and backs off if the
         slot already carries a user discharge rule.
+
+        ``tail_result`` is the already-split second day.  When supplied the
+        trajectory is simulated across the day boundary and ``soc_after`` is
+        written back into BOTH days, so the published forecast is one
+        continuous curve.  Without it the forecast steps by the pre-charge's
+        contribution at midnight while both slots read idle — see
+        ``tests/test_day_boundary_continuity.py``.
         """
         regime_engaged = bool(
             self._solar_regime and self._solar_regime["engaged"]
@@ -2983,19 +2992,45 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 n_idle += 1
 
+        # Simulate the whole horizon in one pass.  The pre-charge only ever
+        # rewrites TODAY's actions (the loops above are bounded by
+        # SLOTS_PER_DAY via `slots` / `suppress`, both of which hold only
+        # today indices), but tomorrow's already-planned actions must still be
+        # carried through the simulation so day 2 continues from wherever day
+        # 1 ends rather than from a pre-pre-charge projection.
+        tail_slots = tail_result.slots if tail_result is not None else []
         plan_actions = {sp.index: sp.action for sp in result.slots}
-        net_loads = [cfg.base_load_kw - solar_15min[i] for i in range(SLOTS_PER_DAY)]
+        for sp in tail_slots:
+            plan_actions[SLOTS_PER_DAY + sp.index] = sp.action
+
+        sim_solar = list(solar_15min) + list(tail_solar or [])
+        n_sim = max(SLOTS_PER_DAY, len(plan_actions))
+        net_loads = [
+            cfg.base_load_kw - (sim_solar[i] if i < len(sim_solar) else 0.0)
+            for i in range(n_sim)
+        ]
+        pv_slots = list(result.thirdparty_pv_slots) + list(
+            tail_result.thirdparty_pv_slots if tail_result is not None else []
+        )
         traj_kwh = _simulate_soc_trajectory(
-            plan_actions, net_loads, solar_15min, cfg,
+            plan_actions, net_loads, sim_solar, cfg,
             start_slot=start_slot,
             initial_soc_kwh=cfg.capacity_kwh * current_soc_pct / 100.0,
             charge_targets=charge_targets,
             discharge_targets=discharge_targets,
-            pv_slots=result.thirdparty_pv_slots,
+            pv_slots=pv_slots,
+            total_slots=n_sim,
         )
         for sp in result.slots:
             if sp.index < len(traj_kwh):
                 sp.soc_after = round(traj_kwh[sp.index] / cfg.capacity_kwh * 100.0, 1)
+        # Day 2 starts wherever day 1 ended.  Without this the second half of
+        # the chart keeps the pre-pre-charge projection and the forecast steps
+        # at midnight by exactly the pre-charge's contribution.
+        for sp in tail_slots:
+            idx = SLOTS_PER_DAY + sp.index
+            if idx < len(traj_kwh):
+                sp.soc_after = round(traj_kwh[idx] / cfg.capacity_kwh * 100.0, 1)
         result.charge_slots = n_charge
         result.discharge_slots = n_discharge
         result.idle_slots = n_idle
