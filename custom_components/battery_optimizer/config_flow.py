@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+# On Home Assistant 2026.10+ this resolves through Home Assistant's compat
+# shim (homeassistant/__init__.py calls probatio.compat.install_as_voluptuous()),
+# so `vol` IS probatio - its Coerce/Any/Range semantics, not voluptuous's.
 import voluptuous as vol
 
 from homeassistant.config_entries import (
@@ -147,6 +150,7 @@ from .rules import (
     LEVEL_DEFAULT,
     PV_BEHAVIORS,
 )
+from .optional_value import is_blank
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -166,6 +170,30 @@ def _get_emaldo_options(hass) -> dict[str, str]:
         label = home_id or entry_id
         options[entry_id] = label
     return options
+
+
+class _OptionalNumberSelector(NumberSelector):
+    """A NumberSelector that treats a blank as "not set".
+
+    Home Assistant's NumberSelector validates with ``probatio.Coerce(float)``,
+    which rejects ``""`` and ``None`` with "expected float".  The next-day
+    price publish hour is legitimately optional - leaving it empty means the
+    cutoff is derived automatically from the Nord Pool timezone - so a blank
+    has to survive validation.
+
+    Overriding ``__call__`` keeps the number widget: the class is still an
+    instance of ``selector.Selector``, so the frontend still receives
+    ``{"selector": {"number": {...}}}`` and renders a number input.  A
+    ``vol.Any`` would not: a three-member ``Any`` misses probatio's
+    two-member "allow_none" rule and serialises as a dropdown instead, which
+    is why the earlier attempt at this fix had to be reverted (see #29).
+    """
+
+    def __call__(self, data: Any) -> float | None:
+        """Validate the passed selection, treating a blank as unset."""
+        if is_blank(data):
+            return None
+        return super().__call__(data)
 
 
 def _build_schema(
@@ -461,7 +489,7 @@ def _build_schema(
                 default=d.get(
                     CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
                 ),
-            ): NumberSelector(
+            ): _OptionalNumberSelector(
                 NumberSelectorConfig(
                     min=0.0, max=23.0, mode=NumberSelectorMode.BOX
                 )
