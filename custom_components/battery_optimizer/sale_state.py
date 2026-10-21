@@ -16,9 +16,10 @@ active).  The timestamps are absolute, so the marker is still read - and still
 means something - across midnight.
 
 The marker is only ever written for a sale that was OBSERVED running, so
-RECOVER_COMPLETED means "the sale finished on its own" and not "the start was
-refused".  A start Emaldo refuses does not raise, so a refused start would
-otherwise leave a marker and consume the window with nothing exported.
+RECOVER_COMPLETED means "no sale is running any more" - it finished on its
+own, or our own stop took effect late - and not "the start was refused".  A
+start Emaldo refuses does not raise, so a refused start would otherwise leave
+a marker and consume the window with nothing exported.
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-#: The switch reads off: the sale finished on its own.
+#: The switch reads off: no sale is running any more.  It finished on its
+#: own, or our own stop took effect late - the switch state cannot tell
+#: the two apart, and the window is recorded as served either way.
 #:
 #: PRECONDITION: the marker is only ever written for a sale that was OBSERVED
 #: running (the switch read back on).  Without that, a start that Emaldo

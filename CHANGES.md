@@ -40,8 +40,9 @@
 
   The running sale is now recorded in its own restart marker, written wherever
   the sale is **observed running** — at the start read-back, and again at the
-  later point where the switch is first seen on, so a running sale always has
-  a marker. A start Emaldo refuses does not raise, so a marker written earlier
+  later point where the switch is first seen on, so a running sale has a
+  marker for as long as the disk accepts the write. A start Emaldo refuses
+  does not raise, so a marker written earlier
   would exist for a sale that never ran and would consume the window as if it
   had been served, with nothing exported. The marker carries the window
   identity, because `_manual_selling_served` is what stops a second sale
@@ -63,10 +64,11 @@
   the sale is confirmed stopped — confirmed by reading the switch back, not by
   the `turn_off` call returning, because Emaldo's switch never raises when the
   device ignores the command. A stop that did not take effect leaves the
-  marker behind, so a later restart still knows a sale is live, and the next
-  tick retries it. A marker that cannot be deleted is quarantined in place,
-  overwritten with a payload meaning "nothing to restore", so it is not
-  re-decided on every boot.
+  marker behind, so a later restart still knows a sale is live; the recovery
+  re-adopts the sale on the next tick and re-issues the stop — at the window
+  end, or at once if the window has already closed. A marker that cannot be
+  deleted is quarantined in place, overwritten with a payload meaning "nothing
+  to restore", so it is not re-decided on every boot.
 
   The sell-back-to-grid prerequisite keeps its own separate recovery. In the
   **restart** recovery it stays on while a sale may be running — pulling it out

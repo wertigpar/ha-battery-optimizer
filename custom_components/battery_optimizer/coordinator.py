@@ -3713,17 +3713,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return
         if decision == sale_state.RECOVER_COMPLETED:
-            # The sale finished on its own.  The completion path could not
-            # stamp the window as served, because it returns early when the
-            # sale is not active - which is exactly the state a restart
-            # leaves.  Without this the next tick would open a SECOND sale for
-            # the same window.
+            # No sale is running any more - it finished on its own, or our
+            # own stop took effect late (a stale read left the marker, and
+            # this reconcile is the one that sees the settled state).  The
+            # completion path could not stamp the window as served, because
+            # it returns early when the sale is not active - which is exactly
+            # the state a restart leaves.  Without this the next tick would
+            # open a SECOND sale for the same window.
             served_date = date.fromisoformat(marker["served_date"])
             self._manual_selling_served = (served_date, tuple(marker["served_window"]))
             await self.hass.async_add_executor_job(self._clear_manual_sell_marker)
             _LOGGER.info(
-                "Forced sell finished on its own before the restart; window %s "
-                "recorded as served",
+                "No forced sell is running any more; window %s recorded "
+                "as served",
                 marker["served_window"],
             )
             self._manual_sell_reconciled = True
@@ -3955,7 +3957,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # consumed the window with nothing sold and no retry.  _manual_selling_
         # seen_on is what a later reconcile reads, and only this read-back or a
         # tick that caught the sale running can set it.
-        if self._manual_selling_is_on():
+        # The read-back reads the switch that was commanded, not a fresh
+        # resolution: the resolution is deliberately uncached, so resolving
+        # it again could land on a different switch.
+        if self._manual_selling_is_on(switch_id):
             self._manual_selling_seen_on = True
             self._manual_selling_served = (now.date(), tuple(window))
             # The restart marker is written HERE, with the served stamp, and NOT
@@ -4005,11 +4010,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return state.state if state is not None else None
 
-    def _manual_selling_is_on(self) -> bool:
+    def _manual_selling_is_on(self, switch_id: str | None = None) -> bool:
         """Whether Emaldo's manual-selling switch reads a definite on - i.e.
         the sale is running, not merely requested.
+
+        switch_id lets a caller that already resolved the entity read THAT
+        switch back: the resolution is deliberately not cached, so resolving
+        it again could land on a different switch.
         """
-        return self._manual_selling_switch_state() == "on"
+        return self._manual_selling_switch_state(switch_id) == "on"
 
     def _manual_selling_is_off(self, switch_id: str | None = None) -> bool:
         """Whether Emaldo's manual-selling switch reads a definite off.
@@ -4079,7 +4088,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     # a running sale with no marker at all - and say so.
                     _LOGGER.error(
                         "Manual selling is running but its start window is "
-                        "unknown; falling back to the current plan"
+                        "unknown; falling back to the current plan, so the "
+                        "marker written now names a DIFFERENT window than "
+                        "the sale was started for"
                     )
                     started_at = now
                     start_window = (now.date(), tuple(result.sell_slots or ()))
@@ -4102,7 +4113,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.hass.async_add_executor_job(
                 self._clear_manual_sell_marker
             )
-            self._manual_selling_served = (
+            # Name the window the sale was STARTED for, not the current
+            # tick's plan: a plan that moved mid-sale would otherwise strip
+            # the sold window of its "already served" protection and let a
+            # later plan open a second sale for it.  The plan is only a
+            # fallback for a sale adopted across a restart, which has no
+            # start window of its own.
+            self._manual_selling_served = self._manual_selling_start_window or (
                 now.date(), tuple(result.sell_slots or ())
             )
             _LOGGER.info(
