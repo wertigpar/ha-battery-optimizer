@@ -38,17 +38,18 @@
   the sale would have run for however long Emaldo took to fill it, however
   far past the window.
 
-  The running sale is now recorded in its own restart marker, written together
-  with the served stamp and only where the sale is **observed running**: a
-  start Emaldo refuses does not raise, so a marker written earlier would exist
-  for a sale that never ran and would consume the window as if it had been
-  served, with nothing exported. The marker carries the window identity,
-  because `_manual_selling_served` is what stops a second sale opening for the
-  same window, and the normal completion path cannot restore it after a
-  restart — it returns early when the sale is not active, which is exactly the
-  state a restart leaves. Its timestamps are absolute, so a sale that spans
-  midnight is still recognised; a day-scoped rule would discard the marker and
-  leave the switch on.
+  The running sale is now recorded in its own restart marker, written wherever
+  the sale is **observed running** — at the start read-back, and again at the
+  later point where the switch is first seen on, so a running sale always has
+  a marker. A start Emaldo refuses does not raise, so a marker written earlier
+  would exist for a sale that never ran and would consume the window as if it
+  had been served, with nothing exported. The marker carries the window
+  identity, because `_manual_selling_served` is what stops a second sale
+  opening for the same window, and the normal completion path cannot restore
+  it after a restart — it returns early when the sale is not active, which is
+  exactly the state a restart leaves. Its timestamps are absolute, so a marker
+  written before midnight is still understood after it; a day-scoped rule would
+  discard the marker and leave the switch on.
 
   On recovery the switch state decides: off means the sale finished on its own
   (the window is recorded as served), on means a sale is running that was lost
@@ -58,10 +59,13 @@
   nothing and tries again on the next tick.
 
   The marker deliberately outlives the in-memory flag, and is cleared only when
-  the sale is confirmed stopped — a failed `turn_off` leaves it behind, so a
-  later restart still knows a sale is live. A marker that cannot be deleted is
-  quarantined in place, overwritten with a payload meaning "nothing to
-  restore", so it is not re-decided on every boot.
+  the sale is confirmed stopped — confirmed by reading the switch back, not by
+  the `turn_off` call returning, because Emaldo's switch never raises when the
+  device ignores the command. A stop that did not take effect leaves the
+  marker behind, so a later restart still knows a sale is live, and the next
+  tick retries it. A marker that cannot be deleted is quarantined in place,
+  overwritten with a payload meaning "nothing to restore", so it is not
+  re-decided on every boot.
 
   The sell-back-to-grid prerequisite keeps its own separate recovery, and it
   stays on while a sale may be running: pulling it out would make Emaldo

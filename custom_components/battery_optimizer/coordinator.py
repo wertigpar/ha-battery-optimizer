@@ -1931,6 +1931,68 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         return not marker["served_window"]
 
+    async def _write_sale_marker(self, now: datetime, window: list[int]) -> None:
+        """Record that a sale is running, for the restart recovery.
+
+        Called wherever a sale is OBSERVED running - the start read-back,
+        and the later transition where the switch is first seen on - so the
+        invariant "a running sale always has a marker" holds by
+        construction rather than by timing.
+
+        window_end is the START of the slot after the window's last one
+        ((window[-1] + 1) * 15 min after midnight), which is exactly the
+        instant the coordinator's own window rule stops the window:
+        now_slot > window[-1].
+
+        DST: the arithmetic keeps now.tzinfo and adds a plain
+        timedelta to the WALL clock, exactly like the slot rule
+        itself.  dt_util.now() hands out a ZoneInfo, and a ZoneInfo
+        recomputes its offset from the resulting wall time, so the
+        start-of-day offset is NOT carried over.  Checked against the
+        rule's own close instant - the first absolute instant whose
+        local slot index passes the window's last slot - this lands
+        on exactly that instant for every slot of a normal day and
+        of the autumn transition (04:00 -> 03:00), the ambiguous
+        hour included.
+
+        The exception is the spring-forward day's non-existent local
+        hour (03:00-03:59): ZoneInfo resolves the gap with the
+        pre-transition offset, so window_end lands 15/30/45 minutes
+        after the instant the local clock actually jumps past slots
+        12/13/14 (04:00 local).  The rule closes those windows at
+        that jump and this closes them a quarter of an hour later -
+        and those slots never occur locally on that day anyway,
+        because the clock skips them.  A fixed-offset tzinfo would
+        be an hour out on BOTH transition days; HA never uses one.
+        """
+        if not window:
+            # Nothing to record - and an EMPTY window is the quarantine
+            # discriminator, so it must never be written.
+            return
+        window_end = datetime.combine(
+            now.date(), datetime.min.time(), tzinfo=now.tzinfo
+        ) + timedelta(minutes=15 * (window[-1] + 1))
+        try:
+            await self.hass.async_add_executor_job(
+                self._write_manual_sell_marker,
+                sale_state.build_sale_marker(now, list(window), window_end),
+            )
+            # Re-arm the reconcile: a marker now exists, so the latch
+            # must not claim the reconcile has settled.  Without this,
+            # a failed turn_off later in the session would leave the
+            # marker on disk with the reconcile latched, and the sale
+            # would never be re-adopted or retried.
+            self._manual_sell_reconciled = False
+        except OSError as err:
+            # The sale is running and the marker could not be written.  Log
+            # it and carry on: refusing to sell would be the worse outcome,
+            # and a restart in the meantime is no worse than no marker at
+            # all.
+            _LOGGER.error(
+                "Could not write the forced-sell restart marker at %s: %s",
+                self._manual_sell_state_path, err,
+            )
+
     def _clear_manual_sell_marker(self) -> None:
         """Remove the forced-sell marker.  Missing file is not an error.
 
@@ -3629,6 +3691,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._manual_sell_reconciled = True
             return
         # The switch reads on: a sale is running that we lost track of.
+        was_active = self._manual_selling_active
         served_date = date.fromisoformat(marker["served_date"])
         self._manual_selling_served = (served_date, tuple(marker["served_window"]))
         self._manual_selling_seen_on = True
@@ -3648,6 +3711,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 marker["served_window"],
             )
             await self._stop_manual_selling_locked()
+            return
+        if was_active:
+            # Already managing this sale: the reconcile only confirmed it.
+            # It runs on every tick while the marker exists, so this is not
+            # news - and saying "re-adopted ... across the restart" for a
+            # sale this session started itself would be wrong.
+            _LOGGER.debug(
+                "The forced sell is still running (window %s)",
+                marker["served_window"],
+            )
             return
         _LOGGER.info(
             "Re-adopted the forced sell running across the restart (window %s)",
@@ -3847,55 +3920,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # this read-back would exist for a sale that never ran, and the
             # recovery would consume the window as if it had been served - with
             # nothing exported.
-            #
-            # window_end is the START of the slot after the window's last one
-            # ((window[-1] + 1) * 15 min after midnight), which is exactly the
-            # instant the coordinator's own window rule stops the window:
-            # now_slot > window[-1].
-            #
-            # DST: the arithmetic keeps now.tzinfo and adds a plain
-            # timedelta to the WALL clock, exactly like the slot rule
-            # itself.  dt_util.now() hands out a ZoneInfo, and a ZoneInfo
-            # recomputes its offset from the resulting wall time, so the
-            # start-of-day offset is NOT carried over.  Checked against the
-            # rule's own close instant - the first absolute instant whose
-            # local slot index passes the window's last slot - this lands
-            # on exactly that instant for every slot of a normal day and
-            # of the autumn transition (04:00 -> 03:00), the ambiguous
-            # hour included.
-            #
-            # The exception is the spring-forward day's non-existent local
-            # hour (03:00-03:59): ZoneInfo resolves the gap with the
-            # pre-transition offset, so window_end lands 15/30/45 minutes
-            # after the instant the local clock actually jumps past slots
-            # 12/13/14 (04:00 local).  The rule closes those windows at
-            # that jump and this closes them a quarter of an hour later -
-            # and those slots never occur locally on that day anyway,
-            # because the clock skips them.  A fixed-offset tzinfo would
-            # be an hour out on BOTH transition days; HA never uses one.
-            window_end = datetime.combine(
-                now.date(), datetime.min.time(), tzinfo=now.tzinfo
-            ) + timedelta(minutes=15 * (window[-1] + 1))
-            try:
-                await self.hass.async_add_executor_job(
-                    self._write_manual_sell_marker,
-                    sale_state.build_sale_marker(now, list(window), window_end),
-                )
-                # Re-arm the reconcile: a marker now exists, so the latch
-                # must not claim the reconcile has settled.  Without this,
-                # a failed turn_off later in the session would leave the
-                # marker on disk with the reconcile latched, and the sale
-                # would never be re-adopted or retried.
-                self._manual_sell_reconciled = False
-            except OSError as err:
-                # The sale is running and the marker could not be written.  Log
-                # it and carry on: refusing to sell would be the worse outcome,
-                # and a restart in the meantime is no worse than no marker at
-                # all.
-                _LOGGER.error(
-                    "Could not write the forced-sell restart marker at %s: %s",
-                    self._manual_sell_state_path, err,
-                )
+            await self._write_sale_marker(now, list(window))
         _LOGGER.info(
             "Manual selling started: %d slots, target %.1f kWh",
             len(window), staged_kwh,
@@ -3989,6 +4014,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._manual_selling_seen_on = True
                 self._manual_selling_served = (
                     now.date(), tuple(result.sell_slots or ())
+                )
+                # The sale is OBSERVED running, so the marker is written here
+                # too: the start read-back may not have seen "on" yet (the
+                # device needed a moment), and a restart in between would
+                # orphan the sale.  With both observation sites writing it,
+                # "a running sale always has a marker" holds by
+                # construction rather than by timing.
+                await self._write_sale_marker(
+                    now, list(result.sell_slots or ())
                 )
             return
         if state != "off":
@@ -4097,7 +4131,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ),
                     timeout=_MANUAL_SELLING_STOP_TIMEOUT_S,
                 )
-                stopped = True
+                # The service call returning is NOT a confirmation:
+                # Emaldo's switch never raises when the device ignores
+                # the command (emaldo/switch.py:306-314 ->
+                # emaldo/coordinator.py:1827-1885 logs a warning and
+                # returns the last confirmed value).  The entity state
+                # carries the DEVICE's confirmed value, so read it back.
+                # If it still reads on, the sale is still running: keep
+                # the marker so a later restart still knows, and let the
+                # next tick retry.  A stale read right after a successful
+                # stop is self-healing - the marker lingers one tick and
+                # the reconcile then reads the settled state and clears
+                # it.
+                stopped = self._manual_selling_is_off()
             except (TimeoutError, asyncio.TimeoutError) as err:
                 _LOGGER.error(
                     "Timed out after %ss stopping manual selling on %s; "

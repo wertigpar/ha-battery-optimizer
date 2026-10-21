@@ -1225,12 +1225,16 @@ The per-slot plan is exposed on the **Manual Sell Schedule** diagnostic sensor (
 Battery Optimizer speaks to Emaldo **through its entities** — the same `manual_selling` switch + `manual_selling_target` number (and the `apply_bulk_schedule` service) your own automations can use. The actuator self-stops at the energy target; if the Emaldo device rejects the state change (e.g. its own selling-protection setting), the switch logs an error and the battery simply idles — no damage path.
 
 **Restarts.** A restart during a sell window is handled: the running sale is
-recorded on disk, and on the next run the switch state decides what happens. If
-the sale finished on its own, its window is recorded as served, so the same
-window is not sold twice. If it is still running, it is re-adopted and stopped:
-at the window end, or right away if the window has already closed — so the
-battery never exports to the grid unattended. The marker carries absolute
-timestamps, so a sale that runs across midnight is still recognised.
+recorded on disk wherever it is first observed running, and on the next run the
+switch state decides what happens. If the sale finished on its own, its window
+is recorded as served, so the same window is not sold twice. If it is still
+running, it is re-adopted and stopped: at the window end, or right away if the
+window has already closed. The stop is confirmed by reading the switch back —
+Emaldo's switch never raises when the device ignores the command — so a stop
+that did not take effect keeps the record and is retried on the next tick,
+rather than leaving the battery exporting to the grid unattended. The marker's
+timestamps are absolute, so a marker written before midnight is still
+understood after it.
 
 ---
 

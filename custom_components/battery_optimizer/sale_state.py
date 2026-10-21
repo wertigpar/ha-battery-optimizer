@@ -122,16 +122,21 @@ def decide_sale_recovery(
     """
     if not isinstance(marker, dict):
         return RECOVER_UNKNOWN
-    if switch_state == "off":
-        return RECOVER_COMPLETED
-    if switch_state != "on":
-        return RECOVER_UNKNOWN
     if not isinstance(now, datetime):
         return RECOVER_UNKNOWN
+    # The marker is validated FIRST, whatever the switch says: a marker
+    # whose window_end cannot be read is not a usable marker, and answering
+    # "completed" for it would consume a window on the strength of a
+    # payload nobody could parse.  The function is documented as total and
+    # self-contained, so it may be called with a raw payload.
     raw_end = marker.get("window_end")
     try:
         window_end = datetime.fromisoformat(raw_end)
     except (TypeError, ValueError):
+        return RECOVER_UNKNOWN
+    if switch_state == "off":
+        return RECOVER_COMPLETED
+    if switch_state != "on":
         return RECOVER_UNKNOWN
     # Both sides are normalised to the same awareness, so the comparison can
     # never raise.  A naive `now` is treated as local wall-clock, which is
