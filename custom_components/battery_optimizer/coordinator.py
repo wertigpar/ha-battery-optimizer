@@ -3889,10 +3889,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._restore_sell_back_to_grid()
             return
         self._manual_selling_active = False
-        await self.hass.async_add_executor_job(
-            self._clear_manual_sell_marker
-        )
         switch_id = self._manual_selling_switch_id()
+        stopped = False
         if self._manual_selling_is_off():
             # Emaldo already stopped itself once the staged target was exported;
             # turn_off is for INTERRUPTING a running sale, so there is nothing
@@ -3901,6 +3899,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug(
                 "Manual selling already finished by itself; not sending turn_off"
             )
+            stopped = True
         else:
             try:
                 # Bounded: the forced-sell lock is held across this call and
@@ -3913,6 +3912,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ),
                     timeout=_MANUAL_SELLING_STOP_TIMEOUT_S,
                 )
+                stopped = True
             except (TimeoutError, asyncio.TimeoutError) as err:
                 _LOGGER.error(
                     "Timed out after %ss stopping manual selling on %s; "
@@ -3921,6 +3921,20 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error("Failed to stop manual selling: %s", err)
+        if stopped:
+            # The marker is cleared only when the sale is CONFIRMED stopped.
+            # If the turn_off failed the sale may still be running, and the
+            # marker is the only thing that would tell a later restart to turn
+            # it off.  Clearing it here would re-create the very orphan this
+            # marker exists to prevent.
+            await self.hass.async_add_executor_job(
+                self._clear_manual_sell_marker
+            )
+        else:
+            _LOGGER.warning(
+                "Manual selling on %s may still be running; keeping the restart "
+                "marker so a later restart can turn it off", switch_id,
+            )
         # Issue #23 cause B: withdraw the enable we made - after the sale
         # itself has stopped, never before.
         await self._restore_sell_back_to_grid()
