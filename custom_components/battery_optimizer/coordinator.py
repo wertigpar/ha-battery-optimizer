@@ -1921,6 +1921,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Write the forced-sell marker atomically.  Raises OSError on failure."""
         marker_io.atomic_write_json(self._manual_sell_state_path, payload)
 
+    @staticmethod
+    def _is_quarantined_sale_marker(marker: dict[str, Any]) -> bool:
+        """True for the quarantine payload written over an undeletable marker.
+
+        The quarantine is a marker that parses but carries an EMPTY window:
+        a real marker always carries the window the sale was started for,
+        and the start path refuses an empty window before it writes one.
+        """
+        return not marker["served_window"]
+
     def _clear_manual_sell_marker(self) -> None:
         """Remove the forced-sell marker.  Missing file is not an error.
 
@@ -1993,19 +2003,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # make Emaldo refuse or abort the sale.  The plan alone cannot
             # tell us after a reboot -- there is no plan yet, which is exactly
             # the state a reboot during a sell window leaves behind -- so the
-            # sale marker is consulted as well.  The marker exists only while
-            # a sale was running; the switch state says whether it still is.
+            # sale marker and the Manual selling switch are consulted as
+            # well.  The rule lives in _may_withdraw_sell_back_prerequisite.
             sale_raw = await self.hass.async_add_executor_job(
                 self._read_manual_sell_marker
             )
-            if (
-                sale_raw is not None
-                and not marker_io.is_unreadable(sale_raw)
-                and self._manual_selling_switch_state() == "on"
-            ):
+            if not self._may_withdraw_sell_back_prerequisite(sale_raw):
                 _LOGGER.info(
-                    "Sell back to grid left on: a forced sell is still running "
-                    "(restart recovery), restoring once it closes"
+                    "Sell back to grid left on: a manual sale may still be "
+                    "running (restart recovery), restoring once it closes"
                 )
                 return
             # Turning the switch off mid-window withdraws the very
@@ -2059,6 +2065,51 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Restored %s to off after an unclean restart", sell_back_id
             )
 
+    def _may_withdraw_sell_back_prerequisite(self, sale_raw: Any) -> bool:
+        """Whether the Sell back to grid prerequisite may be withdrawn.
+
+        The prerequisite is needed by a running manual sale: pulling it out
+        makes Emaldo refuse or abort the sale.  So it is withdrawn only when
+        we are sure no sale of ours may still be running.
+
+        The rule, in order:
+
+        - a QUARANTINED marker (an undeletable file that was overwritten
+          with the empty-window payload) says our sale was CONFIRMED
+          stopped: proceed, whatever the switch reads.  An "on" there is
+          stale, or it is another entry's sale.
+        - a DOUBTFUL marker (unreadable or unusable) says nothing and
+          contradicts nothing: change nothing and keep retrying.  Doubt
+          must never be the thing that acts.
+        - the *Manual selling* switch is the DIRECT evidence of a running
+          sale, and it does not depend on the marker at all: an "on" keeps
+          the prerequisite in place.
+        - our own usable marker says a sale of ours WAS running, so it may
+          still be: it takes a definite "off" from the switch to confirm
+          that it ended.  An unknown switch state is not that confirmation
+          - right after a reboot the Emaldo entities are not there yet, and
+          that is exactly when the sale marker exists.
+        - otherwise we have no record of a sale of ours, and a switch that
+          does not read "on" means nothing is selling: the stranded
+          prerequisite can go back the user's way.
+        """
+        usable = False
+        if sale_raw is not None:
+            if marker_io.is_unreadable(sale_raw):
+                return False
+            marker = sale_state.parse_sale_marker(sale_raw)
+            if marker is None:
+                return False
+            if self._is_quarantined_sale_marker(marker):
+                return True
+            usable = True
+        switch_state = self._manual_selling_switch_state()
+        if switch_state == "on":
+            return False
+        if usable and switch_state != "off":
+            return False
+        return True
+
     async def _restore_manual_selling_after_restart(self) -> None:
         """Reconcile the forced-sell marker after a restart.
 
@@ -2068,10 +2119,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Unlike the sell-back restore this one interrupts a running sale when
         its window has closed - turning the *Manual selling* switch off stops
-        the sale.  The sell-back prerequisite is NOT withdrawn while the
-        sale runs: the sell-back restore consults the sale marker and the
-        switch state for exactly that, so it leaves the prerequisite in
-        place until the sale is over.
+        the sale.  The sell-back prerequisite is NOT withdrawn while a sale
+        may be running: the sell-back restore asks
+        _may_withdraw_sell_back_prerequisite first, and that keeps the
+        prerequisite in place unless the sale is known to be over.
         """
         async with self._forced_sell_lock:
             await self._reconcile_manual_selling_marker_locked(dt_util.now())
@@ -3364,11 +3415,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # held here either: the coroutine takes _forced_sell_lock
             # itself.
             #
-            # Gated on the latch, which means exactly "the marker is
-            # gone": an install with no marker settles on its first
-            # reconcile and then queues nothing at all, while an install
-            # WITH a marker keeps reconciling until the sale is confirmed
-            # stopped.
+            # Gated on the latch, which means "there is nothing left to
+            # reconcile": the marker is gone, or it is a quarantined
+            # marker (an undeletable file that was overwritten with a
+            # payload meaning "nothing to restore").  An install with no
+            # marker settles on its first reconcile and then queues
+            # nothing at all, while an install WITH a live sale's marker
+            # keeps reconciling until the sale is confirmed stopped.
             self.hass.async_create_task(
                 self._restore_manual_selling_after_restart()
             )
@@ -3493,11 +3546,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         makes the in-memory state consistent with the switch again, and the
         existing window-end stop can then interrupt the sale.
 
-        Deliberately makes no service call of its own: re-adopting is enough
-        for the existing stop path to do the interrupting.  The sell-back
-        prerequisite is left alone while the sale runs: the sell-back
-        restore checks the sale marker and the switch state before it
-        withdraws anything.
+        Makes no service call of its own beyond the stop path it delegates
+        to: re-adopting is enough for the existing stop path to do the
+        interrupting.  The sell-back prerequisite is left alone while a sale
+        may be running - the sell-back restore asks
+        _may_withdraw_sell_back_prerequisite before it withdraws anything.
 
         Settles only when there is nothing left to reconcile: the marker
         is gone, or it is a quarantined marker (an undeletable file that
@@ -3536,7 +3589,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._manual_sell_state_path,
             )
             return
-        if not marker["served_window"]:
+        if self._is_quarantined_sale_marker(marker):
             # A quarantined marker: the file could not be deleted, so it was
             # overwritten with a payload that means "nothing to restore" (an
             # empty window - a real marker always carries the window the
@@ -3635,6 +3688,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._stop_manual_selling_locked()
             return
         if not window:
+            # The window is never empty here, and that is what keeps the
+            # empty window a reliable quarantine discriminator: a real
+            # sale marker always carries the window the sale was started
+            # for, so the reconcile can tell a quarantined marker (an
+            # undeletable file overwritten with an empty-window payload)
+            # from a real one by the window alone.
             await self._stop_manual_selling_locked()
             return
         # Deliberately BELOW every stop branch: they need no device, so
