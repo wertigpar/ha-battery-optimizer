@@ -29,6 +29,52 @@
   published v0.3.17 build therefore never contained the fix, and #29 is the
   same failure resurfacing. Files: `config_flow.py`, `optional_value.py`.
 
+- **A restart during a forced-sell window no longer leaves the battery exporting
+  to the grid unattended** — the running sale was tracked only in memory, so
+  after a restart every stop path treated the `Manual selling` switch as not
+  ours and no `turn_off` was ever sent. The sale then ran until Emaldo's own
+  staged target happened to run out — measured in #30 as eight minutes past
+  the window, with SoC 61 → 41 % in the reported case. With a larger target
+  the sale would have run for however long Emaldo took to fill it, however
+  far past the window.
+
+  The running sale is now recorded in its own restart marker, written together
+  with the served stamp and only where the sale is **observed running**: a
+  start Emaldo refuses does not raise, so a marker written earlier would exist
+  for a sale that never ran and would consume the window as if it had been
+  served, with nothing exported. The marker carries the window identity,
+  because `_manual_selling_served` is what stops a second sale opening for the
+  same window, and the normal completion path cannot restore it after a
+  restart — it returns early when the sale is not active, which is exactly the
+  state a restart leaves. Its timestamps are absolute, so a sale that spans
+  midnight is still recognised; a day-scoped rule would discard the marker and
+  leave the switch on.
+
+  On recovery the switch state decides: off means the sale finished on its own
+  (the window is recorded as served), on means a sale is running that was lost
+  track of — it is re-adopted so the existing window-end stop can interrupt it,
+  and stopped at once if its window has already closed. A marker that cannot be
+  read or parsed is never treated as "nothing to restore": the recovery changes
+  nothing and tries again on the next tick.
+
+  The marker deliberately outlives the in-memory flag, and is cleared only when
+  the sale is confirmed stopped — a failed `turn_off` leaves it behind, so a
+  later restart still knows a sale is live. A marker that cannot be deleted is
+  quarantined in place, overwritten with a payload meaning "nothing to
+  restore", so it is not re-decided on every boot.
+
+  The sell-back-to-grid prerequisite keeps its own separate recovery, and it
+  stays on while a sale may be running: pulling it out would make Emaldo
+  refuse or abort the sale. Files: `coordinator.py`, `marker_io.py`,
+  `sale_state.py` — the first is the shared restart-marker file I/O (an atomic
+  write, and a read that tells "no file" from "file that cannot be read"), the
+  second the marker's payload and the recovery decision; both are pure
+  modules. Regression tests: `tests/test_forced_sell_restart.py`,
+  `tests/test_sale_state.py`, `tests/test_marker_io.py`. Nothing else changes:
+  the plan-time gate, the profit economics and what a sale actually does are
+  untouched — the actuator only gained the marker bookkeeping and the restart
+  recovery around them.
+
 ## v0.3.25
 
 ### Fixed
