@@ -219,6 +219,21 @@ _MANUAL_SELLING_START_GRACE_S = 90
 # nothing and spends the window.
 _MANUAL_SELLING_MAX_START_ATTEMPTS = 3
 
+# Payload written over a forced-sell marker that could not be deleted.  It
+# parses as a marker - so the file is never "unreadable" - but its EMPTY
+# window means "nothing to restore": a real marker always carries the
+# window the sale was started for, and the start path refuses an empty
+# window before it writes one.  The reconcile recognises it and decides
+# nothing, so a permanently undeletable file is not re-decided on every
+# boot, while a transient deletion failure is still retried (the next
+# clear attempt removes the file for real).
+_QUARANTINED_SALE_MARKER: dict[str, Any] = {
+    "started_at": "1970-01-01T00:00:00+00:00",
+    "window_end": "1970-01-01T00:00:00+00:00",
+    "served_date": "1970-01-01",
+    "served_window": [],
+}
+
 
 def _stage_sell_target_kwh(target_kwh: float) -> float:
     """Round a planned forced-sell target DOWN to a whole kWh, or refuse it.
@@ -549,15 +564,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._manual_sell_state_path = self.hass.config.path(
             self._manual_sell_marker_name(entry.entry_id)
         )
-        # Latched once the marker is GONE, and only then: the in-memory
-        # state and the marker then agree and there is nothing left to
-        # reconcile.  While the marker exists the latch stays down, so
-        # every tick reconciles again - that is what keeps RECOVER_STOP
-        # reachable for an adopted sale, and what retries a stop whose
-        # turn_off failed.  Same rule as the sibling sell-back restore,
-        # which latches only when its marker is gone.  Per session, not
-        # per install - a restart builds a new coordinator with the latch
-        # down, so the first reconcile after a restart still runs.
+        # Latched when there is nothing left to reconcile: the marker is
+        # gone, or it is a quarantined marker (an undeletable file that
+        # was overwritten with a payload meaning 'nothing to restore').
+        # NEVER while a live sale's marker is on disk - while the marker
+        # exists the latch stays down, so every tick reconciles again.
+        # That is what keeps RECOVER_STOP reachable for an adopted sale,
+        # what retries a stop whose turn_off failed, and what lets the
+        # marker written mid-session re-arm the reconcile.  Same rule as
+        # the sibling sell-back restore, which latches only when its
+        # marker is gone.  Per session, not per install - a restart
+        # builds a new coordinator with the latch down, so the first
+        # reconcile after a restart still runs.
         self._manual_sell_reconciled: bool = False
         # Solar forecast scale — resolved per run, applied at the forecast
         # choke point. The last value used by a plan run is retained so the
@@ -1904,16 +1922,31 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         marker_io.atomic_write_json(self._manual_sell_state_path, payload)
 
     def _clear_manual_sell_marker(self) -> None:
-        """Remove the forced-sell marker.  Missing file is not an error."""
+        """Remove the forced-sell marker.  Missing file is not an error.
+
+        An undeletable marker is still readable, so it would be re-decided
+        on every boot.  It is quarantined in place instead: overwritten
+        with a payload that means "nothing to restore".  The delete is
+        attempted first, so a transient deletion failure is still retried -
+        the next clear attempt removes the file for real.
+        """
         try:
             os.remove(self._manual_sell_state_path)
         except FileNotFoundError:
             return
         except OSError as err:
-            _LOGGER.error(
-                "Could not remove the forced-sell marker at %s: %s",
+            _LOGGER.warning(
+                "Could not remove the forced-sell marker at %s (%s); "
+                "quarantining it instead",
                 self._manual_sell_state_path, err,
             )
+            try:
+                self._write_manual_sell_marker(_QUARANTINED_SALE_MARKER)
+            except OSError:
+                _LOGGER.error(
+                    "Could not quarantine the forced-sell marker at %s",
+                    self._manual_sell_state_path,
+                )
 
     async def _restore_sell_back_to_grid_after_restart(self) -> None:
         """Put Sell back to grid back off after a restart mid-window.
@@ -1956,6 +1989,25 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._sell_back_to_grid_restored = True
             return
         async with self._forced_sell_lock:
+            # A running sale needs this prerequisite: pulling it out would
+            # make Emaldo refuse or abort the sale.  The plan alone cannot
+            # tell us after a reboot -- there is no plan yet, which is exactly
+            # the state a reboot during a sell window leaves behind -- so the
+            # sale marker is consulted as well.  The marker exists only while
+            # a sale was running; the switch state says whether it still is.
+            sale_raw = await self.hass.async_add_executor_job(
+                self._read_manual_sell_marker
+            )
+            if (
+                sale_raw is not None
+                and not marker_io.is_unreadable(sale_raw)
+                and self._manual_selling_switch_state() == "on"
+            ):
+                _LOGGER.info(
+                    "Sell back to grid left on: a forced sell is still running "
+                    "(restart recovery), restoring once it closes"
+                )
+                return
             # Turning the switch off mid-window withdraws the very
             # prerequisite the running sale depends on, so Emaldo would then
             # refuse the sale.  Leave the marker so the window's own teardown -
@@ -2016,9 +2068,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Unlike the sell-back restore this one interrupts a running sale when
         its window has closed - turning the *Manual selling* switch off stops
-        the sale, and the sell-back prerequisite is restored by the sell-back
-        marker's own recovery, which deliberately leaves it alone while a
-        window is live.
+        the sale.  The sell-back prerequisite is NOT withdrawn while the
+        sale runs: the sell-back restore consults the sale marker and the
+        switch state for exactly that, so it leaves the prerequisite in
+        place until the sale is over.
         """
         async with self._forced_sell_lock:
             await self._reconcile_manual_selling_marker_locked(dt_util.now())
@@ -3441,25 +3494,31 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         existing window-end stop can then interrupt the sale.
 
         Deliberately makes no service call of its own: re-adopting is enough
-        for the existing stop path to do the interrupting, and the sell-back
-        prerequisite is restored by the sell-back marker's own recovery.
+        for the existing stop path to do the interrupting.  The sell-back
+        prerequisite is left alone while the sale runs: the sell-back
+        restore checks the sale marker and the switch state before it
+        withdraws anything.
 
-        Settles only when the marker is GONE: then the latch stops the
-        per-tick file read and stops the tick from queueing a coroutine
-        per interval for an install that never uses the feature.  While
-        the marker is on disk the latch stays down, so every tick
-        reconciles again - RECOVER_STOP has to stay reachable for an
-        adopted sale, and a stop whose turn_off failed has to be retried.
-        The latch is likewise NOT set when the marker could not be read,
-        could not be parsed, or the switch state could not be read - those
-        are retried on the next tick.
+        Settles only when there is nothing left to reconcile: the marker
+        is gone, or it is a quarantined marker (an undeletable file that
+        was overwritten with a payload meaning "nothing to restore").
+        Then the latch stops the per-tick file read and stops the tick
+        from queueing a coroutine per interval for an install that never
+        uses the feature.  While a live sale's marker is on disk the latch
+        stays down, so every tick reconciles again - RECOVER_STOP has to
+        stay reachable for an adopted sale, and a stop whose turn_off
+        failed has to be retried.  The latch is likewise NOT set when the
+        marker could not be read, could not be parsed, or the switch state
+        could not be read - those are retried on the next tick.
         """
         if self._manual_sell_reconciled:
             return
         raw = await self.hass.async_add_executor_job(self._read_manual_sell_marker)
         if raw is None:
-            # No marker at all: nothing to restore, and nothing that can
-            # appear later that this session did not write itself.
+            # No marker at all: nothing left to reconcile, so the latch may
+            # go down.  A marker written LATER re-arms it - the session
+            # writes one when a sale starts - so this cannot strand a
+            # marker that appears after the latch was set.
             self._manual_sell_reconciled = True
             return
         if marker_io.is_unreadable(raw):
@@ -3476,6 +3535,20 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "that as 'nothing to restore' - retrying on the next tick",
                 self._manual_sell_state_path,
             )
+            return
+        if not marker["served_window"]:
+            # A quarantined marker: the file could not be deleted, so it was
+            # overwritten with a payload that means "nothing to restore" (an
+            # empty window - a real marker always carries the window the
+            # sale was started for, which is never empty).  Nothing to
+            # decide and nothing to retry, so the latch may go down: a
+            # permanently undeletable file is not re-decided on every boot.
+            _LOGGER.info(
+                "The forced-sell marker at %s is quarantined; nothing to "
+                "restore",
+                self._manual_sell_state_path,
+            )
+            self._manual_sell_reconciled = True
             return
         switch_state = self._manual_selling_switch_state()
         decision = sale_state.decide_sale_recovery(marker, now, switch_state)
@@ -3725,11 +3798,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # timedelta to the WALL clock, exactly like the slot rule
             # itself.  dt_util.now() hands out a ZoneInfo, and a ZoneInfo
             # recomputes its offset from the resulting wall time, so the
-            # start-of-day offset is NOT carried over: on a DST-change day
-            # this lands on the same instant the coordinator's own
-            # now_slot rule computes for that slot (verified for both the
-            # spring-forward and the fall-back day).  A fixed-offset
-            # tzinfo would NOT do that, but HA never uses one here.
+            # start-of-day offset is NOT carried over.  Checked against the
+            # rule's own close instant - the first absolute instant whose
+            # local slot index passes the window's last slot - this lands
+            # on exactly that instant for every slot of a normal day and
+            # of the autumn transition (04:00 -> 03:00), the ambiguous
+            # hour included.
+            #
+            # The exception is the spring-forward day's non-existent local
+            # hour (03:00-03:59): ZoneInfo resolves the gap with the
+            # pre-transition offset, so window_end lands 15/30/45 minutes
+            # after the instant the local clock actually jumps past slots
+            # 12/13/14 (04:00 local).  The rule closes those windows at
+            # that jump and this closes them a quarter of an hour later -
+            # and those slots never occur locally on that day anyway,
+            # because the clock skips them.  A fixed-offset tzinfo would
+            # be an hour out on BOTH transition days; HA never uses one.
             window_end = datetime.combine(
                 now.date(), datetime.min.time(), tzinfo=now.tzinfo
             ) + timedelta(minutes=15 * (window[-1] + 1))
@@ -3738,6 +3822,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._write_manual_sell_marker,
                     sale_state.build_sale_marker(now, list(window), window_end),
                 )
+                # Re-arm the reconcile: a marker now exists, so the latch
+                # must not claim the reconcile has settled.  Without this,
+                # a failed turn_off later in the session would leave the
+                # marker on disk with the reconcile latched, and the sale
+                # would never be re-adopted or retried.
+                self._manual_sell_reconciled = False
             except OSError as err:
                 # The sale is running and the marker could not be written.  Log
                 # it and carry on: refusing to sell would be the worse outcome,
