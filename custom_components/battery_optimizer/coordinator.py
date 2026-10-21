@@ -179,6 +179,7 @@ from .cost_history import (
 from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
 from .plan_export import render_analysis
 from . import marker_io
+from . import sale_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -539,6 +540,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._sell_back_to_grid_marker_name(entry.entry_id)
         )
         self._sell_back_to_grid_restored = False
+        # The forced-sell marker records that a sale was running when the
+        # process died.  It is date-anchored (absolute timestamps), so a sale
+        # that spans midnight is still recognised; a day-scoped rule would
+        # discard it and leave the switch on.  Its own file, not a field of
+        # the day-scoped runtime_state.json, for the same reason the sell-back
+        # marker has its own: it must outlive the day.
+        self._manual_sell_state_path = self.hass.config.path(
+            self._manual_sell_marker_name(entry.entry_id)
+        )
+        # Latched once the marker has been settled for this session: the
+        # in-memory state and the marker then agree, and there is nothing
+        # left to reconcile.  Per session, not per install - a restart
+        # builds a new coordinator with the latch down, so the first
+        # reconcile after a restart still runs.
+        self._manual_sell_reconciled: bool = False
         # Solar forecast scale — resolved per run, applied at the forecast
         # choke point. The last value used by a plan run is retained so the
         # NEXT accuracy computation can attribute the error to the scale that
@@ -1778,6 +1794,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         return f"battery_optimizer_sell_back_to_grid_{entry_id}.json"
 
+    @staticmethod
+    def _manual_sell_marker_name(entry_id: str) -> str:
+        """Filename of the forced-sell restart marker for one config entry.
+
+        Scoped by entry id for the same reason the sell-back marker is: the
+        switch belongs to one entry's Emaldo device, so a shared filename would
+        let one entry's recovery stop the other entry's sale.
+        """
+        return f"battery_optimizer_manual_sell_{entry_id}.json"
+
     def _load_sell_back_to_grid_state(self) -> bool | None | object:
         """Read the restart marker.
 
@@ -1860,6 +1886,30 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Could not clear sell-back-to-grid state at %s",
                     self._sell_back_to_grid_state_path,
                 )
+
+    def _read_manual_sell_marker(self) -> Any:
+        """Read the forced-sell restart marker.
+
+        None when there is no marker file, marker_io.MARKER_UNREADABLE when a
+        file is there but is not a marker.  The two must stay distinct.
+        """
+        return marker_io.read_json_marker(self._manual_sell_state_path)
+
+    def _write_manual_sell_marker(self, payload: dict[str, Any]) -> None:
+        """Write the forced-sell marker atomically.  Raises OSError on failure."""
+        marker_io.atomic_write_json(self._manual_sell_state_path, payload)
+
+    def _clear_manual_sell_marker(self) -> None:
+        """Remove the forced-sell marker.  Missing file is not an error."""
+        try:
+            os.remove(self._manual_sell_state_path)
+        except FileNotFoundError:
+            return
+        except OSError as err:
+            _LOGGER.error(
+                "Could not remove the forced-sell marker at %s: %s",
+                self._manual_sell_state_path, err,
+            )
 
     async def _restore_sell_back_to_grid_after_restart(self) -> None:
         """Put Sell back to grid back off after a restart mid-window.
@@ -1952,6 +2002,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info(
                 "Restored %s to off after an unclean restart", sell_back_id
             )
+
+    async def _restore_manual_selling_after_restart(self) -> None:
+        """Reconcile the forced-sell marker after a restart.
+
+        The counterpart of _restore_sell_back_to_grid_after_restart, for the
+        sale switch.  Takes _forced_sell_lock so it cannot race the actuator;
+        the lock is not reentrant, so callers reach this without holding it.
+
+        Unlike the sell-back restore this one interrupts a running sale when
+        its window has closed - turning the *Manual selling* switch off stops
+        the sale, and the sell-back prerequisite is restored by the sell-back
+        marker's own recovery, which deliberately leaves it alone while a
+        window is live.
+        """
+        async with self._forced_sell_lock:
+            await self._reconcile_manual_selling_marker_locked(dt_util.now())
 
     async def _restore_runtime_state(self) -> None:
         """Rehydrate the previous run's plan + snapshot after an HA restart.
@@ -3238,6 +3304,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.hass.async_create_task(self._evaluate_forced_sell())
             return
         if not self._emaldo_control_enabled or self._last_result is None:
+            # No usable plan: the sale-management path is not reached, so the
+            # recovery has to run on its own or a recovered sale stays on
+            # until the first plan arrives.  Gated on the latch, so an
+            # install that never uses the feature queues no coroutine at
+            # all - the same discipline the sell-back restore follows.
+            if not self._manual_sell_reconciled:
+                self.hass.async_create_task(
+                    self._restore_manual_selling_after_restart()
+                )
             return
         self._forced_sell_tick_in_flight = True
         self.hass.async_create_task(self._evaluate_forced_sell())
@@ -3337,6 +3412,96 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async with self._forced_sell_lock:
             await self._manage_manual_selling_locked(result, now, start_allowed)
 
+    async def _reconcile_manual_selling_marker_locked(self, now: datetime) -> None:
+        """Reconcile the persisted sale marker with the switch state.
+
+        Caller holds _forced_sell_lock.
+
+        A restart loses _manual_selling_active, and every stop path then
+        treats the switch as not ours - so no turn_off is sent and the sale
+        runs on unmanaged until Emaldo's own staged target runs out.  This
+        makes the in-memory state consistent with the switch again, and the
+        existing window-end stop can then interrupt the sale.
+
+        Deliberately makes no service call of its own: re-adopting is enough
+        for the existing stop path to do the interrupting, and the sell-back
+        prerequisite is restored by the sell-back marker's own recovery.
+
+        Settles once per session: the latch stops the per-tick file read
+        and stops the tick from queueing a coroutine per interval for an
+        install that never uses the feature.  It is NOT set when the marker
+        could not be read or the switch state could not be read - those are
+        retried on the next tick.
+        """
+        if self._manual_sell_reconciled:
+            return
+        raw = await self.hass.async_add_executor_job(self._read_manual_sell_marker)
+        if raw is None:
+            # No marker at all: nothing to restore, and nothing that can
+            # appear later that this session did not write itself.
+            self._manual_sell_reconciled = True
+            return
+        if marker_io.is_unreadable(raw):
+            _LOGGER.error(
+                "Forced-sell marker at %s could not be read; not treating that "
+                "as 'nothing to restore' - retrying on the next tick",
+                self._manual_sell_state_path,
+            )
+            return
+        marker = sale_state.parse_sale_marker(raw)
+        if marker is None:
+            _LOGGER.error(
+                "Forced-sell marker at %s is not a usable marker; not treating "
+                "that as 'nothing to restore' - retrying on the next tick",
+                self._manual_sell_state_path,
+            )
+            return
+        switch_state = self._manual_selling_switch_state()
+        decision = sale_state.decide_sale_recovery(marker, now, switch_state)
+        if decision == sale_state.RECOVER_UNKNOWN:
+            _LOGGER.warning(
+                "Forced-sell marker present but the Manual selling switch state "
+                "is %s; cannot tell whether the sale is running",
+                switch_state,
+            )
+            return
+        if decision == sale_state.RECOVER_COMPLETED:
+            # The sale finished on its own.  The completion path could not
+            # stamp the window as served, because it returns early when the
+            # sale is not active - which is exactly the state a restart
+            # leaves.  Without this the next tick would open a SECOND sale for
+            # the same window.
+            served_date = date.fromisoformat(marker["served_date"])
+            self._manual_selling_served = (served_date, tuple(marker["served_window"]))
+            await self.hass.async_add_executor_job(self._clear_manual_sell_marker)
+            _LOGGER.info(
+                "Forced sell finished on its own before the restart; window %s "
+                "recorded as served",
+                marker["served_window"],
+            )
+            self._manual_sell_reconciled = True
+            return
+        # The switch reads on: a sale is running that we lost track of.
+        served_date = date.fromisoformat(marker["served_date"])
+        self._manual_selling_served = (served_date, tuple(marker["served_window"]))
+        self._manual_selling_seen_on = True
+        self._manual_selling_active = True
+        self._manual_sell_reconciled = True
+        if decision == sale_state.RECOVER_STOP:
+            # Past the window: re-adopt so the stop path can interrupt it
+            # instead of taking its early return.
+            _LOGGER.info(
+                "Forced sell was still running after the restart but its window "
+                "(%s) has closed; stopping it",
+                marker["served_window"],
+            )
+            await self._stop_manual_selling_locked()
+            return
+        _LOGGER.info(
+            "Re-adopted the forced sell running across the restart (window %s)",
+            marker["served_window"],
+        )
+
     async def _manage_manual_selling_locked(
         self,
         result: OptimizationResult,
@@ -3351,6 +3516,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan without forced sell, PV-only window (no battery target —
         inverter auto-exports surplus), start not allowed (stale plan).
         """
+        # First: a restart may have lost track of a running sale.  This has to
+        # run BEFORE the start path below, or a recovered sale could be opened
+        # a second time for the same window.
+        await self._reconcile_manual_selling_marker_locked(now)
         # Ahead of every branch below, including the stop ones: self-completion
         # is the NORMAL end of a sale, and the stop branches would issue the
         # turn_off that only exists to interrupt one still running.
@@ -3514,6 +3683,34 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._manual_selling_is_on():
             self._manual_selling_seen_on = True
             self._manual_selling_served = (now.date(), tuple(window))
+            # The restart marker is written HERE, with the served stamp, and NOT
+            # one line earlier: it records that a sale was OBSERVED running.
+            # A start Emaldo refuses does not raise, so a marker written before
+            # this read-back would exist for a sale that never ran, and the
+            # recovery would consume the window as if it had been served - with
+            # nothing exported.
+            #
+            # window_end is the START of the slot after the window's last one
+            # ((window[-1] + 1) * 15 min after midnight), which is exactly the
+            # instant the coordinator's own window rule stops the window:
+            # now_slot > window[-1].
+            window_end = datetime.combine(
+                now.date(), datetime.min.time(), tzinfo=now.tzinfo
+            ) + timedelta(minutes=15 * (window[-1] + 1))
+            try:
+                await self.hass.async_add_executor_job(
+                    self._write_manual_sell_marker,
+                    sale_state.build_sale_marker(now, list(window), window_end),
+                )
+            except OSError as err:
+                # The sale is running and the marker could not be written.  Log
+                # it and carry on: refusing to sell would be the worse outcome,
+                # and a restart in the meantime is no worse than no marker at
+                # all.
+                _LOGGER.error(
+                    "Could not write the forced-sell restart marker at %s: %s",
+                    self._manual_sell_state_path, err,
+                )
         _LOGGER.info(
             "Manual selling started: %d slots, target %.1f kWh",
             len(window), staged_kwh,
@@ -3616,6 +3813,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         if self._manual_selling_seen_on:
             self._manual_selling_active = False
+            await self.hass.async_add_executor_job(
+                self._clear_manual_sell_marker
+            )
             self._manual_selling_served = (
                 now.date(), tuple(result.sell_slots or ())
             )
@@ -3670,6 +3870,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # back to grid is deliberately NOT restored: the retry is for this same
         # window and needs the prerequisite still in place.
         self._manual_selling_active = False
+        # No marker was written for a sale that never started, so this is a
+        # no-op - it keeps the invariant "flag False <=> no marker".
+        await self.hass.async_add_executor_job(
+            self._clear_manual_sell_marker
+        )
 
     async def _stop_manual_selling_locked(self) -> None:
         """Stop an active manual sale; caller already holds the lock.
@@ -3684,6 +3889,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._restore_sell_back_to_grid()
             return
         self._manual_selling_active = False
+        await self.hass.async_add_executor_job(
+            self._clear_manual_sell_marker
+        )
         switch_id = self._manual_selling_switch_id()
         if self._manual_selling_is_off():
             # Emaldo already stopped itself once the staged target was exported;
