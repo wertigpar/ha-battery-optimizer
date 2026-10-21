@@ -184,9 +184,11 @@ class _OptionalNumberSelector(NumberSelector):
     Overriding ``__call__`` keeps the number widget: the class is still an
     instance of ``selector.Selector``, so the frontend still receives
     ``{"selector": {"number": {...}}}`` and renders a number input.  A
-    ``vol.Any`` would not: a three-member ``Any`` misses probatio's
-    two-member "allow_none" rule and serialises as a dropdown instead, which
-    is why the earlier attempt at this fix had to be reverted (see #29).
+    ``vol.Any`` would not: probatio only preserves a widget for a two-member
+    ``Any`` with exactly one ``None`` member, so a three-member ``Any`` fails
+    to serialise at all (probatio raises on the ``None`` member) and the
+    options form cannot render - which is why the earlier attempt at this fix
+    had to be reverted (see #29).
     """
 
     def __call__(self, data: Any) -> float | None:
@@ -852,7 +854,7 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
                     ),
                     errors=errors,
                 )
-            if user_input.get(CONF_PRECHARGE_PUBLISH_HOUR) in (None, ""):
+            if is_blank(user_input.get(CONF_PRECHARGE_PUBLISH_HOUR)):
                 user_input.pop(CONF_PRECHARGE_PUBLISH_HOUR, None)
             return self.async_create_entry(title="", data=user_input)
 
