@@ -1,7 +1,7 @@
 """Pure helpers for optional form values.
 
-No Home Assistant imports and no relative imports - unit-tested directly
-(tests/test_optional_value.py).
+No Home Assistant imports and no relative imports - unit-tested directly in
+the repo's local tests/ directory.
 """
 
 from __future__ import annotations

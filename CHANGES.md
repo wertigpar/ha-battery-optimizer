@@ -14,7 +14,8 @@
 
   A blank now validates to `None` and the existing save path removes the key,
   so the stored options carry no override and the publish cutoff is still
-  derived automatically from the Nord Pool timezone. The field keeps its
+  derived automatically from Nord Pool's publish instant, converted to your
+  local timezone. The field keeps its
   number widget: the tolerant selector is a `NumberSelector` subclass, so
   `isinstance(schema, selector.Selector)` still holds and the frontend still
   receives a number selector.

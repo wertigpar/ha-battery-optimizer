@@ -178,8 +178,8 @@ class _OptionalNumberSelector(NumberSelector):
     Home Assistant's NumberSelector validates with ``probatio.Coerce(float)``,
     which rejects ``""`` and ``None`` with "expected float".  The next-day
     price publish hour is legitimately optional - leaving it empty means the
-    cutoff is derived automatically from the Nord Pool timezone - so a blank
-    has to survive validation.
+    cutoff is derived automatically from Nord Pool's publish instant,
+    converted to your local timezone - so a blank has to survive validation.
 
     Overriding ``__call__`` keeps the number widget: the class is still an
     instance of ``selector.Selector``, so the frontend still receives
