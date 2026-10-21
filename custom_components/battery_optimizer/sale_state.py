@@ -67,8 +67,9 @@ def parse_sale_marker(data: Any) -> dict[str, Any] | None:
     Every field the caller will use is validated, so "usable marker" is not a
     lie: the caller must be able to rebuild the ``(date, tuple)`` served key
     and the window end from the result without it raising.  A copy is
-    returned, so a caller that mutates the result cannot mutate the marker
-    it was given.
+    returned - including a copy of the window list, so appending to it cannot
+    reach back into the marker - and a caller that mutates the result cannot
+    mutate the marker it was given.
 
     None means "this is not a usable marker" - the caller must treat that the
     same way it treats an unreadable file, NOT as "nothing to restore".
@@ -96,7 +97,7 @@ def parse_sale_marker(data: Any) -> dict[str, Any] | None:
             datetime.fromisoformat(data[key])
         except (TypeError, ValueError):
             return None
-    return dict(data)
+    return {**data, "served_window": list(data["served_window"])}
 
 
 def decide_sale_recovery(
@@ -111,8 +112,16 @@ def decide_sale_recovery(
     ``window_end`` is the start of slot ``window[-1] + 1``), so the boundary
     is exclusive.
 
-    Total: every path returns one of the four constants, never raises.
+    Total for the inputs this function accepts - a dict ``marker``, a
+    datetime ``now``, a string or None ``switch_state``: it always returns one
+    of the four constants and never raises.  Anything outside that - a
+    non-dict marker, a non-datetime ``now``, an unreadable switch state, an
+    unparseable ``window_end`` - is answered with RECOVER_UNKNOWN rather than
+    a guess, so the caller changes nothing instead of acting on a half-known
+    state.
     """
+    if not isinstance(marker, dict):
+        return RECOVER_UNKNOWN
     if switch_state == "off":
         return RECOVER_COMPLETED
     if switch_state != "on":
