@@ -74,4 +74,15 @@ def read_json_marker(path: str) -> Any:
     return data
 
 
-__all__ = ["MARKER_UNREADABLE", "atomic_write_json", "read_json_marker"]
+def is_unreadable(value: Any) -> bool:
+    """True when ``value`` is the unreadable-marker sentinel.
+
+    Use this instead of comparing with ``is`` against a locally-made sentinel:
+    two sentinels are different objects, and a comparison between the wrong
+    two is silently False -- which would turn a corrupt marker into
+    "nothing to restore".
+    """
+    return value is MARKER_UNREADABLE
+
+
+__all__ = ["MARKER_UNREADABLE", "atomic_write_json", "is_unreadable", "read_json_marker"]

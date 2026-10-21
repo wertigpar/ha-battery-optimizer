@@ -1789,7 +1789,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = marker_io.read_json_marker(self._sell_back_to_grid_state_path)
         if data is None:
             return None
-        if data is marker_io.MARKER_UNREADABLE:
+        if marker_io.is_unreadable(data):
             return _SELL_BACK_MARKER_UNREADABLE
         value = data.get("we_enabled")
         return value if isinstance(value, bool) else _SELL_BACK_MARKER_UNREADABLE
