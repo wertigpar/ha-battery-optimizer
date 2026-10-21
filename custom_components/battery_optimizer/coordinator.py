@@ -430,6 +430,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """
 
     config_entry: ConfigEntry
+    # Entity id of the Manual selling switch the RUNNING sale was started
+    # on.  Class-level default so an instance built without __init__ (the
+    # unit tests do) still has the attribute: the Emaldo entity resolution
+    # is deliberately NOT cached, so a read-back that re-resolved it could
+    # land on a DIFFERENT switch and report a state the sale does not have.
+    _manual_selling_switch_id_cached: str | None = None
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
@@ -503,6 +509,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # gets its own budget instead of inheriting an exhausted one.
         self._manual_selling_start_attempts: int = 0
         self._manual_selling_start_window: tuple[date, tuple[int, ...]] | None = None
+        # The switch the running sale was started on - remembered rather
+        # than re-resolved, for the reason given on the class attribute.
+        self._manual_selling_switch_id_cached: str | None = None
         self._sell_back_to_grid_switch_id_cached: str | None = None
         # Serialises the forced-sell start/stop sequence.  Two callers now
         # reach it: the tail of an optimizer run and the 5-min forced-sell
@@ -3703,7 +3712,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             self._manual_sell_reconciled = True
             return
-        switch_state = self._manual_selling_switch_state()
+        # Resolve the switch ONCE and read back THAT switch: the entity
+        # resolution is deliberately uncached, so resolving it again could
+        # land on a different switch - and then the recovery would decide
+        # about a sale it did not read.
+        switch_id = self._manual_selling_switch_id()
+        switch_state = self._manual_selling_switch_state(switch_id)
         decision = sale_state.decide_sale_recovery(marker, now, switch_state)
         if decision == sale_state.RECOVER_UNKNOWN:
             _LOGGER.warning(
@@ -3734,6 +3748,28 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         was_ours = self._manual_selling_ours
         served_date = date.fromisoformat(marker["served_date"])
         self._manual_selling_served = (served_date, tuple(marker["served_window"]))
+        # Restore the sale's IDENTITY, not just its served key: the
+        # self-completion path stamps _manual_selling_served from
+        # _manual_selling_start_window, and without this that is None
+        # for an adopted sale, so the fallback would overwrite the
+        # correct window with the current plan's -- stripping the sold
+        # window of its "already served" protection and letting a later
+        # plan open a second sale for it.
+        self._manual_selling_start_window = (
+            served_date,
+            tuple(marker["served_window"]),
+        )
+        try:
+            self._manual_selling_started_at = datetime.fromisoformat(
+                marker["started_at"]
+            )
+        except (TypeError, ValueError):
+            # parse_sale_marker already validated the field, so this is
+            # unreachable; fall back rather than crash the recovery.
+            self._manual_selling_started_at = now
+        # The sale runs on the switch the recovery read, so the sale's own
+        # read-backs must use that switch and not a fresh resolution of it.
+        self._manual_selling_switch_id_cached = switch_id
         self._manual_selling_seen_on = True
         self._manual_selling_active = True
         # This session owns the sale now: it started it, or it has just
@@ -3906,6 +3942,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Could not enable %s for forced sell: %s", sell_back_id, err
                 )
         switch_id = self._manual_selling_switch_id()
+        # The sale's own switch, remembered for the read-backs below: the
+        # entity resolution is deliberately uncached, so resolving it again
+        # could land on a different switch.
+        self._manual_selling_switch_id_cached = switch_id
         number_id = self._resolve_emaldo_entity(
             "manual_selling_target", domain="number"
         ) or "number.power_store_manual_selling_target"
@@ -4066,7 +4106,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         if not self._manual_selling_active:
             return
-        state = self._manual_selling_switch_state()
+        # Read back the switch the sale was started on, not a fresh
+        # resolution of it: the resolution is deliberately uncached, so
+        # resolving it again could land on a different switch - and then
+        # the read-back would report a state the sale does not have.
+        state = self._manual_selling_switch_state(
+            self._manual_selling_switch_id_cached
+        )
         if state == "on":
             # Provably running, which is the whole point: this is what makes a
             # later "off" mean finished rather than never-started.  The served
@@ -4116,12 +4162,27 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Name the window the sale was STARTED for, not the current
             # tick's plan: a plan that moved mid-sale would otherwise strip
             # the sold window of its "already served" protection and let a
-            # later plan open a second sale for it.  The plan is only a
-            # fallback for a sale adopted across a restart, which has no
-            # start window of its own.
-            self._manual_selling_served = self._manual_selling_start_window or (
-                now.date(), tuple(result.sell_slots or ())
-            )
+            # later plan open a second sale for it.  An adopted sale has a
+            # start window of its own - the reconcile restores it - so the
+            # plan is only a fallback for a sale whose window is genuinely
+            # unknown.
+            start_window = self._manual_selling_start_window
+            if start_window is not None:
+                self._manual_selling_served = start_window
+            else:
+                plan_window = tuple(result.sell_slots or ())
+                if plan_window:
+                    self._manual_selling_served = (now.date(), plan_window)
+                else:
+                    # Neither the sale's own window nor the current plan
+                    # names a window, and an EMPTY served key matches no real
+                    # window - stamping one would silently disable the
+                    # double-export guard.  Keep the previous value.
+                    _LOGGER.warning(
+                        "Manual selling finished on its own, but no window is "
+                        "known for it; keeping the served window %s as it was",
+                        self._manual_selling_served,
+                    )
             _LOGGER.info(
                 "Manual selling finished on its own (planned energy exported); "
                 "restoring Sell back to grid without waiting for window end"

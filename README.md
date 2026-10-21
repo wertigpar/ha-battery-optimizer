@@ -1228,18 +1228,18 @@ Battery Optimizer speaks to Emaldo **through its entities** — the same `manual
 recorded on disk wherever it is first observed running — so a running sale
 has a marker for as long as the disk accepts the write — and on the next run
 the switch state decides what happens. If the switch reads off, no sale is
-running any more, whether it
-finished on its own or the stop took effect late, and its window is recorded as
-served so the same window is not sold twice. If the switch still reads on, the
-sale is re-adopted and stopped: at the window end, or right away if the window
-has already closed. The stop is confirmed by reading the switch back —
-Emaldo's switch never raises when the device ignores the command — so a stop
-that did not take effect keeps the record: the sale is re-adopted on the next
-tick and the stop is re-issued — at the window end, or at once if the window
-has already closed — rather than leaving the battery exporting to the grid
-unattended. The marker's
-timestamps are absolute, so a marker written before midnight is still
-understood after it.
+running any more, whether it finished on its own or the stop took effect
+late, and the sale's own window is recorded as served so the same window is
+not sold twice. If the switch still reads on, the sale is re-adopted with
+the window it was started for restored, so that window keeps its "already
+served" protection, and it is stopped: right away if its own window has
+already closed, otherwise by the live rule, which decides from the current
+plan's window. The stop is confirmed by reading the switch back — Emaldo's
+switch never raises when the device ignores the command — so a stop that did
+not take effect keeps the record: the sale is re-adopted on the next tick and
+the stop is issued again, rather than leaving the battery exporting to the
+grid unattended. The marker's timestamps are absolute, so a marker written
+before midnight is still understood after it.
 
 ---
 

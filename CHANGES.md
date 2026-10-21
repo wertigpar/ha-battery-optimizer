@@ -53,22 +53,26 @@
   discard the marker and leave the switch on.
 
   On recovery the switch state decides: off means no sale is running any more —
-  whether it finished on its own or our stop took effect late — so the window is
-  recorded as served and is not sold twice; on means a sale is running that was
-  lost track of — it is re-adopted so the existing window-end stop can interrupt
-  it, and stopped at once if its window has already closed. A marker that cannot
-  be read or parsed is never treated as "nothing to restore": the recovery
-  changes nothing and tries again on the next tick.
+  whether it finished on its own or our stop took effect late — so the sale's
+  own window is recorded as served and is not sold twice; on means a sale is
+  running that was lost track of — it is re-adopted with the window it was
+  started for restored, so the window it is selling keeps its "already served"
+  protection, and stopped at once if its own window has already closed.
+  Whether an adopted sale is stopped later is then up to the live rule, which
+  decides from the current plan's window. A marker that cannot be read or
+  parsed is never treated as "nothing to restore": the recovery changes
+  nothing and tries again on the next tick.
 
   The marker deliberately outlives the in-memory flag, and is cleared only when
   the sale is confirmed stopped — confirmed by reading the switch back, not by
   the `turn_off` call returning, because Emaldo's switch never raises when the
   device ignores the command. A stop that did not take effect leaves the
   marker behind, so a later restart still knows a sale is live; the recovery
-  re-adopts the sale on the next tick and re-issues the stop — at the window
-  end, or at once if the window has already closed. A marker that cannot be
-  deleted is quarantined in place, overwritten with a payload meaning "nothing
-  to restore", so it is not re-decided on every boot.
+  re-adopts the sale on the next tick, and the stop is issued again — by the
+  live rule at the end of the current plan's window, or at once by the
+  recovery when the sale's own window has already closed. A marker that cannot
+  be deleted is quarantined in place, overwritten with a payload meaning
+  "nothing to restore", so it is not re-decided on every boot.
 
   The sell-back-to-grid prerequisite keeps its own separate recovery. In the
   **restart** recovery it stays on while a sale may be running — pulling it out
@@ -76,10 +80,11 @@
   withdraws it as soon as the stop is issued, even when the device ignored the
   stop. That direction is safe: a sale aborted early exports less, not more.
   Files: `coordinator.py`, `marker_io.py`,
-  `sale_state.py` — the first is the shared restart-marker file I/O (an atomic
-  write, and a read that tells "no file" from "file that cannot be read"), the
-  second the marker's payload and the recovery decision; both are pure
-  modules. Regression tests: `tests/test_forced_sell_restart.py`,
+  `sale_state.py` — `marker_io.py` is the shared restart-marker file I/O (an
+  atomic write, and a read that tells "no file" from "file that cannot be
+  read") and `sale_state.py` is the marker's payload and the recovery
+  decision; both are pure modules, and `coordinator.py` is the wiring that
+  uses them. Regression tests: `tests/test_forced_sell_restart.py`,
   `tests/test_sale_state.py`, `tests/test_marker_io.py`. Nothing else changes:
   the plan-time gate, the profit economics and what a sale actually does are
   untouched — the actuator only gained the marker bookkeeping and the restart
