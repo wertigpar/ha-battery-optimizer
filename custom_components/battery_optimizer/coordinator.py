@@ -13,7 +13,6 @@ import json
 import logging
 import math
 import os
-import tempfile
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -179,6 +178,7 @@ from .cost_history import (
 )
 from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
 from .plan_export import render_analysis
+from . import marker_io
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1786,14 +1786,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         marker (truncated write, hand edit, wrong shape).  The last two must
         stay distinct - see the sentinel's comment.
         """
-        try:
-            with open(self._sell_back_to_grid_state_path, encoding="utf-8") as fh:
-                data = json.load(fh)
-        except FileNotFoundError:
+        data = marker_io.read_json_marker(self._sell_back_to_grid_state_path)
+        if data is None:
             return None
-        except (OSError, ValueError):
-            return _SELL_BACK_MARKER_UNREADABLE
-        if not isinstance(data, dict):
+        if data is marker_io.MARKER_UNREADABLE:
             return _SELL_BACK_MARKER_UNREADABLE
         value = data.get("we_enabled")
         return value if isinstance(value, bool) else _SELL_BACK_MARKER_UNREADABLE
@@ -1801,38 +1797,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _write_sell_back_to_grid_marker(self, enabled: bool) -> None:
         """Write the marker atomically.  Raises OSError on failure.
 
-        The payload goes to a temp file in the same directory and is then
-        os.replace()d onto the target, which is atomic on POSIX and on Windows.
-        A plain open(path, "w") truncates in place, so a power cut part way
-        through json.dump leaves a partial file that reads back as corrupt -
-        and a corrupt read is not "nothing to restore", so that window is
-        exactly the one this marker exists to cover.
+        Atomicity is the whole point: a plain open(path, "w") truncates in
+        place, so a power cut part way through json.dump leaves a partial file
+        that reads back as corrupt - and a corrupt read is not "nothing to
+        restore", so that window is exactly the one this marker exists to
+        cover.
         """
-        path = self._sell_back_to_grid_state_path
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=os.path.dirname(path) or ".",
-                prefix=os.path.basename(path) + ".",
-                suffix=".tmp",
-                delete=False,
-            ) as fh:
-                tmp_path = fh.name
-                json.dump(
-                    {"we_enabled": enabled, "at": dt_util.now().isoformat()}, fh
-                )
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp_path, path)
-            tmp_path = None
-        finally:
-            if tmp_path is not None:
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+        marker_io.atomic_write_json(
+            self._sell_back_to_grid_state_path,
+            {"we_enabled": enabled, "at": dt_util.now().isoformat()},
+        )
 
     def _persist_sell_back_to_grid_state(self, force: bool = False) -> None:
         """Record that we left Sell back to grid on, for restart recovery.
