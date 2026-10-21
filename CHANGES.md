@@ -1,5 +1,33 @@
 # Changes
 
+## v0.3.26
+
+### Fixed
+
+- **The settings page could not be saved on an install that left the next-day
+  price publish hour empty** — the field is optional by design ("leave empty
+  for automatic"), but the options schema validated it with a bare
+  `NumberSelector`, whose `probatio.Coerce(float)` rejects `""` and `None`
+  with `expected float`. The form therefore failed validation before the
+  save path could strip the blank, and the settings page was unusable.
+  Reported in #29.
+
+  A blank now validates to `None` and the existing save path removes the key,
+  so the stored options carry no override and the publish cutoff is still
+  derived automatically from the Nord Pool timezone. The field keeps its
+  number widget: the tolerant selector is a `NumberSelector` subclass, so
+  `isinstance(schema, selector.Selector)` still holds and the frontend still
+  receives a number selector.
+
+  This is a **regression of a fix that was claimed but never shipped**. The
+  v0.3.17 notes list "options flow accepts an empty `precharge_publish_hour`"
+  as fixing #21, but the change was reverted two and a half hours later on the
+  same day — before v0.3.17 was published — because the three-member
+  `vol.Any` it used made the schema fail to serialise at all, so the options
+  form could not render - a hard failure, not a degraded widget. The
+  published v0.3.17 build therefore never contained the fix, and #29 is the
+  same failure resurfacing. Files: `config_flow.py`, `optional_value.py`.
+
 ## v0.3.25
 
 ### Fixed
@@ -471,6 +499,9 @@
 - **Options flow accepts an empty `precharge_publish_hour`** (falls back to
   automatic timezone-derived cutoff) instead of failing with "expected
   float". **Fixes [#21](https://github.com/wertigpar/ha-battery-optimizer/issues/21).**
+  *Never actually shipped: the change was reverted the same day, before
+  v0.3.17 was published, so the published build kept the failing behaviour.
+  Properly fixed in v0.3.26 — see #29.*
 
 ## v0.3.16
 
