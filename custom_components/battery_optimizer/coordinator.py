@@ -549,11 +549,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._manual_sell_state_path = self.hass.config.path(
             self._manual_sell_marker_name(entry.entry_id)
         )
-        # Latched once the marker has been settled for this session: the
-        # in-memory state and the marker then agree, and there is nothing
-        # left to reconcile.  Per session, not per install - a restart
-        # builds a new coordinator with the latch down, so the first
-        # reconcile after a restart still runs.
+        # Latched once the marker is GONE, and only then: the in-memory
+        # state and the marker then agree and there is nothing left to
+        # reconcile.  While the marker exists the latch stays down, so
+        # every tick reconciles again - that is what keeps RECOVER_STOP
+        # reachable for an adopted sale, and what retries a stop whose
+        # turn_off failed.  Same rule as the sibling sell-back restore,
+        # which latches only when its marker is gone.  Per session, not
+        # per install - a restart builds a new coordinator with the latch
+        # down, so the first reconcile after a restart still runs.
         self._manual_sell_reconciled: bool = False
         # Solar forecast scale — resolved per run, applied at the forecast
         # choke point. The last value used by a plan run is retained so the
@@ -3296,6 +3300,25 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass.async_create_task(
                 self._restore_sell_back_to_grid_after_restart()
             )
+        if not self._manual_sell_reconciled:
+            # The forced-sell recovery, on the same footing as the
+            # sell-back restore above and deliberately ABOVE every other
+            # guard: the startup watcher may never reach run_optimizer
+            # after a reboot - precisely the state a reboot during a sell
+            # window leaves behind - so a guard on a usable plan, on
+            # forced sell being enabled, or on the in-flight tick would
+            # leave the sale running until the next checkpoint.  No lock
+            # held here either: the coroutine takes _forced_sell_lock
+            # itself.
+            #
+            # Gated on the latch, which means exactly "the marker is
+            # gone": an install with no marker settles on its first
+            # reconcile and then queues nothing at all, while an install
+            # WITH a marker keeps reconciling until the sale is confirmed
+            # stopped.
+            self.hass.async_create_task(
+                self._restore_manual_selling_after_restart()
+            )
         if self._forced_sell_tick_in_flight:
             return  # a tick is still working; never queue a second one
         if not self._forced_sell_enabled:
@@ -3304,15 +3327,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.hass.async_create_task(self._evaluate_forced_sell())
             return
         if not self._emaldo_control_enabled or self._last_result is None:
-            # No usable plan: the sale-management path is not reached, so the
-            # recovery has to run on its own or a recovered sale stays on
-            # until the first plan arrives.  Gated on the latch, so an
-            # install that never uses the feature queues no coroutine at
-            # all - the same discipline the sell-back restore follows.
-            if not self._manual_sell_reconciled:
-                self.hass.async_create_task(
-                    self._restore_manual_selling_after_restart()
-                )
+            # No usable plan: the sale-management path is not reached, so
+            # the recovery above has to run on its own or a recovered sale
+            # stays on until the first plan arrives.
             return
         self._forced_sell_tick_in_flight = True
         self.hass.async_create_task(self._evaluate_forced_sell())
@@ -3427,11 +3444,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for the existing stop path to do the interrupting, and the sell-back
         prerequisite is restored by the sell-back marker's own recovery.
 
-        Settles once per session: the latch stops the per-tick file read
-        and stops the tick from queueing a coroutine per interval for an
-        install that never uses the feature.  It is NOT set when the marker
-        could not be read or the switch state could not be read - those are
-        retried on the next tick.
+        Settles only when the marker is GONE: then the latch stops the
+        per-tick file read and stops the tick from queueing a coroutine
+        per interval for an install that never uses the feature.  While
+        the marker is on disk the latch stays down, so every tick
+        reconciles again - RECOVER_STOP has to stay reachable for an
+        adopted sale, and a stop whose turn_off failed has to be retried.
+        The latch is likewise NOT set when the marker could not be read,
+        could not be parsed, or the switch state could not be read - those
+        are retried on the next tick.
         """
         if self._manual_sell_reconciled:
             return
@@ -3486,7 +3507,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._manual_selling_served = (served_date, tuple(marker["served_window"]))
         self._manual_selling_seen_on = True
         self._manual_selling_active = True
-        self._manual_sell_reconciled = True
+        # The latch is NOT set here: the marker is still on disk, because
+        # the sale is still running.  Latching now would make the marker
+        # unreadable for the rest of the session, and RECOVER_STOP - the
+        # only path that turns an adopted sale off - could then never
+        # fire.  The sibling sell-back restore latches only when its
+        # marker is gone, for the same reason.
         if decision == sale_state.RECOVER_STOP:
             # Past the window: re-adopt so the stop path can interrupt it
             # instead of taking its early return.
@@ -3694,6 +3720,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # ((window[-1] + 1) * 15 min after midnight), which is exactly the
             # instant the coordinator's own window rule stops the window:
             # now_slot > window[-1].
+            #
+            # DST: the arithmetic keeps now.tzinfo and adds a plain
+            # timedelta to the WALL clock, exactly like the slot rule
+            # itself.  dt_util.now() hands out a ZoneInfo, and a ZoneInfo
+            # recomputes its offset from the resulting wall time, so the
+            # start-of-day offset is NOT carried over: on a DST-change day
+            # this lands on the same instant the coordinator's own
+            # now_slot rule computes for that slot (verified for both the
+            # spring-forward and the fall-back day).  A fixed-offset
+            # tzinfo would NOT do that, but HA never uses one here.
             window_end = datetime.combine(
                 now.date(), datetime.min.time(), tzinfo=now.tzinfo
             ) + timedelta(minutes=15 * (window[-1] + 1))
