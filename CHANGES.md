@@ -51,12 +51,13 @@
   written before midnight is still understood after it; a day-scoped rule would
   discard the marker and leave the switch on.
 
-  On recovery the switch state decides: off means the sale finished on its own
-  (the window is recorded as served), on means a sale is running that was lost
-  track of — it is re-adopted so the existing window-end stop can interrupt it,
-  and stopped at once if its window has already closed. A marker that cannot be
-  read or parsed is never treated as "nothing to restore": the recovery changes
-  nothing and tries again on the next tick.
+  On recovery the switch state decides: off means no sale is running any more —
+  whether it finished on its own or our stop took effect late — so the window is
+  recorded as served and is not sold twice; on means a sale is running that was
+  lost track of — it is re-adopted so the existing window-end stop can interrupt
+  it, and stopped at once if its window has already closed. A marker that cannot
+  be read or parsed is never treated as "nothing to restore": the recovery
+  changes nothing and tries again on the next tick.
 
   The marker deliberately outlives the in-memory flag, and is cleared only when
   the sale is confirmed stopped — confirmed by reading the switch back, not by
@@ -67,9 +68,12 @@
   overwritten with a payload meaning "nothing to restore", so it is not
   re-decided on every boot.
 
-  The sell-back-to-grid prerequisite keeps its own separate recovery, and it
-  stays on while a sale may be running: pulling it out would make Emaldo
-  refuse or abort the sale. Files: `coordinator.py`, `marker_io.py`,
+  The sell-back-to-grid prerequisite keeps its own separate recovery. In the
+  **restart** recovery it stays on while a sale may be running — pulling it out
+  would make Emaldo refuse or abort the sale — while the in-session restore
+  withdraws it as soon as the stop is issued, even when the device ignored the
+  stop. That direction is safe: a sale aborted early exports less, not more.
+  Files: `coordinator.py`, `marker_io.py`,
   `sale_state.py` — the first is the shared restart-marker file I/O (an atomic
   write, and a read that tells "no file" from "file that cannot be read"), the
   second the marker's payload and the recovery decision; both are pure

@@ -490,6 +490,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # tell that apart from a sale that ended itself - the difference between
         # a served window and a silently lost one.
         self._manual_selling_seen_on: bool = False
+        # True once this session has taken ownership of the running sale:
+        # it started it, or it adopted it after a restart.  It survives a
+        # stop attempt - the flag above is cleared by that - so the
+        # reconcile can tell a fresh re-adoption from a sale that is merely
+        # still running.  Only the first of those is worth an INFO line.
+        self._manual_selling_ours: bool = False
         # When the latest turn_on was issued; gates the start grace above.
         self._manual_selling_started_at: datetime | None = None
         # Attempts already spent on the window named in _manual_selling_start_
@@ -1931,7 +1937,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         return not marker["served_window"]
 
-    async def _write_sale_marker(self, now: datetime, window: list[int]) -> None:
+    async def _write_sale_marker(
+        self, started_at: datetime | None, window: tuple[int, ...]
+    ) -> None:
         """Record that a sale is running, for the restart recovery.
 
         Called wherever a sale is OBSERVED running - the start read-back,
@@ -1939,12 +1947,25 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         invariant "a running sale always has a marker" holds by
         construction rather than by timing.
 
-        window_end is the START of the slot after the window's last one
-        ((window[-1] + 1) * 15 min after midnight), which is exactly the
-        instant the coordinator's own window rule stops the window:
-        now_slot > window[-1].
+        The marker names the SALE, not the plan of the moment: started_at
+        is when the sale was started and window is the window it was
+        started for.  The current plan's window is not usable here - it may
+        have lost its window (a running sale with no marker is the #30
+        orphan) or moved it (and then the window the sale was actually for
+        would lose its protection against a second sale).
 
-        DST: the arithmetic keeps now.tzinfo and adds a plain
+        window_end is the START of the slot after the window's last one
+        ((window[-1] + 1) * 15 min after midnight) on the day the window
+        belongs to.  It is the end of the window - and it is at most one
+        tick STRICTER than the live rule, which is the safe direction: the
+        live rule's `now_slot > window[-1]` cannot fire for a window that
+        includes the day's last slot (now_slot is 0-95, so it is never
+        greater than 95); such a window is stopped by the live rule at the
+        first tick after the midnight wrap instead, via `now_slot <
+        window[0]`.  That gap in the live rule is pre-existing and is NOT
+        changed here.
+
+        DST: the arithmetic keeps started_at.tzinfo and adds a plain
         timedelta to the WALL clock, exactly like the slot rule
         itself.  dt_util.now() hands out a ZoneInfo, and a ZoneInfo
         recomputes its offset from the resulting wall time, so the
@@ -1965,17 +1986,27 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         because the clock skips them.  A fixed-offset tzinfo would
         be an hour out on BOTH transition days; HA never uses one.
         """
-        if not window:
-            # Nothing to record - and an EMPTY window is the quarantine
-            # discriminator, so it must never be written.
+        if started_at is None or not window:
+            # Nothing to record: without the sale's own start instant and
+            # window there is no marker to write, and an EMPTY window is
+            # the quarantine discriminator, so it must never be written.
+            # A real sale always has both - the start path refuses an
+            # empty window and records the instant with it - so this is a
+            # bug signal, not a normal case.
+            _LOGGER.warning(
+                "Not writing the forced-sell marker: no start instant or "
+                "no window for the running sale",
+            )
             return
         window_end = datetime.combine(
-            now.date(), datetime.min.time(), tzinfo=now.tzinfo
+            started_at.date(), datetime.min.time(), tzinfo=started_at.tzinfo
         ) + timedelta(minutes=15 * (window[-1] + 1))
         try:
             await self.hass.async_add_executor_job(
                 self._write_manual_sell_marker,
-                sale_state.build_sale_marker(now, list(window), window_end),
+                sale_state.build_sale_marker(
+                    started_at, list(window), window_end
+                ),
             )
             # Re-arm the reconcile: a marker now exists, so the latch
             # must not claim the reconcile has settled.  Without this,
@@ -3543,6 +3574,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         one stalls the optimizer run and every tick queued behind it.  A
         timeout is treated like any other failure — flag and marker both stay,
         so the next tick retries.
+
+        Unlike the RESTART recovery, this one does not hold the prerequisite
+        back while a sale may be running: the in-session stop path withdraws
+        it as soon as the stop is issued, even when the device ignored the
+        stop.  The direction is safe - a sale aborted early exports less, not
+        more - and the restart recovery is the one that keeps the
+        prerequisite in place for a sale it recovered.
         """
         if not self._sell_back_to_grid_saved:
             return
@@ -3691,11 +3729,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._manual_sell_reconciled = True
             return
         # The switch reads on: a sale is running that we lost track of.
-        was_active = self._manual_selling_active
+        was_ours = self._manual_selling_ours
         served_date = date.fromisoformat(marker["served_date"])
         self._manual_selling_served = (served_date, tuple(marker["served_window"]))
         self._manual_selling_seen_on = True
         self._manual_selling_active = True
+        # This session owns the sale now: it started it, or it has just
+        # adopted it.  The flag survives a stop attempt, so the log below
+        # can tell a fresh re-adoption from a sale that is merely still
+        # running.
+        self._manual_selling_ours = True
         # The latch is NOT set here: the marker is still on disk, because
         # the sale is still running.  Latching now would make the marker
         # unreadable for the rest of the session, and RECOVER_STOP - the
@@ -3712,11 +3755,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             await self._stop_manual_selling_locked()
             return
-        if was_active:
-            # Already managing this sale: the reconcile only confirmed it.
-            # It runs on every tick while the marker exists, so this is not
-            # news - and saying "re-adopted ... across the restart" for a
-            # sale this session started itself would be wrong.
+        if was_ours:
+            # This session already owned the sale - it started it, or adopted
+            # it on an earlier tick - and the reconcile runs on every tick
+            # while the marker exists, so this is not news.
             _LOGGER.debug(
                 "The forced sell is still running (window %s)",
                 marker["served_window"],
@@ -3896,6 +3938,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Flag set only after the switch is verified on, so a failed or
         # interrupted start never leaves a flag claiming to be selling.
         self._manual_selling_active = True
+        # This session owns the sale from here on.
+        self._manual_selling_ours = True
         # A new start, so nothing leaks in from the last one.
         self._manual_selling_seen_on = False
         self._manual_selling_started_at = now
@@ -3920,7 +3964,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # this read-back would exist for a sale that never ran, and the
             # recovery would consume the window as if it had been served - with
             # nothing exported.
-            await self._write_sale_marker(now, list(window))
+            await self._write_sale_marker(now, tuple(window))
         _LOGGER.info(
             "Manual selling started: %d slots, target %.1f kWh",
             len(window), staged_kwh,
@@ -3943,14 +3987,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or "switch.power_store_manual_selling"
         )
 
-    def _manual_selling_switch_state(self) -> str | None:
+    def _manual_selling_switch_state(
+        self, switch_id: str | None = None
+    ) -> str | None:
         """Raw state of Emaldo's manual-selling switch, or None if unreadable.
 
         None covers a missing entity as well as unknown/unavailable: the caller
         must change nothing on an unreadable state rather than guess that a
         running sale finished.
+
+        switch_id lets a caller that already resolved the entity read THAT
+        switch back: the resolution is deliberately not cached, so resolving
+        it again could land on a different switch.
         """
-        state = self.hass.states.get(self._manual_selling_switch_id())
+        state = self.hass.states.get(
+            switch_id or self._manual_selling_switch_id()
+        )
         return state.state if state is not None else None
 
     def _manual_selling_is_on(self) -> bool:
@@ -3959,14 +4011,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         return self._manual_selling_switch_state() == "on"
 
-    def _manual_selling_is_off(self) -> bool:
+    def _manual_selling_is_off(self, switch_id: str | None = None) -> bool:
         """Whether Emaldo's manual-selling switch reads a definite off.
 
         Only "off" counts.  unknown / unavailable / a missing entity all read
         False, because the caller must change nothing on an unreadable state
         rather than guess that a running sale finished.
         """
-        return self._manual_selling_switch_state() == "off"
+        return self._manual_selling_switch_state(switch_id) == "off"
 
     async def _check_manual_selling_self_completion_locked(
         self, result: OptimizationResult, now: datetime
@@ -4012,18 +4064,33 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # stamp goes here rather than at the turn_on call for the same reason.
             if not self._manual_selling_seen_on:
                 self._manual_selling_seen_on = True
-                self._manual_selling_served = (
-                    now.date(), tuple(result.sell_slots or ())
-                )
+                # The served stamp and the marker both name the window the
+                # sale was STARTED for, not the current tick's plan: the
+                # plan may have lost its window - a running sale with no
+                # marker is the #30 orphan - or moved it, and then the
+                # window the sale was actually for would lose its
+                # protection against a second sale.
+                started_at = self._manual_selling_started_at
+                start_window = self._manual_selling_start_window
+                if start_window is None or started_at is None:
+                    # Cannot happen: only the start path sets the flag, and
+                    # it records the sale's identity there.  If it ever
+                    # does, fall back to the current plan rather than leave
+                    # a running sale with no marker at all - and say so.
+                    _LOGGER.error(
+                        "Manual selling is running but its start window is "
+                        "unknown; falling back to the current plan"
+                    )
+                    started_at = now
+                    start_window = (now.date(), tuple(result.sell_slots or ()))
+                self._manual_selling_served = start_window
                 # The sale is OBSERVED running, so the marker is written here
                 # too: the start read-back may not have seen "on" yet (the
                 # device needed a moment), and a restart in between would
                 # orphan the sale.  With both observation sites writing it,
                 # "a running sale always has a marker" holds by
                 # construction rather than by timing.
-                await self._write_sale_marker(
-                    now, list(result.sell_slots or ())
-                )
+                await self._write_sale_marker(started_at, start_window[1])
             return
         if state != "off":
             # unknown / unavailable / missing entity: cannot tell.  Guessing
@@ -4110,7 +4177,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._manual_selling_active = False
         switch_id = self._manual_selling_switch_id()
         stopped = False
-        if self._manual_selling_is_off():
+        if self._manual_selling_is_off(switch_id):
             # Emaldo already stopped itself once the staged target was exported;
             # turn_off is for INTERRUPTING a running sale, so there is nothing
             # to interrupt.  _restore_sell_back_to_grid() below is still owed —
@@ -4142,8 +4209,11 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # next tick retry.  A stale read right after a successful
                 # stop is self-healing - the marker lingers one tick and
                 # the reconcile then reads the settled state and clears
-                # it.
-                stopped = self._manual_selling_is_off()
+                # it.  The read-back uses the switch that was commanded,
+                # not a fresh resolution: the resolution is deliberately
+                # uncached, so resolving it again could land on a different
+                # switch.
+                stopped = self._manual_selling_is_off(switch_id)
             except (TimeoutError, asyncio.TimeoutError) as err:
                 _LOGGER.error(
                     "Timed out after %ss stopping manual selling on %s; "
