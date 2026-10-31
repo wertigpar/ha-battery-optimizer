@@ -5356,14 +5356,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             def _make_transition_cb(switch_on: bool) -> CALLBACK_TYPE:
                 @callback
                 def _transition(_now) -> None:
+                    # Local copy: assigning switch_on directly would make it
+                    # local to this function and raise UnboundLocalError (#33).
+                    on = switch_on
                     # Full-battery cut overrides the sell-strategy transition
                     # (issue #28): if the battery is full when this boundary
                     # fires, keep PV off so Emaldo stops its top-off pulses.
                     if self._last_result is not None and self._pv_cut_active(
                         self._last_result
                     ):
-                        switch_on = False
-                    self.hass.async_create_task(self._set_pv_switch(switch_on))
+                        on = False
+                    self.hass.async_create_task(self._set_pv_switch(on))
                 return _transition
 
             unsub = async_call_later(
