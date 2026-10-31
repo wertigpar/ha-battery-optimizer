@@ -8,6 +8,7 @@
           "emaldo_entry_id": "Emaldo-batterienhet",
           "price_source": "Datakälla för priser (emaldo = Emaldo internt, sensor = extern sensor)",
           "spot_price_sensor": "Nordpool spotprissensor (endast när källan är 'sensor')",
+          "currency": "Valutaöverstyrning (ISO 4217, t.ex. SEK; tomt = automatiskt)",
           "solcast_today_sensor": "Solcast dagsprognossensor",
           "transfer_fee_buy": "Nätöverföringsavgift (per kWh)",
           "sales_commission": "Säljprovision vid försäljning till nätet (per kWh)",
@@ -72,6 +73,7 @@
           "emaldo_entry_id": "Emaldo-batterienhet",
           "price_source": "Datakälla för priser (emaldo = Emaldo internt, sensor = extern sensor)",
           "spot_price_sensor": "Nordpool spotprissensor (endast när källan är 'sensor')",
+          "currency": "Valutaöverstyrning (ISO 4217, t.ex. SEK; tomt = automatiskt)",
           "solcast_today_sensor": "Solcast dagsprognossensor",
           "solcast_tomorrow_sensor": "Solcast morgondagens prognossensor",
           "vat_multiplier": "Momsmultiplikator",
@@ -138,6 +140,16 @@
           "pv_cut_resume_soc_description": "SoC threshold at which third-party PV is switched back on after a full-battery cut. Default 97."
         }
       }
+    }
+  },
+  "issues": {
+    "price_sensor_currency_mismatch": {
+      "title": "Prissensorns valuta stämmer inte",
+      "description": "Prissensorn {sensor} anger enheten {unit}, men installationen använder {currency}. Ange fältet Valuta i integrationens alternativ så att det matchar din priskälla."
+    },
+    "monetary_defaults_unreviewed": {
+      "title": "Pengainställningar behöver granskas",
+      "description": "Dessa inställningar har fortfarande de ursprungliga euro-standardvärdena, som inte passar {currency}: {fields}. Granska dem i integrationens alternativ."
     }
   },
   "entity": {

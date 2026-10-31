@@ -8,6 +8,7 @@
           "emaldo_entry_id": "Emaldo battery device",
           "price_source": "Price data source (emaldo = Emaldo internal, sensor = external sensor)",
           "spot_price_sensor": "Nordpool spot price sensor (only when source is 'sensor')",
+          "currency": "Currency override (ISO 4217 code, e.g. SEK; blank = auto)",
           "solcast_today_sensor": "Solcast today forecast sensor",
           "transfer_fee_buy": "Grid transfer fee (per kWh)",
           "sales_commission": "Feed-in sales commission (per kWh)",
@@ -72,6 +73,7 @@
           "emaldo_entry_id": "Emaldo battery device",
           "price_source": "Price data source (emaldo = Emaldo internal, sensor = external sensor)",
           "spot_price_sensor": "Nordpool spot price sensor (only when source is 'sensor')",
+          "currency": "Currency override (ISO 4217 code, e.g. SEK; blank = auto)",
           "solcast_today_sensor": "Solcast today forecast sensor",
           "solcast_tomorrow_sensor": "Solcast tomorrow forecast sensor",
           "vat_multiplier": "VAT multiplier",
@@ -138,6 +140,16 @@
            "pv_cut_resume_soc_description": "SoC threshold at which third-party PV is switched back on after a full-battery cut. Default 97."
         }
       }
+    }
+  },
+  "issues": {
+    "price_sensor_currency_mismatch": {
+      "title": "Price sensor currency mismatch",
+      "description": "Price sensor {sensor} reports unit {unit}, but this install uses {currency}. Set the Currency field in the integration options to match your price source."
+    },
+    "monetary_defaults_unreviewed": {
+      "title": "Money settings need review",
+      "description": "These settings still hold the original euro defaults, which do not match {currency}: {fields}. Review them in the integration options."
     }
   },
   "entity": {

@@ -8,6 +8,7 @@
           "emaldo_entry_id": "Emaldo-akkulaite",
           "price_source": "Hintatietolähde (emaldo = Emaldon sisäinen, sensor = ulkoinen anturi)",
           "spot_price_sensor": "Nordpoolin spot-hintasensori (vain kun lähteenä on 'sensor')",
+          "currency": "Valuutan ohitus (ISO 4217, esim. SEK; tyhjä = automaattinen)",
           "solcast_today_sensor": "Solcastin tämän päivän ennustesensori",
           "transfer_fee_buy": "Verkonsiirtomaksu (per kWh)",
           "sales_commission": "Myyntipalkkio verkkoon syötöstä (per kWh)",
@@ -72,6 +73,7 @@
           "emaldo_entry_id": "Emaldo-akkulaite",
           "price_source": "Hintatietolähde (emaldo = Emaldon sisäinen, sensor = ulkoinen anturi)",
           "spot_price_sensor": "Nordpoolin spot-hintasensori (vain kun lähteenä on 'sensor')",
+          "currency": "Valuutan ohitus (ISO 4217, esim. SEK; tyhjä = automaattinen)",
           "solcast_today_sensor": "Solcastin tämän päivän ennustesensori",
           "solcast_tomorrow_sensor": "Solcastin huomisen ennustesensori",
           "vat_multiplier": "ALV-kerroin",
@@ -138,6 +140,16 @@
           "pv_cut_resume_soc_description": "SoC threshold at which third-party PV is switched back on after a full-battery cut. Default 97."
         }
       }
+    }
+  },
+  "issues": {
+    "price_sensor_currency_mismatch": {
+      "title": "Hinta-anturin valuutta ei täsmää",
+      "description": "Hinta-anturi {sensor} ilmoittaa yksikön {unit}, mutta asennus käyttää valuuttaa {currency}. Aseta Valuutta-kenttä integraation asetuksissa vastaamaan hintalähdettäsi."
+    },
+    "monetary_defaults_unreviewed": {
+      "title": "Rahaasetukset vaativat tarkistuksen",
+      "description": "Nämä asetukset sisältävät yhä alkuperäiset euro-oletukset, jotka eivät sovi valuuttaan {currency}: {fields}. Tarkista ne integraation asetuksista."
     }
   },
   "entity": {
