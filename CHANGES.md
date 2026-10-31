@@ -53,8 +53,10 @@
 - The money validation caps are widened (wear cost 10, forced-sell minimum
   profit and minimum price 100). The old euro-sized caps (0.5 / 1.0 / 1.0)
   rejected normal SEK and NOK values.
-- EU VAT rates in the country table were checked against the Wikipedia EU VAT
-  table (2026-10-22). Norway's 25 % is not in that table and is unverified.
+- Every rate in the VAT country table was checked: EU members against the
+  Wikipedia EU VAT table (2026-10-22), Norway's 25 % against skatteetaten.no
+  (2026). Northern Norway is exempt from VAT on electricity; set the
+  multiplier to 1.0 there.
 
 ## v0.3.26
 

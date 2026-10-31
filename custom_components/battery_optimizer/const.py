@@ -102,8 +102,9 @@ _CURRENCY_MONETARY_DEFAULTS = {
 # Standard VAT multiplier by ISO 3166-1 alpha-2 country (Nord Pool markets).
 # Electricity is taxed at the standard rate in every listed market.
 # Rates as of 2026-10; EU members checked against the Wikipedia "European Union
-# value added tax" table (edited 2026-10-22). NO (non-EU, 25%) is not in that
-# table - confirm against Skatteetaten if it matters to you.
+# value added tax" table (edited 2026-10-22), Norway (25 %, normal rate 2026)
+# against skatteetaten.no. Northern Norway (Finnmark, Nord-Troms) is exempt
+# from VAT on electricity; users there should set the multiplier to 1.0.
 _COUNTRY_VAT_MULTIPLIER = {
     "FI": 1.255,   # 25.5% (raised from 24% on 2024-09-01)
     "SE": 1.25,
