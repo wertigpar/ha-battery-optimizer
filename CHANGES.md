@@ -1,5 +1,61 @@
 # Changes
 
+## v0.3.27
+
+### Fixed
+
+- **PV sell transitions no longer raise `UnboundLocalError`** — since v0.3.26
+  every scheduled slot-boundary transition of the PV sell strategy failed:
+  the full-battery cut (#28) assigned `switch_on` inside the scheduled
+  callback, which made it local to the whole function, so the read on the last
+  line failed on every call, cut or no cut. The Third Party PV switch was then
+  only corrected by the 5-minute reconcile, up to 5 minutes late. The callback
+  now works on a local copy. Reported in #33. File: `coordinator.py`.
+
+- **Solar-aware grid charging no longer hedges with energy that costs more
+  than it can save** — with the p10/p50 confidence hedge on and a pessimistic
+  p10 (ratio 0.21 in #32), the overnight charge was sized against a full
+  battery, so on a flat-price day with no morning peak it bought ~10 kWh at
+  ~0.66 SEK/kWh that forecast PV would have supplied, and the PV was then
+  exported at ~0.11.
+
+  The hedge (the energy above what the *median* forecast leaves unfilled) is
+  now kept only when its benefit if the pessimistic forecast holds
+  (`(avoided evening buy − wear) × round-trip − charge price`) beats its cost
+  if the median holds (`charge price − exported-PV price × charge
+  efficiency`). Otherwise the charge is sized against the median forecast. With
+  the weight at 0.0 or no price information the behaviour is unchanged.
+  Reported in #32. File: `optimizer.py`. This addresses the first and second
+  of the reporter's three suggestions; making the Case A discharge floor
+  marginal (the third) is not part of this change.
+
+### Added
+
+- **One currency, resolved once, used everywhere money is shown or defined** —
+  the integration no longer assumes euros and Finland. The currency comes from
+  an optional **Currency** override, then Home Assistant's configured
+  currency, then the timezone, then EUR. Monetary defaults are tuned per
+  market in that market's own currency (EUR / SEK / NOK / DKK: battery wear
+  cost, pre-charge price ceiling, forced-sell minimum profit), the VAT
+  multiplier follows `hass.config.country`, and the Finnish transfer fee and
+  sales commission default to zero elsewhere. Stored values are never
+  rescaled. Files: `money.py` (new), `const.py`.
+- The config and options forms take their defaults from the resolved locale,
+  and the unit sensors and the plan export name the resolved currency (the
+  plan export now requires it). Files: `config_flow.py`, `coordinator.py`,
+  `sensor.py`, `plan_export.py`.
+- **Two repair issues** — one when the price sensor's unit contradicts the
+  currency in use, one when a money setting still holds the original euro
+  default although it does not fit your currency. Texts in en/fi/sv/da/nb.
+
+### Changed
+
+- The money validation caps are widened (wear cost 10, forced-sell minimum
+  profit and minimum price 100). The old euro-sized caps (0.5 / 1.0 / 1.0)
+  rejected normal SEK and NOK values.
+- EU VAT rates in the country table were checked against the Wikipedia EU VAT
+  table (2026-10-22). Norway's 25 % is not in that table and is unverified.
+
 ## v0.3.26
 
 ### Fixed
