@@ -439,6 +439,9 @@ def _case_b_grid_charge(
     current_soc_kwh: float,
     available_soc: float,
     solar_confidence_ratio: float | None,
+    *,
+    hedge_net_cost: float | None = None,
+    hedge_net_benefit: float | None = None,
 ) -> float:
     """How much grid charging may fund toward soc_max (Case B round trip).
 
@@ -486,6 +489,19 @@ def _case_b_grid_charge(
     ratio = max(0.0, min(1.0, float(solar_confidence_ratio)))
     pessimistic_soc = available_soc * ratio
     solar_ceiling = min(full, max(0.0, soc_max_kwh - pessimistic_soc))
+    # Value gate (issue #32): the hedge is the energy above what the *median*
+    # forecast leaves unfilled.  If the median holds, that energy displaces PV
+    # that would have been exported (cost); if the pessimistic forecast holds,
+    # it avoids a pricier evening buy (benefit).  Keep the hedge only when the
+    # benefit per kWh beats the cost; otherwise trust the median forecast.
+    # Both inputs None (no price information) keeps the pre-gate behaviour.
+    if (
+        hedge_net_cost is not None
+        and hedge_net_benefit is not None
+        and hedge_net_benefit <= hedge_net_cost
+    ):
+        median_ceiling = min(full, max(0.0, soc_max_kwh - available_soc))
+        solar_ceiling = min(solar_ceiling, median_ceiling)
     return full * (1.0 - w) + solar_ceiling * w
 
 
@@ -2451,8 +2467,27 @@ def optimize(
     # soc_max (already cheapest-sorted).  On cloudy days the pass charges
     # at most up to soc_max (check below), so this cannot over-fill.
     if profitable_charge:
+        # Price inputs for the confidence-hedge value gate (issue #32).
+        hedge_cost = hedge_benefit = None
+        if profitable_discharge:
+            charge_price = buy_prices[profitable_charge[0]]
+            short_price = sum(buy_prices[s] for s in profitable_discharge) / len(
+                profitable_discharge
+            )
+            displaced_pv = (
+                sum(sell_prices[s] for s in solar_surplus_slots)
+                / len(solar_surplus_slots)
+                if solar_surplus_slots
+                else 0.0
+            )
+            hedge_cost = charge_price - displaced_pv * cfg.charge_efficiency
+            hedge_benefit = (
+                (short_price - wear_cost) * cfg.round_trip_factor - charge_price
+            )
         grid_charge_needed += _case_b_grid_charge(
-            cfg, soc_max_kwh, current_soc_kwh, available_soc, solar_confidence_ratio
+            cfg, soc_max_kwh, current_soc_kwh, available_soc, solar_confidence_ratio,
+            hedge_net_cost=hedge_cost,
+            hedge_net_benefit=hedge_benefit,
         )
 
     # Forward-sim from the true current SoC (not the solar-only end-state).
