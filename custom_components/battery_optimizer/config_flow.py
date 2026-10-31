@@ -20,7 +20,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
     OptionsFlowWithConfigEntry,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.selector import (
     DateSelector,
@@ -38,6 +38,7 @@ from .const import (
     CONF_SOLCAST_TODAY,
     CONF_SOLCAST_TOMORROW,
     CONF_VAT_MULTIPLIER,
+    CONF_CURRENCY,
     CONF_TRANSFER_FEE_BUY,
     CONF_SALES_COMMISSION,
     CONF_BATTERY_CAPACITY_KWH,
@@ -151,8 +152,24 @@ from .rules import (
     PV_BEHAVIORS,
 )
 from .optional_value import is_blank
+from .money import LocaleMoney, locale_money
+
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _locale_money_for(
+    hass: HomeAssistant, defaults: dict[str, Any] | None
+) -> LocaleMoney:
+    """Resolve the locale values for this install, honouring a stored override."""
+    values = defaults or {}
+    override = values.get(CONF_CURRENCY) or ""
+    return locale_money(
+        override=override,
+        ha_currency=getattr(hass.config, "currency", "") or "",
+        time_zone=hass.config.time_zone or "",
+        country=getattr(hass.config, "country", "") or "",
+    )
 
 
 def _get_emaldo_options(hass) -> dict[str, str]:
@@ -201,9 +218,12 @@ class _OptionalNumberSelector(NumberSelector):
 def _build_schema(
     defaults: dict[str, Any] | None = None,
     emaldo_options: dict[str, str] | None = None,
+    *,
+    money: LocaleMoney,
 ) -> vol.Schema:
     """Build the config / options schema with optional defaults."""
     d = defaults or {}
+    loc = money
 
     def _int_default(key: str, fallback: int) -> int:
         value = d.get(key, fallback)
@@ -248,6 +268,10 @@ def _build_schema(
                 default=price_source,
             ): vol.In([PRICE_SOURCE_EMALDO, PRICE_SOURCE_SENSOR]),
             **spot_sensor_field,
+            vol.Optional(
+                CONF_CURRENCY,
+                default=d.get(CONF_CURRENCY, ""),
+            ): vol.All(str, vol.Match(r"^$|^[A-Za-z]{3}$")),
             vol.Required(
                 CONF_SOLCAST_TODAY,
                 default=d.get(CONF_SOLCAST_TODAY, "sensor.solcast_pv_forecast_forecast_today"),
@@ -258,15 +282,15 @@ def _build_schema(
             ): str,
             vol.Required(
                 CONF_VAT_MULTIPLIER,
-                default=d.get(CONF_VAT_MULTIPLIER, DEFAULT_VAT_MULTIPLIER),
+                default=d.get(CONF_VAT_MULTIPLIER, loc.vat_multiplier),
             ): vol.Coerce(float),
             vol.Required(
                 CONF_TRANSFER_FEE_BUY,
-                default=d.get(CONF_TRANSFER_FEE_BUY, DEFAULT_TRANSFER_FEE_BUY),
+                default=d.get(CONF_TRANSFER_FEE_BUY, loc.transfer_fee_buy),
             ): vol.Coerce(float),
             vol.Required(
                 CONF_SALES_COMMISSION,
-                default=d.get(CONF_SALES_COMMISSION, DEFAULT_SALES_COMMISSION),
+                default=d.get(CONF_SALES_COMMISSION, loc.sales_commission),
             ): vol.Coerce(float),
             vol.Required(
                 CONF_BATTERY_CAPACITY_KWH,
@@ -302,8 +326,8 @@ def _build_schema(
             ): vol.Coerce(float),
             vol.Required(
                 CONF_BATTERY_WEAR_COST,
-                default=d.get(CONF_BATTERY_WEAR_COST, DEFAULT_BATTERY_WEAR_COST),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
+                default=d.get(CONF_BATTERY_WEAR_COST, loc.battery_wear_cost),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=10.0)),
             vol.Required(
                 CONF_IDLE_POWER_KW,
                 default=d.get(CONF_IDLE_POWER_KW, DEFAULT_IDLE_POWER_KW),
@@ -449,7 +473,7 @@ def _build_schema(
                 CONF_PRECHARGE_PRICE_CEILING,
                 default=d.get(
                     CONF_PRECHARGE_PRICE_CEILING,
-                    DEFAULT_PRECHARGE_PRICE_CEILING,
+                    loc.precharge_price_ceiling,
                 ),
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0)),
             vol.Optional(
@@ -514,16 +538,16 @@ def _build_schema(
                 CONF_FORCED_SELL_MIN_PROFIT,
                 default=d.get(
                     CONF_FORCED_SELL_MIN_PROFIT,
-                    DEFAULT_FORCED_SELL_MIN_PROFIT,
+                    loc.forced_sell_min_profit,
                 ),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
             vol.Optional(
                 CONF_FORCED_SELL_MIN_PRICE,
                 default=d.get(
                     CONF_FORCED_SELL_MIN_PRICE,
                     DEFAULT_FORCED_SELL_MIN_PRICE,
                 ),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
             vol.Optional(
                 CONF_STALE_PUSH_RETRY_COUNT,
                 default=d.get(
@@ -818,6 +842,8 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors["base"] = "sensor_not_found"
 
             if not errors:
+                if not user_input.get(CONF_CURRENCY):
+                    user_input.pop(CONF_CURRENCY, None)
                 await self.async_set_unique_id(DOMAIN)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
@@ -827,8 +853,14 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_build_schema(emaldo_options=emaldo_options),
+            data_schema=_build_schema(
+                emaldo_options=emaldo_options,
+                money=_locale_money_for(self.hass, None),
+            ),
             errors=errors,
+            description_placeholders={
+                "currency": _locale_money_for(self.hass, None).currency
+            },
         )
 
 
@@ -846,21 +878,29 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
             if sensor_id and not self.hass.states.get(sensor_id):
                 errors["base"] = "sensor_not_found"
             if errors:
+                cur = {**self.config_entry.data, **self.config_entry.options}
+                money = _locale_money_for(self.hass, cur)
                 return self.async_show_form(
                     step_id="init",
                     data_schema=_build_schema(
-                        {**self.config_entry.data, **self.config_entry.options},
-                        emaldo_options=emaldo_options,
+                        cur, emaldo_options=emaldo_options, money=money
                     ),
                     errors=errors,
+                    description_placeholders={"currency": money.currency},
                 )
             if is_blank(user_input.get(CONF_PRECHARGE_PUBLISH_HOUR)):
                 user_input.pop(CONF_PRECHARGE_PUBLISH_HOUR, None)
+            if not user_input.get(CONF_CURRENCY):
+                user_input.pop(CONF_CURRENCY, None)
             return self.async_create_entry(title="", data=user_input)
 
         # Merge config entry data with any existing options
         current = {**self.config_entry.data, **self.config_entry.options}
+        money = _locale_money_for(self.hass, current)
         return self.async_show_form(
             step_id="init",
-            data_schema=_build_schema(current, emaldo_options=emaldo_options),
+            data_schema=_build_schema(
+                current, emaldo_options=emaldo_options, money=money
+            ),
+            description_placeholders={"currency": money.currency},
         )

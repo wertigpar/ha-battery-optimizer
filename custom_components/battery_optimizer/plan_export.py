@@ -24,7 +24,7 @@ def _table(headers: list[str], rows: list[list]) -> str:
     return "\n".join(out)
 
 
-def render_analysis(snapshot: dict, *, currency: str = "EUR") -> str:
+def render_analysis(snapshot: dict, *, currency: str) -> str:
     """Render the snapshot as one markdown document.
 
     Args:

@@ -131,7 +131,7 @@ from .const import (
     CONF_FORCED_SELL_MIN_PRICE,
     DEFAULT_FORCED_SELL_ENABLED,
     DEFAULT_FORCED_SELL_MAX_KWH_PD,
-DEFAULT_FORCED_SELL_MIN_PROFIT,
+    DEFAULT_FORCED_SELL_MIN_PROFIT,
     DEFAULT_FORCED_SELL_MIN_PRICE,
     CONF_STALE_PUSH_RETRY_COUNT,
     DEFAULT_STALE_PUSH_RETRY_COUNT,
@@ -140,8 +140,11 @@ DEFAULT_FORCED_SELL_MIN_PROFIT,
     CONF_PV_CUT_RESUME_SOC,
     DEFAULT_ENABLE_PV_CUT_WHEN_FULL,
     DEFAULT_PV_CUT_RESUME_SOC,
+    CONF_CURRENCY,
 )
-from .const import currency_for_timezone
+from homeassistant.helpers import issue_registry as ir
+
+from .money import ORIGIN_LITERALS, locale_money, should_warn_mismatch, unreviewed_fields
 from .optimizer import (
     BatteryConfig,
     OptimizationResult,
@@ -430,7 +433,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """
 
     config_entry: ConfigEntry
-    # Entity id of the Manual selling switch the RUNNING sale was started
+    # Class-level default (the historical EUR/Finland values) so an instance
+    # built without __init__ still resolves money fallbacks; __init__ always
+    # overwrites it with the install's real locale.
+    _locale = locale_money(
+        override="", ha_currency="EUR", time_zone="Europe/Helsinki", country="FI"
+    )    # Entity id of the Manual selling switch the RUNNING sale was started
     # on.  Class-level default so an instance built without __init__ (the
     # unit tests do) still has the attribute: the Emaldo entity resolution
     # is deliberately NOT cached, so a read-back that re-resolved it could
@@ -556,6 +564,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "battery_optimizer_runtime.json"
         )
         self._runtime_state_restored = False
+        self._locale = locale_money(
+            override=(
+                entry.options.get(CONF_CURRENCY)
+                or entry.data.get(CONF_CURRENCY)
+                or ""
+            ),
+            ha_currency=getattr(self.hass.config, "currency", "") or "",
+            time_zone=self.hass.config.time_zone or "",
+            country=getattr(self.hass.config, "country", "") or "",
+        )
         # Issue #23: records that a forced-sell window left Emaldo's Sell back
         # to grid switch on, so a restart mid-window can put it back off — the
         # in-memory _sell_back_to_grid_saved flag dies with the process, and a
@@ -994,14 +1012,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             discharge_efficiency=c.get(CONF_DISCHARGE_EFFICIENCY, 0.95),
             soc_min=c.get(CONF_SOC_MIN, 20),
             soc_max=c.get(CONF_SOC_MAX, 100),
-            vat_multiplier=c.get(CONF_VAT_MULTIPLIER, DEFAULT_VAT_MULTIPLIER),
-            transfer_fee_buy=c.get(CONF_TRANSFER_FEE_BUY, DEFAULT_TRANSFER_FEE_BUY),
+            vat_multiplier=c.get(CONF_VAT_MULTIPLIER, self._locale.vat_multiplier),
+            transfer_fee_buy=c.get(CONF_TRANSFER_FEE_BUY, self._locale.transfer_fee_buy),
             grid_charge_solar_aware=c.get(
                 CONF_GRID_CHARGE_SOLAR_AWARE, DEFAULT_GRID_CHARGE_SOLAR_AWARE
             ),
-            sales_commission=c.get(CONF_SALES_COMMISSION, 0.002),
+            sales_commission=c.get(CONF_SALES_COMMISSION, self._locale.sales_commission),
             base_load_kw=base_load_kw,
-            wear_cost_per_kwh=c.get(CONF_BATTERY_WEAR_COST, 0.03),
+            wear_cost_per_kwh=c.get(CONF_BATTERY_WEAR_COST, self._locale.battery_wear_cost),
             idle_power_kw=c.get(CONF_IDLE_POWER_KW, 0.1),
             enable_soc_safeguard=c.get(
                 CONF_ENABLE_SOC_SAFEGUARD, DEFAULT_ENABLE_SOC_SAFEGUARD
@@ -1016,7 +1034,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 CONF_FORCED_SELL_MAX_KWH_PD, DEFAULT_FORCED_SELL_MAX_KWH_PD
             ),
             forced_sell_min_profit=c.get(
-                CONF_FORCED_SELL_MIN_PROFIT, DEFAULT_FORCED_SELL_MIN_PROFIT
+                CONF_FORCED_SELL_MIN_PROFIT, self._locale.forced_sell_min_profit
             ),
             forced_sell_min_price=c.get(
                 CONF_FORCED_SELL_MIN_PRICE, DEFAULT_FORCED_SELL_MIN_PRICE
@@ -2551,7 +2569,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         md = render_analysis(
             snapshot,
-            currency=currency_for_timezone(self.hass.config.time_zone),
+            currency=self.currency,
         )
         path = self.hass.config.path("battery_optimizer_analysis.md")
         try:
@@ -2576,6 +2594,78 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def realized_cost_today(self) -> dict[str, float]:
         """Signed net/buy/sell totals for the current local day."""
         return day_totals(self.realized_cost_today_records)
+
+    @property
+    @property
+    def currency(self) -> str:
+        """The one currency this install operates in."""
+        return getattr(self, "_locale", None).currency if getattr(self, "_locale", None) is not None else "EUR"
+
+    async def _async_check_locale_money(self) -> None:
+        """Report locale money problems without changing anything."""
+        entry = self.config_entry
+        stored = {**entry.data, **entry.options}
+
+        override = stored.get(CONF_CURRENCY) or ""
+        sensor_id = stored.get(CONF_SPOT_SENSOR) or ""
+        sensor_unit = None
+        if sensor_id:
+            state = self.hass.states.get(sensor_id)
+            if state is not None:
+                sensor_unit = state.attributes.get("unit_of_measurement")
+
+        if should_warn_mismatch(
+            sensor_unit=sensor_unit,
+            currency=self.currency,
+            override=override,
+        ):
+            _LOGGER.warning(
+                "Price sensor %s reports %s but this install uses %s; "
+                "set the integration's currency to match",
+                sensor_id,
+                sensor_unit,
+                self.currency,
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                "price_sensor_currency_mismatch",
+                is_fixable=False,
+                is_persistent=True,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="price_sensor_currency_mismatch",
+                translation_placeholders={
+                    "sensor": sensor_id,
+                    "unit": str(sensor_unit),
+                    "currency": self.currency,
+                },
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, "price_sensor_currency_mismatch")
+
+        flagged = unreviewed_fields(stored, self._locale)
+        if flagged:
+            _LOGGER.warning(
+                "These money settings still hold pre-locale defaults that do not "
+                "match this install (%s): %s. Review them in the options flow.",
+                self.currency,
+                ", ".join(flagged),
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                "monetary_defaults_unreviewed",
+                is_fixable=False,
+                is_persistent=True,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="monetary_defaults_unreviewed",
+                translation_placeholders={
+                    "currency": self.currency,
+                    "fields": ", ".join(flagged),
+                },
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, "monetary_defaults_unreviewed")
 
     @property
     def realized_cost_latest(self) -> dict | None:
@@ -3182,7 +3272,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             safety_soc_frac=float(self.config.get(
                 CONF_PRECHARGE_SAFETY_SOC, DEFAULT_PRECHARGE_SAFETY_SOC)),
             price_ceiling=float(self.config.get(
-                CONF_PRECHARGE_PRICE_CEILING, DEFAULT_PRECHARGE_PRICE_CEILING)),
+                CONF_PRECHARGE_PRICE_CEILING, self._locale.precharge_price_ceiling)),
             max_kwh_frac=float(self.config.get(
                 CONF_PRECHARGE_MAX_KWH_FRAC, DEFAULT_PRECHARGE_MAX_KWH_FRAC)),
             low_solar_frac=float(self.config.get(
@@ -4975,9 +5065,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Nordpool sensor changed — check if tomorrow's prices are now available."""
         if self._has_tomorrow_prices():
             _LOGGER.info("Nordpool tomorrow prices detected — running optimizer")
-            self.hass.async_create_task(
-                self.run_optimizer(reason="nordpool_update", force=True)
-            )
+        self.hass.async_create_task(
+            self.run_optimizer(reason="nordpool_update", force=True)
+        )
+        self.hass.async_create_task(self._async_check_locale_money())
 
     # ── SoC Guard ─────────────────────────────────────────────────────
 

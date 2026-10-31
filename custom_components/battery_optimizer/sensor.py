@@ -110,7 +110,7 @@ class _BaseOptimizerSensor(CoordinatorEntity[BatteryOptimizerCoordinator], Senso
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_translation_key = key
         self._key = key
-        self._currency = currency_for_timezone(coordinator.hass.config.time_zone)
+        self._currency = coordinator.currency
 
     @property
     def device_info(self):
@@ -1072,7 +1072,7 @@ class VatMultiplierSensor(_BaseOptimizerSensor):
     def native_value(self) -> float:
         return float(
             self.coordinator.config_entry.options.get(
-                CONF_VAT_MULTIPLIER, DEFAULT_VAT_MULTIPLIER
+                CONF_VAT_MULTIPLIER, self.coordinator._locale.vat_multiplier
             )
         )
 
@@ -1095,7 +1095,7 @@ class GridTransferFeeSensor(_BaseOptimizerSensor):
     def native_value(self) -> float:
         return float(
             self.coordinator.config_entry.options.get(
-                CONF_TRANSFER_FEE_BUY, DEFAULT_TRANSFER_FEE_BUY
+                CONF_TRANSFER_FEE_BUY, self.coordinator._locale.transfer_fee_buy
             )
         )
 
@@ -1118,7 +1118,7 @@ class FeedInSalesCommissionSensor(_BaseOptimizerSensor):
     def native_value(self) -> float:
         return float(
             self.coordinator.config_entry.options.get(
-                CONF_SALES_COMMISSION, DEFAULT_SALES_COMMISSION
+                CONF_SALES_COMMISSION, self.coordinator._locale.sales_commission
             )
         )
 
@@ -1141,6 +1141,6 @@ class BatteryWearCostSensor(_BaseOptimizerSensor):
     def native_value(self) -> float:
         return float(
             self.coordinator.config_entry.options.get(
-                CONF_BATTERY_WEAR_COST, DEFAULT_BATTERY_WEAR_COST
+                CONF_BATTERY_WEAR_COST, self.coordinator._locale.battery_wear_cost
             )
         )
