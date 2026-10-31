@@ -44,6 +44,12 @@
   and the unit sensors and the plan export name the resolved currency (the
   plan export now requires it). Files: `config_flow.py`, `coordinator.py`,
   `sensor.py`, `plan_export.py`.
+- **Active Currency diagnostic sensor** — shows the currency in use. With no
+  override it reports Home Assistant's currency (or the timezone default); its
+  attributes name which input decided it (`source`: `override`,
+  `home_assistant`, `timezone` or `default`) and list the raw inputs
+  (`user_override`, `home_assistant_currency`, `time_zone`, `country`).
+  Names in en/fi/sv/da/nb.
 - **Two repair issues** — one when the price sensor's unit contradicts the
   currency in use, one when a money setting still holds the original euro
   default although it does not fit your currency. Texts in en/fi/sv/da/nb.

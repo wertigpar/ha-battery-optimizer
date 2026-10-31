@@ -144,7 +144,13 @@ from .const import (
 )
 from homeassistant.helpers import issue_registry as ir
 
-from .money import ORIGIN_LITERALS, locale_money, should_warn_mismatch, unreviewed_fields
+from .money import (
+    ORIGIN_LITERALS,
+    currency_source,
+    locale_money,
+    should_warn_mismatch,
+    unreviewed_fields,
+)
 from .optimizer import (
     BatteryConfig,
     OptimizationResult,
@@ -2599,6 +2605,25 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def currency(self) -> str:
         """The one currency this install operates in."""
         return self._locale.currency
+
+    @property
+    def currency_info(self) -> dict[str, Any]:
+        """Which input decided the currency, plus the raw inputs (diagnostics)."""
+        entry = self.config_entry
+        override = (
+            entry.options.get(CONF_CURRENCY) or entry.data.get(CONF_CURRENCY) or ""
+        )
+        ha_currency = getattr(self.hass.config, "currency", "") or ""
+        time_zone = self.hass.config.time_zone or ""
+        return {
+            "source": currency_source(
+                override=override, ha_currency=ha_currency, time_zone=time_zone
+            ),
+            "user_override": override or None,
+            "home_assistant_currency": ha_currency or None,
+            "time_zone": time_zone or None,
+            "country": getattr(self.hass.config, "country", None) or None,
+        }
 
     async def _async_check_locale_money(self) -> None:
         """Report locale money problems without changing anything."""

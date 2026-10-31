@@ -92,6 +92,7 @@ async def async_setup_entry(
         GridTransferFeeSensor(coordinator, entry),
         FeedInSalesCommissionSensor(coordinator, entry),
         BatteryWearCostSensor(coordinator, entry),
+        ActiveCurrencySensor(coordinator, entry),
     ], config_subentry_id=coordinator._device_subentry_id())
 
 
@@ -1144,3 +1145,21 @@ class BatteryWearCostSensor(_BaseOptimizerSensor):
                 CONF_BATTERY_WEAR_COST, self.coordinator._locale.battery_wear_cost
             )
         )
+
+
+class ActiveCurrencySensor(_BaseOptimizerSensor):
+    """Diagnostic: the currency in use, and which input decided it."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:cash-multiple"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "active_currency")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.currency
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self.coordinator.currency_info

@@ -234,6 +234,9 @@
       "battery_wear_cost": {
         "name": "Battery Wear Cost"
       },
+      "active_currency": {
+        "name": "Active Currency"
+      },
       "realized_cost_history": {
         "name": "Realized Cost History"
       },

@@ -186,6 +186,7 @@
       "grid_transfer_fee": { "name": "Grid Transfer Fee" },
       "feed_in_sales_commission": { "name": "Feed-in Sales Commission" },
       "battery_wear_cost": { "name": "Battery Wear Cost" },
+      "active_currency": { "name": "Active Currency" },
       "realized_cost_history": { "name": "Realized Cost History" },
       "realized_cost_today": { "name": "Realized Cost Today" }
     },

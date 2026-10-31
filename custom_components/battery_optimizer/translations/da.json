@@ -239,6 +239,9 @@
       },
       "battery_wear_cost": {
         "name": "Batteriets slidomkostning"
+      },
+      "active_currency": {
+        "name": "Aktiv valuta"
       }
     },
     "switch": {

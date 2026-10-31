@@ -14,6 +14,7 @@ from .const import (
     _CURRENCY_MONETARY_DEFAULTS,
     DEFAULT_SALES_COMMISSION,
     DEFAULT_TRANSFER_FEE_BUY,
+    _TZ_CURRENCY,
     currency_for_timezone,
 )
 
@@ -45,6 +46,23 @@ def resolve_currency(
     if ha_norm:
         return ha_norm
     return currency_for_timezone(time_zone or "") or EUR
+
+
+def currency_source(
+    *,
+    override: str | None,
+    ha_currency: str | None,
+    time_zone: str,
+) -> str:
+    """Name the input ``resolve_currency`` used: override / home_assistant /
+    timezone / default. For diagnostics only; mirrors its precedence."""
+    if _norm(override):
+        return "override"
+    if _norm(ha_currency):
+        return "home_assistant"
+    if (time_zone or "") in _TZ_CURRENCY:
+        return "timezone"
+    return "default"
 
 
 def is_finland(*, country: str | None, time_zone: str) -> bool:

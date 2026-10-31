@@ -239,6 +239,9 @@
       },
       "battery_wear_cost": {
         "name": "Akun kulumiskustannus"
+      },
+      "active_currency": {
+        "name": "Käytössä oleva valuutta"
       }
     },
     "switch": {
