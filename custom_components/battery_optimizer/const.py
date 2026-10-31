@@ -8,6 +8,7 @@ CONF_SOLCAST_TODAY = "solcast_today_sensor"
 CONF_SOLCAST_TOMORROW = "solcast_tomorrow_sensor"
 
 CONF_VAT_MULTIPLIER = "vat_multiplier"
+CONF_CURRENCY = "currency"
 CONF_TRANSFER_FEE_BUY = "transfer_fee_buy"
 CONF_SALES_COMMISSION = "sales_commission"
 
@@ -68,7 +69,57 @@ SOLAR_FORECAST_P50 = "p50"  # Solcast median (optimistic, current legacy)
 SOLAR_FORECAST_P10 = "p10"  # Solcast 10th-percentile (pessimistic, weather-aware)
 
 # ── Defaults ─────────────────────────────────────────────────────────
-DEFAULT_VAT_MULTIPLIER = 1.255       # 25.5% Finnish electricity VAT
+# ── Locale defaults ──────────────────────────────────────────────────
+# Both tables below are bootstrapping defaults, not authoritative data. Every
+# value is overridable by stored config, and every value should be verified by
+# the user against their own contract. Tables are kept as literals rather than
+# derived from an exchange rate so that a reviewer can audit them in one diff.
+
+# Monetary defaults tuned per market, in that market's own currency.
+_CURRENCY_MONETARY_DEFAULTS = {
+    "EUR": {
+        "battery_wear_cost": 0.03,
+        "precharge_price_ceiling": 0.07,
+        "forced_sell_min_profit": 0.02,
+    },
+    "SEK": {
+        "battery_wear_cost": 0.34,
+        "precharge_price_ceiling": 0.80,
+        "forced_sell_min_profit": 0.23,
+    },
+    "NOK": {
+        "battery_wear_cost": 0.35,
+        "precharge_price_ceiling": 0.81,
+        "forced_sell_min_profit": 0.23,
+    },
+    "DKK": {
+        "battery_wear_cost": 0.22,
+        "precharge_price_ceiling": 0.52,
+        "forced_sell_min_profit": 0.15,
+    },
+}
+
+# Standard VAT multiplier by ISO 3166-1 alpha-2 country (Nord Pool markets).
+# Electricity is taxed at the standard rate in every listed market.
+# Rates as of 2026-10; EU members checked against the Wikipedia "European Union
+# value added tax" table (edited 2026-10-22). NO (non-EU, 25%) is not in that
+# table - confirm against Skatteetaten if it matters to you.
+_COUNTRY_VAT_MULTIPLIER = {
+    "FI": 1.255,   # 25.5% (raised from 24% on 2024-09-01)
+    "SE": 1.25,
+    "NO": 1.25,
+    "DK": 1.25,
+    "EE": 1.24,    # raised from 22% on 2025-07-01
+    "LV": 1.21,
+    "LT": 1.21,
+    "PL": 1.23,
+    "DE": 1.19,
+    "NL": 1.21,
+    "BE": 1.21,
+    "FR": 1.20,
+    "AT": 1.20,
+}
+DEFAULT_VAT_MULTIPLIER = _COUNTRY_VAT_MULTIPLIER["FI"]   # 25.5% Finnish electricity VAT
 DEFAULT_TRANSFER_FEE_BUY = 0.0776    # €/kWh transfer + tax, VAT-inclusive
 DEFAULT_SALES_COMMISSION = 0.003     # €/kWh retailer commission on feed-in
 DEFAULT_BATTERY_CAPACITY_KWH = 15.0
@@ -83,7 +134,7 @@ DEFAULT_SOC_MIN = 20
 DEFAULT_SOC_MAX = 100
 DEFAULT_BASE_LOAD_KW = 1.0
 
-DEFAULT_BATTERY_WEAR_COST = 0.03           # €/kWh cycled (3 snt/kWh)
+DEFAULT_BATTERY_WEAR_COST = _CURRENCY_MONETARY_DEFAULTS["EUR"]["battery_wear_cost"]  # €/kWh cycled
 DEFAULT_IDLE_POWER_KW = 0.1               # 100W battery unit idle consumption
 
 # ── SoC floor safeguard ──────────────────────────────────────
@@ -113,7 +164,7 @@ DEFAULT_GRID_CHARGE_SOLAR_AWARE = 0.0  # 0.0 = legacy sizing (issue #26 off)
 # ── Speculative grid pre-charge defaults ───────────────────────────
 DEFAULT_PRECHARGE_ENABLED = False           # opt-in feature
 DEFAULT_PRECHARGE_SAFETY_SOC = 0.70          # fill to 70% of usable band
-DEFAULT_PRECHARGE_PRICE_CEILING = 0.07       # €/kWh effective buy ceiling
+DEFAULT_PRECHARGE_PRICE_CEILING = _CURRENCY_MONETARY_DEFAULTS["EUR"]["precharge_price_ceiling"]  # effective buy ceiling
 DEFAULT_PRECHARGE_MAX_KWH_FRAC = 0.40        # cap speculative energy = 40% of band
 DEFAULT_PRECHARGE_LOW_SOLAR_FRAC = 0.25      # P10 solar < 25% of band ⇒ "bad solar"
 DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR = True   # gate on solar signal
@@ -184,7 +235,7 @@ CONF_FORCED_SELL_MIN_PROFIT = "forced_sell_min_profit"
 CONF_FORCED_SELL_MIN_PRICE = "forced_sell_min_price"
 DEFAULT_FORCED_SELL_ENABLED = False
 DEFAULT_FORCED_SELL_MAX_KWH_PD = 0.0   # 0 = unlimited
-DEFAULT_FORCED_SELL_MIN_PROFIT = 0.02  # €/kWh after wear + round-trip
+DEFAULT_FORCED_SELL_MIN_PROFIT = _CURRENCY_MONETARY_DEFAULTS["EUR"]["forced_sell_min_profit"]  # after wear + round-trip
 DEFAULT_FORCED_SELL_MIN_PRICE = 0.0    # absolute sell-price floor (€/kWh)
 DEFAULT_ENABLE_PV_CUT_WHEN_FULL = False
 DEFAULT_PV_CUT_RESUME_SOC = 97.0       # percent; resume third-party PV below this
