@@ -2596,10 +2596,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return day_totals(self.realized_cost_today_records)
 
     @property
-    @property
     def currency(self) -> str:
         """The one currency this install operates in."""
-        return getattr(self, "_locale", None).currency if getattr(self, "_locale", None) is not None else "EUR"
+        return self._locale.currency
 
     async def _async_check_locale_money(self) -> None:
         """Report locale money problems without changing anything."""
