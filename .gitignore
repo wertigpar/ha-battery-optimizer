@@ -17,6 +17,10 @@
 !/.github/
 !/.github/**
 
+# ── Allowed: offline regression tests ────────────────────────────────
+!/tests/
+!/tests/*.py
+
 # ── Allowed: integration code ──────────────────────────────────────────
 !/custom_components/
 !/custom_components/**
