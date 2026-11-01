@@ -464,6 +464,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_ha_started: CALLBACK_TYPE | None = None
         self._unsub_startup: CALLBACK_TYPE | None = None
         self._startup_attempts: int = 0
+        self._startup_retry_delay_s: int = self._STARTUP_RETRY_DELAY_S
         self._last_result: OptimizationResult | None = None
         self._last_result_tomorrow: OptimizationResult | None = None
         self._last_run: datetime | None = None
@@ -1787,7 +1788,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # Startup run — short grace, then retry while Emaldo SoC is unreadable.
     _STARTUP_GRACE_S = 15
     _STARTUP_RETRY_DELAY_S = 30
-    _STARTUP_MAX_ATTEMPTS = 4
+    _STARTUP_MAX_RETRY_DELAY_S = 300
 
     def _load_accuracy_history(self) -> list[dict]:
         """Load persisted accuracy history from the JSON sidecar file."""
@@ -2092,8 +2093,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         idempotent: no marker means nothing to undo.
 
         Driven from run_optimizer *and* from the 5-min forced-sell tick.  The
-        startup watcher gives up without ever calling run_optimizer when
-        Emaldo's SoC is still unreadable after a reboot - precisely the state a
+        startup watcher cannot call run_optimizer while Emaldo's SoC is
+        still unreadable after a reboot - precisely the state a
         reboot during a sell window leaves behind - so with run_optimizer as
         the only caller the switch stayed ON for up to optimizer_interval.
 
@@ -5033,27 +5034,24 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _startup_callback(self, _now) -> None:
         """Run optimizer once after startup to restore sensor state.
 
-        Retries with a growing delay while the battery SoC is unreadable
-        (Emaldo stream still establishing).  After ``_STARTUP_MAX_ATTEMPTS``
-        it gives up — the checkpoint interval / price watcher take over.
+        Retry while the battery SoC is unreadable (Emaldo stream still
+        establishing), backing off to at most five minutes between attempts.
+        Skip retries if another trigger has already completed a run this session.
         """
         self._unsub_startup = None
         if self._ran_this_session:
             return  # Already ran this session (e.g. Nordpool triggered first)
         self._startup_attempts += 1
-        if self._startup_attempts > self._STARTUP_MAX_ATTEMPTS:
-            _LOGGER.warning(
-                "Startup run gave up after %d attempts — battery SoC unreadable; "
-                "checkpoint/price watchers will take over",
-                self._STARTUP_MAX_ATTEMPTS,
-            )
-            return
         if self._get_battery_soc() is None:
+            delay_s = self._startup_retry_delay_s
+            self._startup_retry_delay_s = min(
+                delay_s * 2, self._STARTUP_MAX_RETRY_DELAY_S
+            )
             _LOGGER.info(
                 "Startup run attempt %d — battery SoC not ready, retrying in %ds",
-                self._startup_attempts, self._STARTUP_RETRY_DELAY_S,
+                self._startup_attempts, delay_s,
             )
-            self._schedule_startup_run(self._STARTUP_RETRY_DELAY_S)
+            self._schedule_startup_run(delay_s)
             return
         _LOGGER.info("Startup delayed run — populating optimizer sensors")
         self.hass.async_create_task(
