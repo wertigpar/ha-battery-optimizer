@@ -65,6 +65,17 @@ buy price avoided (self-consumption), not the sell/export price.
 
 The optimizer compares its plan against the battery's internal AI schedule (read from the Emaldo integration). Only slots where the optimizer disagrees with the battery's internal plan are overridden. Matching slots are left to follow the internal schedule (value 128 = no override). The schedule is pushed as a rolling 96-slot E2E packet: positions at or after the current time-of-day slot carry today's plan, while positions before it carry tomorrow's plan (when available). After overrides are applied, the Emaldo schedule state is refreshed from the battery.
 
+**Override re-assertion:**
+
+An unchanged plan does not prove the override is still live on the battery: the device can stop enforcing it and fall back to its internal AI schedule while Emaldo's `plan_source` keeps reading `Override` (that value comes from a cached read-back, so it is not a health check). A checkpoint that finds the plan unchanged therefore re-sends the override when any of these hold:
+
+- there has been no successful push yet this session;
+- the last push failed within the last 10 minutes;
+- the last successful push is more than 30 minutes old;
+- plan accuracy shows a large discharge shortfall: at least 0.35 kWh planned since the last run but less than 25 % delivered, and the last push is at least 15 minutes old (so the shortfall can reflect it).
+
+A push that fails on every attempt is logged as a failure, not as success, and is retried at the next checkpoint. The Emaldo `apply_bulk_schedule` service returns nothing on failure, so a push that was accepted but silently dropped cannot be detected directly; the 30-minute and accuracy triggers cover that case. The run snapshot records `push_state` (`ok_at`, `last_push_at`, `fail_streak`, `reassert_reason`).
+
 ## Prerequisites
 
 | Requirement | Details |

@@ -1,5 +1,33 @@
 # Changes
 
+## v0.3.28
+
+### Fixed
+
+- **A lost schedule push is no longer logged as success and never
+  re-asserted** — the push was fire-and-forget: any call that did not raise
+  was logged as "applied successfully", and a checkpoint whose plan had not
+  changed returned before pushing at all, treating "plan unchanged" as
+  "override still live". With the relay dropping the override (the Emaldo
+  service returns nothing on failure), the battery could run its own AI
+  schedule all day while `plan_source` still read `Override`; in #36 it grid
+  charged 2.1 kWh against an all-discharge plan.
+
+  The coordinator now tracks push outcomes (`last push`, `last successful
+  push`, failure streak). An unchanged-plan checkpoint re-sends the override
+  when there has been no successful push, the last push failed within 10
+  minutes, the last successful push is over 30 minutes old, or plan accuracy
+  shows a large discharge shortfall (>= 0.35 kWh planned, < 25 % delivered,
+  last push >= 15 minutes old). A push that fails on every attempt is logged
+  as a failure and retried at the next checkpoint. The run snapshot gains
+  `push_state` (`ok_at`, `last_push_at`, `fail_streak`, `reassert_reason`).
+  Reported in #36. File: `coordinator.py`.
+
+  Not covered: a push that the device accepts but silently drops cannot be
+  detected directly until the Emaldo service returns a result; the time and
+  accuracy triggers bound how long it can go unnoticed. Judging stream
+  staleness over several samples rather than one is not part of this change.
+
 ## v0.3.27
 
 ### Fixed
