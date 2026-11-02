@@ -468,6 +468,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_result: OptimizationResult | None = None
         self._last_result_tomorrow: OptimizationResult | None = None
         self._last_run: datetime | None = None
+        self._last_push_at: datetime | None = None
+        self._last_push_ok_at: datetime | None = None
+        self._last_push_overrides: int | None = None
+        self._last_sent_slots: list[int] | None = None
+        self._push_fail_streak: int = 0
+        self._last_push_fail_at: datetime | None = None
+        self._enforcement_reassert_min_s = 1800
+        self._accuracy_reassert_shortfall_kwh = 0.35
+        self._accuracy_reassert_ratio = 0.25
+        self._accuracy_reassert_cooldown_s = 900
+        self._last_plan_accuracy_for_reassert: dict | None = None
+        self._last_reassert_reason: str | None = None
         # Issue #23: when the optimizer last ATTEMPTED a run, which is not the
         # same as _last_run.  _last_run only advances when a run produced a new
         # plan, and during an evening peak a plan that is being followed is
@@ -2834,6 +2846,42 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if not force and self._last_result is not None:
             if not self._should_reoptimize(soc, cfg):
+                # Read-only: refresh the planned-vs-actual comparison so the
+                # divergence check sees the elapsed slots, not the figure from
+                # the last full run (issue #36).
+                fresh_accuracy = self._compute_plan_accuracy(now_slot)
+                if fresh_accuracy is not None:
+                    self._last_plan_accuracy_for_reassert = dict(fresh_accuracy)
+                reassert, reassert_reason = self._should_reassert_override()
+                if reassert:
+                    _LOGGER.info(
+                        "Plan unchanged but enforcement unconfirmed (%s) — re-asserting override",
+                        reassert_reason,
+                    )
+                    self._last_reassert_reason = reassert_reason
+                    push_overrides = await self._push_schedule(
+                        self._last_result, self._last_result_tomorrow
+                    )
+                    self.async_set_updated_data({
+                        "result": self._last_result,
+                        "result_tomorrow": self._last_result_tomorrow,
+                        "last_run": self._last_run.isoformat() if self._last_run else None,
+                        "reason": reason,
+                        "activated_time": self._activated_time,
+                    })
+                    await self._capture_run_snapshot(
+                        {
+                            "state": "reassert_push",
+                            "planned": True,
+                            "reason": reason,
+                            "initial_soc_pct": soc,
+                            "start_slot": now_slot,
+                            "push_overrides": push_overrides,
+                            "reassert_reason": reassert_reason,
+                            "push_fail_streak": self._push_fail_streak,
+                        }
+                    )
+                    return self._last_result
                 _LOGGER.info("Skipping optimization — no significant changes")
                 await self._capture_run_snapshot(
                     {
@@ -2850,6 +2898,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         new_accuracy = self._compute_plan_accuracy(now_slot)
         if new_accuracy is not None:
             self._plan_accuracy = new_accuracy
+            self._last_plan_accuracy_for_reassert = dict(new_accuracy)
             await self._record_accuracy(new_accuracy)
             _LOGGER.info(
                 "Plan accuracy (%d slots): "
@@ -3085,6 +3134,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "cycled_kwh": round(result.emaldo_cycled_kwh, 3),
                 "import_kwh": round(result.emaldo_import_kwh, 3),
                 "export_kwh": round(result.emaldo_export_kwh, 3),
+            },
+            "push_state": {
+                "ok_at": self._last_push_ok_at.isoformat() if self._last_push_ok_at else None,
+                "last_push_at": self._last_push_at.isoformat() if self._last_push_at else None,
+                "fail_streak": self._push_fail_streak,
+                "reassert_reason": self._last_reassert_reason,
             },
         })
 
@@ -4644,6 +4699,41 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await asyncio.sleep(STALE_PUSH_RETRY_BACKOFF_S)
 
         return overrides_needed
+
+    def _should_reassert_override(self) -> tuple[bool, str | None]:
+        """Force re-push even if plan unchanged (issue #36)."""
+        if not self._emaldo_control_enabled:
+            return False, None
+        now = dt_util.now()
+        if self._push_fail_streak > 0 and self._last_push_fail_at is not None:
+            if (now - self._last_push_fail_at).total_seconds() < 600:
+                return True, "push_failed_recently"
+        if self._last_push_ok_at is None:
+            if self._last_push_at is not None:
+                if (now - self._last_push_at).total_seconds() < 300:
+                    return False, None
+            return True, "no_successful_push"
+        last = self._last_push_ok_at
+        if last.tzinfo is None:
+            age = (now.replace(tzinfo=None) - last).total_seconds()
+        else:
+            age = (now - last).total_seconds()
+        if age >= self._enforcement_reassert_min_s:
+            return True, "stale_push"
+        acc = self._last_plan_accuracy_for_reassert
+        if acc and acc.get("elapsed_slots"):
+            pd = acc.get("planned_discharge_kwh") or 0.0
+            ad = acc.get("actual_discharge_kwh")
+            # Cooldown: a fresh push needs time to show up in the actuals, so
+            # do not re-push on every checkpoint while the shortfall persists.
+            if (
+                age >= self._accuracy_reassert_cooldown_s
+                and pd >= self._accuracy_reassert_shortfall_kwh
+                and ad is not None
+                and ad < pd * self._accuracy_reassert_ratio
+            ):
+                return True, "accuracy_divergence"
+        return False, None
 
     def _compute_activated_time(
         self,
