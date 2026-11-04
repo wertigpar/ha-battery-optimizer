@@ -833,6 +833,10 @@ class ScheduleChartSensor(_BaseOptimizerSensor):
         if guard is not None:
             attrs["soc_guard_marker"] = guard
         attrs["soc_history"] = self.coordinator.actual_soc_history
+        # Issue #36: push and device read-back bookkeeping, so a dashboard can
+        # alarm on a lost override (plan_source cannot: it keeps the last
+        # override read-back).
+        attrs["enforcement"] = self.coordinator.enforcement_state
         return attrs
 
 

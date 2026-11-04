@@ -103,6 +103,13 @@ from .const import (
     DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR,
     DEFAULT_PRECHARGE_HORIZON_DAYS,
     DEFAULT_PRECHARGE_PUBLISH_HOUR,
+    CONF_CHEAP_CHARGE_ENABLED,
+    CONF_CHEAP_CHARGE_PRICE_THRESHOLD,
+    CONF_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
+    DEFAULT_CHEAP_CHARGE_ENABLED,
+    DEFAULT_CHEAP_CHARGE_THRESHOLD_FRACTION,
+    DEFAULT_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
+    CHEAP_CHARGE_MIN_NEED_KWH,
     NORD_POOL_PUBLISH_TZ,
     NORD_POOL_PUBLISH_HOUR,
     PUBLISH_CUTOFF_SLOT,    SOLAR_FORECAST_P10, SOLAR_FORECAST_P50,
@@ -136,6 +143,14 @@ from .const import (
     CONF_STALE_PUSH_RETRY_COUNT,
     DEFAULT_STALE_PUSH_RETRY_COUNT,
     STALE_PUSH_RETRY_BACKOFF_S,
+    PUSH_FAIL_REASSERT_WINDOW_S,
+    PUSH_SETTLE_S,
+    ENFORCEMENT_REASSERT_MIN_S,
+    ACCURACY_REASSERT_COOLDOWN_S,
+    ACCURACY_REASSERT_SHORTFALL_KWH,
+    ACCURACY_REASSERT_RATIO,
+    ENFORCEMENT_CHECK_SETTLE_S,
+    ENFORCEMENT_REPUSH_MIN_S,
     CONF_ENABLE_PV_CUT_WHEN_FULL,
     CONF_PV_CUT_RESUME_SOC,
     DEFAULT_ENABLE_PV_CUT_WHEN_FULL,
@@ -160,6 +175,7 @@ from .optimizer import (
     interpolate_solar_to_15min,
     optimize,
     speculative_precharge_slots,
+    cheap_charge_slots,
     _simulate_soc_trajectory,
     _soc_to_charge_target,
 )
@@ -187,6 +203,7 @@ from .cost_history import (
 )
 from .runtime_state import prune_plan_slots, rebuild_runtime, serialize_runtime
 from .plan_export import render_analysis
+from . import push_state
 from . import marker_io
 from . import sale_state
 
@@ -465,6 +482,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_startup: CALLBACK_TYPE | None = None
         self._startup_attempts: int = 0
         self._startup_retry_delay_s: int = self._STARTUP_RETRY_DELAY_S
+        self._startup_stopped: bool = False
+        self._startup_failed_runs: int = 0
         self._last_result: OptimizationResult | None = None
         self._last_result_tomorrow: OptimizationResult | None = None
         self._last_run: datetime | None = None
@@ -474,12 +493,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_sent_slots: list[int] | None = None
         self._push_fail_streak: int = 0
         self._last_push_fail_at: datetime | None = None
-        self._enforcement_reassert_min_s = 1800
-        self._accuracy_reassert_shortfall_kwh = 0.35
-        self._accuracy_reassert_ratio = 0.25
-        self._accuracy_reassert_cooldown_s = 900
+        # Issue #36 thresholds (instance attributes so tests can tighten them).
+        self._enforcement_reassert_min_s = ENFORCEMENT_REASSERT_MIN_S
+        self._accuracy_reassert_shortfall_kwh = ACCURACY_REASSERT_SHORTFALL_KWH
+        self._accuracy_reassert_ratio = ACCURACY_REASSERT_RATIO
+        self._accuracy_reassert_cooldown_s = ACCURACY_REASSERT_COOLDOWN_S
         self._last_plan_accuracy_for_reassert: dict | None = None
         self._last_reassert_reason: str | None = None
+        # Device read-back of the pushed override (issue #36).
+        self._enforcement_confirmed_at: datetime | None = None
+        self._enforcement_lost_at: datetime | None = None
+        self._enforcement_repush_count: int = 0
+        self._last_enforcement_repush_at: datetime | None = None
         # Issue #23: when the optimizer last ATTEMPTED a run, which is not the
         # same as _last_run.  _last_run only advances when a run produced a new
         # plan, and during an evening peak a plan that is being followed is
@@ -498,7 +523,6 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # SoC Guard state
         self._unsub_guard: CALLBACK_TYPE | None = None
         self._current_guard_marker: int | None = None
-        self._last_sent_slots: list[int] | None = None
         # Manual selling (forced sell) actuator state
         self._manual_selling_active: bool = False
         # Issue #23 cause B: Emaldo refuses Manual selling while Sell back to
@@ -1801,6 +1825,12 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     _STARTUP_GRACE_S = 15
     _STARTUP_RETRY_DELAY_S = 30
     _STARTUP_MAX_RETRY_DELAY_S = 300
+    # Startup runs that reached run_optimizer but produced no plan (no
+    # prices, parse error, SoC dropped out) before the startup retry gives
+    # up and leaves the field to the periodic checkpoint.  12 runs at the
+    # capped 300 s cadence is about an hour; a misconfigured price source
+    # must not log an ERROR every five minutes forever.
+    _STARTUP_MAX_FAILED_RUNS = 12
 
     def _load_accuracy_history(self) -> list[dict]:
         """Load persisted accuracy history from the JSON sidecar file."""
@@ -1847,6 +1877,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         snapshot=self._last_run_actual_snapshot or {},
                         plan_slots=prune_plan_slots(
                             self._last_result.slots, self._last_run_slot
+                        ),
+                        last_push_ok_at=(
+                            self._last_push_ok_at.isoformat()
+                            if self._last_push_ok_at else None
                         ),
                     ),
                     fh,
@@ -2310,6 +2344,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_known_soc = restored["plan_slots"][-1][2]
         self._soc_live_read_done = False  # fresh session — no live read yet
         self._ran_this_session = False     # no run completed this session yet
+        # Issue #36: the device keeps its schedule across our restart, so the
+        # last accepted push is still the last accepted push.  Without this
+        # the first unchanged-plan checkpoint after every restart re-pushes
+        # for "no_successful_push".
+        restored_push = restored.get("last_push_ok_at")
+        if restored_push and self._last_push_ok_at is None:
+            try:
+                self._last_push_ok_at = datetime.fromisoformat(restored_push)
+                self._last_push_at = self._last_push_ok_at
+            except ValueError:
+                pass
         _LOGGER.info(
             "Restored last-run runtime state: slot %d, %d plan slots, scale %.3f",
             self._last_run_slot,
@@ -3019,6 +3064,21 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 tail_solar=solar_tomorrow if prices_tomorrow is not None else None,
             )
 
+        if self.config.get(CONF_CHEAP_CHARGE_ENABLED, DEFAULT_CHEAP_CHARGE_ENABLED):
+            # Issue #31: nearly free energy before tomorrow's prices exist.
+            # Layered after the pre-charge, with the same cross-day tail so
+            # the forecast stays continuous at midnight.
+            self._apply_cheap_charge(
+                result, buy_prices, solar, cfg, soc, now_slot,
+                tomorrow_available=bool(prices_tomorrow),
+                tail_result=(
+                    self._last_result_tomorrow
+                    if prices_tomorrow is not None
+                    else None
+                ),
+                tail_solar=solar_tomorrow if prices_tomorrow is not None else None,
+            )
+
         if prices_tomorrow is not None:
             result_tomorrow = self._last_result_tomorrow
             if has_user_rules and result_tomorrow is not None:
@@ -3136,8 +3196,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "export_kwh": round(result.emaldo_export_kwh, 3),
             },
             "push_state": {
+                **self.enforcement_state,
                 "ok_at": self._last_push_ok_at.isoformat() if self._last_push_ok_at else None,
-                "last_push_at": self._last_push_at.isoformat() if self._last_push_at else None,
                 "fail_streak": self._push_fail_streak,
                 "reassert_reason": self._last_reassert_reason,
             },
@@ -3366,32 +3426,117 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not slots:
             return
 
-        # Suppress optimizer discharges from the first precharge slot onward so
-        # the hedge's safety top-up isn't immediately drained back down by the
-        # optimizer's "end the day low" plan (cheap-tomorrow case).  This removes
-        # the charge/discharge bounce in the night forecast.  User-set discharges
-        # and any pre-hedge evening discharges are preserved.
-        hold_from = min(slots)
-        sources = self._last_sources
-        suppress: set[int] = set()
-        for sp in result.slots:
-            if sp.index < hold_from or sp.action != "discharge":
-                continue
-            if (
-                sources is not None
-                and sp.index < len(sources)
-                and sources[sp.index] == "user"
-            ):
-                continue
-            suppress.add(sp.index)
-
         safety_target = (
             cfg.soc_min
             + float(self.config.get(
                 CONF_PRECHARGE_SAFETY_SOC, DEFAULT_PRECHARGE_SAFETY_SOC))
             * (cfg.soc_max - cfg.soc_min)
         )
-        charge_byte = _soc_to_charge_target(safety_target)
+        self._force_charge_slots(
+            result, slots, cfg, current_soc_pct, start_slot,
+            _soc_to_charge_target(safety_target),
+            solar_15min=solar_15min,
+            tail_result=tail_result,
+            tail_solar=tail_solar,
+            suppress_later_discharge=True,
+            label="Speculative pre-charge",
+            target_pct=safety_target,
+        )
+
+    def _apply_cheap_charge(
+        self,
+        result: OptimizationResult,
+        buy_prices: list[float],
+        solar_15min: list[float],
+        cfg: BatteryConfig,
+        current_soc_pct: float,
+        start_slot: int,
+        *,
+        tomorrow_available: bool,
+        tail_result: OptimizationResult | None = None,
+        tail_solar: list[float] | None = None,
+    ) -> None:
+        """Charge today's nearly-free slots in place (issue #31).
+
+        Selection is the pure ``cheap_charge_slots``; the rewrite and the
+        trajectory re-simulation are shared with the speculative pre-charge.
+        Unlike the pre-charge it does not suppress later discharges: the
+        cheap energy is meant to be used, by today's plan or tomorrow's.
+        """
+        threshold = float(self.config.get(
+            CONF_CHEAP_CHARGE_PRICE_THRESHOLD,
+            self._locale.precharge_price_ceiling * DEFAULT_CHEAP_CHARGE_THRESHOLD_FRACTION,
+        ))
+        only_unknown = bool(self.config.get(
+            CONF_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
+            DEFAULT_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
+        ))
+        slots = cheap_charge_slots(
+            buy_prices, solar_15min, cfg, current_soc_pct,
+            now_slot=start_slot,
+            tomorrow_available=tomorrow_available,
+            only_when_tomorrow_unknown=only_unknown,
+            price_threshold=threshold,
+            plan_actions={sp.index: sp.action for sp in result.slots},
+            min_need_kwh=CHEAP_CHARGE_MIN_NEED_KWH,
+        )
+        if not slots:
+            return
+        _LOGGER.info(
+            "Cheap-price charge: %d slot(s) at or below %.4f %s/kWh "
+            "(cheapest %.4f), tomorrow prices %s",
+            len(slots), threshold, self.currency,
+            min(buy_prices[s] for s in slots),
+            "known" if tomorrow_available else "unknown",
+        )
+        self._force_charge_slots(
+            result, slots, cfg, current_soc_pct, start_slot,
+            _soc_to_charge_target(cfg.soc_max),
+            solar_15min=solar_15min,
+            tail_result=tail_result,
+            tail_solar=tail_solar,
+            suppress_later_discharge=False,
+            label="Cheap-price charge",
+            target_pct=cfg.soc_max,
+        )
+
+    def _force_charge_slots(
+        self,
+        result: OptimizationResult,
+        slots: set[int],
+        cfg: BatteryConfig,
+        current_soc_pct: float,
+        start_slot: int,
+        charge_byte: int,
+        *,
+        solar_15min: list[float],
+        tail_result: OptimizationResult | None,
+        tail_solar: list[float] | None,
+        suppress_later_discharge: bool,
+        label: str,
+        target_pct: float,
+    ) -> None:
+        """Rewrite ``slots`` to charge and re-simulate the SoC trajectory.
+
+        Shared by the speculative pre-charge and the cheap-price charge.
+        ``suppress_later_discharge`` turns optimizer discharges from the first
+        forced slot onward into idle (the pre-charge hedge must not be
+        drained straight back down); user-set discharges are always kept.
+        """
+        suppress: set[int] = set()
+        if suppress_later_discharge:
+            hold_from = min(slots)
+            sources = self._last_sources
+            for sp in result.slots:
+                if sp.index < hold_from or sp.action != "discharge":
+                    continue
+                if (
+                    sources is not None
+                    and sp.index < len(sources)
+                    and sources[sp.index] == "user"
+                ):
+                    continue
+                suppress.add(sp.index)
 
         n_charge = n_discharge = n_idle = 0
         charge_targets: dict[int, int] = {}
@@ -3482,8 +3627,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result.discharge_slots = n_discharge
         result.idle_slots = n_idle
         _LOGGER.info(
-            "Speculative pre-charge: forcing charge on %d slot(s) to %.1f%% SoC",
-            len(slots), safety_target,
+            "%s: forcing charge on %d slot(s) to %.1f%% SoC",
+            label, len(slots), target_pct,
         )
 
     @property
@@ -4487,6 +4632,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Issue #23 cause B: withdraw the enable we made - after the sale
         # itself has stopped, never before.
         await self._restore_sell_back_to_grid()
+        if stopped:
+            # Issue #30 (reporter's third point): a plan made while the sale
+            # was running used a SoC that was still falling, so its discharge
+            # floor was too high and the battery idled through the evening
+            # peak.  Re-plan from the settled SoC.  Queued as a task: the
+            # forced-sell lock is held here and run_optimizer's tail takes it.
+            self._schedule_replan("sale_ended")
+
+    def _schedule_replan(self, reason: str) -> None:
+        """Queue a forced optimizer run from a lock-holding or sync context."""
+        self.hass.async_create_task(
+            self.run_optimizer(reason=reason, force=True)
+        )
 
     async def _push_schedule(
         self,
@@ -4673,14 +4831,36 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         push_attempts = stale_push_retries + 1
+        # Issue #36: ask for a service response when ha-emaldo offers one.
+        # Today the service returns None whether or not the device accepted
+        # the schedule; a version that answers {"success": false, ...} is
+        # treated as a failed attempt and retried like an exception.
+        want_response = self._emaldo_push_supports_response()
+        call_kwargs: dict[str, Any] = {"blocking": True}
+        if want_response:
+            call_kwargs["return_response"] = True
+        pushed_at = dt_util.now()
+        self._last_push_at = pushed_at
+        self._last_push_overrides = overrides_needed
+        accepted = False
         for attempt in range(1, push_attempts + 1):
             try:
-                await self.hass.services.async_call(
+                response = await self.hass.services.async_call(
                     EMALDO_DOMAIN,
                     "apply_bulk_schedule",
                     service_data,
-                    blocking=True,
+                    **call_kwargs,
                 )
+                if (
+                    want_response
+                    and isinstance(response, dict)
+                    and response.get("success") is False
+                ):
+                    raise RuntimeError(
+                        "device rejected the schedule: "
+                        f"{response.get('failure_reason') or 'no reason given'}"
+                    )
+                accepted = True
                 _LOGGER.info(
                     "Rolling schedule applied to Emaldo successfully%s",
                     f" (attempt {attempt}/{push_attempts})" if stream_stale else "",
@@ -4698,42 +4878,157 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     await asyncio.sleep(STALE_PUSH_RETRY_BACKOFF_S)
 
+        # Issue #36: record the outcome.  _should_reassert_override and the
+        # run snapshot's push_state read these; before v0.3.29 they were
+        # declared but never written, so every unchanged-plan checkpoint
+        # re-pushed for "no_successful_push" and the diagnostics were empty.
+        if accepted:
+            self._last_push_ok_at = pushed_at
+            self._push_fail_streak = 0
+        else:
+            self._push_fail_streak += 1
+            self._last_push_fail_at = pushed_at
+            _LOGGER.error(
+                "Schedule push to Emaldo failed on all %d attempt(s) "
+                "(failure streak %d) — the override is re-sent at the next "
+                "checkpoint or enforcement check",
+                push_attempts, self._push_fail_streak,
+            )
+
         return overrides_needed
 
     def _should_reassert_override(self) -> tuple[bool, str | None]:
-        """Force re-push even if plan unchanged (issue #36)."""
+        """Force re-push even if plan unchanged (issue #36).
+
+        The decision itself lives in the pure ``push_state`` module; this
+        only gathers the coordinator's bookkeeping and thresholds.
+        """
         if not self._emaldo_control_enabled:
             return False, None
+        return push_state.decide_reassert(
+            now=dt_util.now(),
+            last_push_at=self._last_push_at,
+            last_push_ok_at=self._last_push_ok_at,
+            last_push_fail_at=self._last_push_fail_at,
+            fail_streak=self._push_fail_streak,
+            accuracy=self._last_plan_accuracy_for_reassert,
+            push_fail_window_s=PUSH_FAIL_REASSERT_WINDOW_S,
+            push_settle_s=PUSH_SETTLE_S,
+            stale_after_s=self._enforcement_reassert_min_s,
+            accuracy_cooldown_s=self._accuracy_reassert_cooldown_s,
+            accuracy_shortfall_kwh=self._accuracy_reassert_shortfall_kwh,
+            accuracy_ratio=self._accuracy_reassert_ratio,
+        )
+
+    def _emaldo_push_supports_response(self) -> bool:
+        """Whether apply_bulk_schedule can return a response (issue #36).
+
+        Detected at call time through the service registry rather than a
+        ha-emaldo version, so a future service that answers is used as soon
+        as it exists.  Anything unexpected reads as "no".
+        """
+        supports = getattr(self.hass.services, "supports_response", None)
+        if not callable(supports):
+            return False
+        try:
+            answer = supports(EMALDO_DOMAIN, "apply_bulk_schedule")
+        except Exception:  # noqa: BLE001
+            return False
+        value = getattr(answer, "value", answer)
+        return isinstance(value, str) and value.lower() in ("optional", "only")
+
+    def _device_slot_source_now(self, now: datetime) -> str | None:
+        """The Emaldo chart's ``source`` for the current slot, or None."""
+        sensor_id = self._resolve_emaldo_entity("schedule_chart")
+        if not sensor_id:
+            return None
+        state = self.hass.states.get(sensor_id)
+        if state is None:
+            return None
+        return push_state.current_slot_source(
+            state.attributes.get("schedule"), now
+        )
+
+    @callback
+    def _enforcement_tick_callback(self, _now) -> None:
+        """5-minute read-back of the device against the last push (issue #36)."""
+        if not self._emaldo_control_enabled or self._last_result is None:
+            return
+        if self._last_sent_slots is None or self._last_push_at is None:
+            return
+        self.hass.async_create_task(self._check_enforcement())
+
+    async def _check_enforcement(self) -> None:
+        """Re-push when the device reports the current slot as not overridden.
+
+        Issue #36: the checkpoint is the wrong cadence for an enforcement
+        check (up to two hours), and ``plan_source`` cannot serve as the
+        health signal because it keeps the last override read-back.  The
+        Emaldo schedule chart reports per slot whether the device runs an
+        override or its internal schedule; if an override was sent for the
+        current slot and the device says internal, enforcement has been
+        lost.  Rate limited so a relay that is genuinely down is not fought
+        every tick, and silent when the chart carries no usable source.
+        """
+        if not self._emaldo_control_enabled or self._last_result is None:
+            return
+        if self._last_sent_slots is None or self._last_push_at is None:
+            return
         now = dt_util.now()
-        if self._push_fail_streak > 0 and self._last_push_fail_at is not None:
-            if (now - self._last_push_fail_at).total_seconds() < 600:
-                return True, "push_failed_recently"
-        if self._last_push_ok_at is None:
-            if self._last_push_at is not None:
-                if (now - self._last_push_at).total_seconds() < 300:
-                    return False, None
-            return True, "no_successful_push"
-        last = self._last_push_ok_at
-        if last.tzinfo is None:
-            age = (now.replace(tzinfo=None) - last).total_seconds()
-        else:
-            age = (now - last).total_seconds()
-        if age >= self._enforcement_reassert_min_s:
-            return True, "stale_push"
-        acc = self._last_plan_accuracy_for_reassert
-        if acc and acc.get("elapsed_slots"):
-            pd = acc.get("planned_discharge_kwh") or 0.0
-            ad = acc.get("actual_discharge_kwh")
-            # Cooldown: a fresh push needs time to show up in the actuals, so
-            # do not re-push on every checkpoint while the shortfall persists.
-            if (
-                age >= self._accuracy_reassert_cooldown_s
-                and pd >= self._accuracy_reassert_shortfall_kwh
-                and ad is not None
-                and ad < pd * self._accuracy_reassert_ratio
-            ):
-                return True, "accuracy_divergence"
-        return False, None
+        since_push = push_state.age_seconds(now, self._last_push_at)
+        # Too fresh: the device has not had time to reflect the push.  Too
+        # old: the rolling 24 h window of that push has passed.
+        if since_push < ENFORCEMENT_CHECK_SETTLE_S or since_push > 24 * 3600:
+            return
+        now_slot = _current_slot_index()
+        sent = (
+            self._last_sent_slots[now_slot]
+            if 0 <= now_slot < len(self._last_sent_slots) else None
+        )
+        source = self._device_slot_source_now(now)
+        decision = push_state.decide_enforcement(sent_value=sent, source=source)
+        if decision == push_state.ENFORCEMENT_CONFIRMED:
+            self._enforcement_confirmed_at = now
+            return
+        if decision != push_state.ENFORCEMENT_LOST:
+            return
+        self._enforcement_lost_at = now
+        last = self._last_enforcement_repush_at
+        if last is not None and push_state.age_seconds(now, last) < ENFORCEMENT_REPUSH_MIN_S:
+            return
+        _LOGGER.warning(
+            "Override not enforced: Emaldo reports slot %d as %r although "
+            "override 0x%02X was pushed at %s — re-pushing the rolling "
+            "schedule (issue #36)",
+            now_slot, source, sent, self._last_push_at.isoformat(),
+        )
+        self._last_enforcement_repush_at = now
+        self._enforcement_repush_count += 1
+        self._last_reassert_reason = "enforcement_lost"
+        await self._push_schedule(self._last_result, self._last_result_tomorrow)
+        self._notify_listeners()
+
+    def _notify_listeners(self) -> None:
+        """Refresh entities after a state change outside a full run."""
+        notify = getattr(self, "async_update_listeners", None)
+        if callable(notify):
+            notify()
+
+    @property
+    def enforcement_state(self) -> dict[str, Any]:
+        """Push and read-back bookkeeping for the schedule chart sensor."""
+        def _iso(value: datetime | None) -> str | None:
+            return value.isoformat() if value else None
+
+        return {
+            "last_push_at": _iso(self._last_push_at),
+            "last_push_ok_at": _iso(self._last_push_ok_at),
+            "push_fail_streak": self._push_fail_streak,
+            "confirmed_at": _iso(self._enforcement_confirmed_at),
+            "lost_at": _iso(self._enforcement_lost_at),
+            "repush_count": self._enforcement_repush_count,
+            "last_reassert_reason": self._last_reassert_reason,
+        }
 
     def _compute_activated_time(
         self,
@@ -5070,6 +5365,22 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._unsub_listeners.append(unsub)
 
+        # 6c) Override enforcement read-back — every 5 min (issue #36): if
+        #     the device reports the current slot as internal although an
+        #     override was pushed, re-push now instead of at the checkpoint.
+        unsub = async_track_time_interval(
+            self.hass,
+            self._enforcement_tick_callback,
+            timedelta(minutes=5),
+        )
+        self._unsub_listeners.append(unsub)
+
+        # 6d) Forced-sell restart recovery runs once now, not only from the
+        #     first 5-min tick, so a sale whose window closed during the
+        #     restart is stopped at once (issue #30).  Safe before Emaldo is
+        #     up: an unreadable switch answers "unknown" and the tick retries.
+        self.hass.async_create_task(self._restore_manual_selling_after_restart())
+
         # 7) Realized cost capture — every 15 min aligned to :00/:15/:30/:45.
         # Registered unconditionally; _capture_cost_slot skips until a grid
         # sensor (explicit override or auto-discovered from the linked Emaldo
@@ -5133,10 +5444,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return  # Already ran this session (e.g. Nordpool triggered first)
         self._startup_attempts += 1
         if self._get_battery_soc() is None:
-            delay_s = self._startup_retry_delay_s
-            self._startup_retry_delay_s = min(
-                delay_s * 2, self._STARTUP_MAX_RETRY_DELAY_S
-            )
+            delay_s = self._next_startup_delay()
             _LOGGER.info(
                 "Startup run attempt %d — battery SoC not ready, retrying in %ds",
                 self._startup_attempts, delay_s,
@@ -5144,9 +5452,52 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._schedule_startup_run(delay_s)
             return
         _LOGGER.info("Startup delayed run — populating optimizer sensors")
-        self.hass.async_create_task(
+        task = self.hass.async_create_task(
             self.run_optimizer(reason="startup", force=True)
         )
+        task.add_done_callback(self._startup_run_done)
+
+    def _next_startup_delay(self) -> int:
+        """Return the current startup retry delay and advance the backoff."""
+        delay_s = self._startup_retry_delay_s
+        self._startup_retry_delay_s = min(
+            delay_s * 2, self._STARTUP_MAX_RETRY_DELAY_S
+        )
+        return delay_s
+
+    @callback
+    def _startup_run_done(self, task) -> None:
+        """Keep retrying when the startup run ended without a plan (#34).
+
+        The SoC check in ``_startup_callback`` only covers a sensor that is
+        unreadable when the timer fires.  ``run_optimizer`` can still return
+        without producing a plan after that point — no prices yet, a price
+        parse error, or the SoC dropping out again — and nothing else re-arms
+        the startup timer, so the battery would wait for the next checkpoint.
+        Re-arm with the same backoff until a run completes, unless another
+        trigger already did or the coordinator is shutting down.
+        """
+        if task.cancelled():
+            return
+        err = task.exception()
+        if err is not None:
+            _LOGGER.error("Startup optimizer run failed: %s", err, exc_info=err)
+        if self._ran_this_session or self._startup_stopped:
+            return
+        self._startup_failed_runs += 1
+        if self._startup_failed_runs >= self._STARTUP_MAX_FAILED_RUNS:
+            _LOGGER.warning(
+                "Startup run produced no plan in %d attempts — giving up on the "
+                "startup retry; the periodic checkpoint and the price watcher "
+                "take over. Check the price source and the Emaldo integration.",
+                self._startup_failed_runs,
+            )
+            return
+        delay_s = self._next_startup_delay()
+        _LOGGER.info(
+            "Startup run did not produce a plan — retrying in %ds", delay_s
+        )
+        self._schedule_startup_run(delay_s)
 
     @callback
     def _checkpoint_callback(self, now: datetime) -> None:
@@ -5623,6 +5974,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._unsub_ha_started is not None:
             self._unsub_ha_started()
             self._unsub_ha_started = None
+        self._startup_stopped = True
         if self._unsub_startup is not None:
             self._unsub_startup()
             self._unsub_startup = None

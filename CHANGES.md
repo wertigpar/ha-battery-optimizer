@@ -1,5 +1,124 @@
 # Changes
 
+## v0.3.29
+
+### Fixed
+
+- **The v0.3.28 push bookkeeping for #36 was declared but never written** —
+  `_last_push_at`, `_last_push_ok_at`, `_push_fail_streak` and
+  `_last_push_fail_at` were initialised and never assigned, so
+  `_should_reassert_override` answered "no successful push" at every
+  unchanged-plan checkpoint (re-pushing every `optimizer_interval` by
+  accident), the `stale_push`, `push_failed_recently` and
+  `accuracy_divergence` triggers could never fire, and the run snapshot's
+  `push_state` always read empty. `_push_schedule` now records every
+  outcome: the push time and override count before the call, the accepted
+  time and a reset streak on success, the failure time and an incremented
+  streak when every attempt failed (with one summary ERROR). The last
+  accepted push time is persisted in the runtime-state sidecar so a restart
+  does not re-push for "no successful push". The decision itself moved to
+  the pure `push_state.py` module, and its thresholds to `const.py`.
+  Files: `coordinator.py`, `push_state.py` (new), `runtime_state.py`,
+  `const.py`. Tests: `tests/test_push_state.py`, `tests/test_push_retry.py`.
+
+- **Override enforcement is now verified by reading the device back** — the
+  checkpoint (up to two hours) was the only cadence at which a lost override
+  could be noticed, and `plan_source` cannot serve as the health signal
+  because it keeps the last override read-back. Every 5 minutes the
+  coordinator now compares the byte it last sent for the current slot with
+  the `source` the Emaldo schedule chart reports for that slot. An override
+  that the device reports as `internal` is re-pushed at once (rate limited
+  to one re-push per 10 minutes, not sooner than 2 minutes after a push, and
+  never when the chart carries no usable source). The schedule chart sensor
+  gains an `enforcement` attribute (`last_push_at`, `last_push_ok_at`,
+  `push_fail_streak`, `confirmed_at`, `lost_at`, `repush_count`,
+  `last_reassert_reason`) for dashboards. When a future ha-emaldo
+  `apply_bulk_schedule` returns a response, the coordinator asks for it and
+  treats `success: false` as a failed attempt. Reported in #36.
+  Files: `coordinator.py`, `push_state.py`, `sensor.py`.
+  Tests: `tests/test_enforcement_readback.py`.
+
+- **Forced-sell restart recovery runs once at setup** — it ran only from the
+  first 5-minute tick, so a sale whose window closed during the restart could
+  run up to 5 minutes longer than necessary. The reconcile is now also queued
+  from `async_setup_listeners`; before Emaldo is up it answers "unknown" and
+  the tick retries as before. Follow-up to #30. File: `coordinator.py`.
+
+- **The optimizer re-plans once a forced sale has stopped** — a plan made
+  while the sale was running used a SoC that was still falling, so its
+  discharge floor was too high and the battery idled through the evening
+  peak (#30, the reporter's third point). A confirmed stop, whether Emaldo
+  finished the sale itself or the window-end stop interrupted it, now queues
+  a forced run (`reason=sale_ended`) from the settled SoC.
+  File: `coordinator.py`.
+
+- **Startup retry now also covers a run that ends without a plan** — the
+  v0.3.28 retry only covered a SoC sensor that was unreadable when the timer
+  fired. If `run_optimizer` then ended without a plan (no prices yet, a price
+  parse error, or the SoC dropping out again), nothing re-armed the retry and
+  the battery waited for the next checkpoint. The startup run now re-arms
+  with the same 30 → 300 s backoff whenever it ends without a completed run,
+  logs a failed run instead of dropping it, and stops after shutdown or once
+  another trigger has produced a plan. It gives up after 12 such runs
+  (about an hour) with one WARNING, so a misconfigured price source does
+  not log an ERROR every five minutes forever. Follow-up to #34.
+  File: `coordinator.py`. Tests: `tests/test_startup_retry.py`.
+
+- **Solar-aware grid charging: two-tier Case A floor and a proportional hedge**
+  — on a partial-refill day every discharge had to clear the grid-recharge
+  floor (cheapest future buy through the round trip plus wear, 0.97 SEK/kWh
+  on the #32 day), as if each discharged kWh were bought back from the grid.
+  Solar that the idle-only trajectory would *export* refills any headroom an
+  earlier discharge created, so up to that much discharge is replaced by PV.
+  Grid slots before that overflow now discharge on a tier-1 floor of the
+  displaced export price through the round trip plus wear (0.29 on that
+  day), capped at the overflow that follows the slot, and tier-1 energy is
+  excluded from the grid-charge need so it is never bought back at night.
+  The confidence-hedge value gate is now proportional: the hedge is kept for
+  exactly the evening kWh whose own benefit beats the cost, most expensive
+  slot first, instead of all or nothing on the average price. Both are gated
+  on `grid_charge_solar_aware > 0`; the default plan is byte-identical to
+  v0.3.21. The decision trace gains `case_a_floor_tier1`,
+  `tier1_refill_kwh`, `tier1_discharge_kwh`, `n_tier1_discharge` and
+  `hedge_value_kwh`. Third suggestion in #32. File: `optimizer.py`.
+  Tests: `tests/test_case_a_floor_tier1.py`.
+
+### Added
+
+- **Cheap-price charging** (opt-in) — before tomorrow's prices are
+  published the plan ends at midnight and stored energy has no value past
+  it, so the optimizer bought nothing for an unknown tomorrow even at a zero
+  price (#31). The speculative pre-charge does not cover this: with
+  `precharge_horizon_days = 1` it never fires when the cheap window runs
+  past the publish cutoff, and it stops at the safety SoC. Three new
+  options under *Cheap-price charging*: enable (off), a price threshold
+  (default half of the pre-charge price ceiling), and "only while
+  tomorrow's prices are unknown" (on). Every remaining slot of today at or
+  below the threshold is charged, cheapest first, into the headroom that
+  today's own solar surplus would not fill anyway; slots the plan already
+  charges count, slots it discharges are left alone; one log line per run
+  explains the decision. The rewrite and SoC re-simulation are shared with
+  the pre-charge (`_force_charge_slots`). Texts in en/fi/sv/da/nb.
+  Files: `optimizer.py` (`cheap_charge_slots`), `coordinator.py`,
+  `config_flow.py`, `const.py`, `strings.json`, translations.
+  Tests: `tests/test_cheap_charge.py`.
+
+### Changed
+
+- **Minimum Home Assistant version is now 2025.3.0** in `hacs.json` (was
+  2024.1.0). The integration has used config subentries since v0.3.0, and
+  those arrived in Home Assistant 2025.3; HACS offered the integration to
+  installs that could not load it.
+- **The regression suite is part of the repository and runs in CI** — only
+  `tests/test_startup_retry.py` was tracked; the other test modules, the
+  stub loader in `tests/__init__.py` and `tests/fixtures/` existed only in
+  the maintainer's working copy, and the Validate workflow ran HACS and
+  hassfest only. A `pytest` job (Python 3.13, `homeassistant` installed)
+  now runs on every push and pull request. Files: `.gitignore`,
+  `.github/workflows/validate.yml`.
+- `v0.3.28`'s changelog entry for #36 described push bookkeeping that the
+  release did not contain; the entry above records what v0.3.29 ships.
+
 ## v0.3.28
 
 ### Fixed
@@ -27,6 +146,16 @@
   detected directly until the Emaldo service returns a result; the time and
   accuracy triggers bound how long it can go unnoticed. Judging stream
   staleness over several samples rather than one is not part of this change.
+
+- **Startup no longer gives up while the battery SoC is unreadable** — after
+  a restart with a slow Emaldo start, the startup run retried four times, 30 s
+  apart, and then stopped. Nothing else covered the gap (the periodic
+  checkpoint is up to `optimizer_interval` away, the midnight checkpoint is
+  hours away, and the Nordpool watcher only fires when tomorrow's prices
+  *appear*), so the battery could run without a plan for up to two hours.
+  The startup run now keeps retrying with a backoff of 30, 60, 120, 240 and
+  then 300 s, until a run completes. Reported in #34, fixed in #35 by
+  illusionoftalha. File: `coordinator.py`.
 
 ## v0.3.27
 

@@ -367,6 +367,22 @@ cloudy day the projected solar peak stays low, so the charge is kept exactly whe
 it pays off. The sizing uses the pessimistic (P10) forecast, so an over-optimistic
 solar day does not talk the optimizer into buying energy it will not use.
 
+**Two-tier discharge floor (v0.3.29, same setting).** On a day where solar
+refills only part of the battery, every discharge used to have to clear the
+*grid-recharge floor* — the cheapest future buy price through the round trip,
+plus wear — as if each discharged kWh were bought back from the grid. But solar
+that the plan would otherwise **export** (the battery is full before the surplus
+ends) refills any headroom an earlier discharge created. With the weight above
+`0`, grid slots before that overflow may discharge on a lower floor: the
+displaced export price through the round trip, plus wear (about 0.29 instead of
+0.97 SEK/kWh on the day reported in #32), capped at the overflow that follows the
+slot. That energy is excluded from the grid-charge need, so it is never bought
+back at night. The confidence hedge is proportional for the same reason: the
+pessimistic-forecast top-up is kept only for the evening kWh whose own value
+beats what the displaced PV would have earned, most expensive slot first. The
+plan export shows `case_a_floor_tier1`, `tier1_refill_kwh`,
+`tier1_discharge_kwh` and `hedge_value_kwh` in the decision trace.
+
 > **Why it is not the default.** It changes planning behaviour for everyone, and on
 > some setups a genuinely cloudy next day is best served by the larger charge. It is
 > opt-in per install, and the setting is a continuous weight (`0`–`1.0`) so you can
@@ -541,7 +557,7 @@ The integration creates 20 sensor entities:
 | **Tomorrow Baseline Cost** | monetary | Estimated cost for tomorrow with **no battery** (€). Solar self-consumes first: only the net deficit is imported and only the net surplus exported — the same pricing convention as the internal plan and the optimizer plan, so the three are directly comparable | `import_cost`, `export_revenue`, `import_kwh`, `export_kwh`, `import_energy`, `import_transfer`, `import_tax`, `import_commission`, `export_energy`, `export_commission`, `remaining_slots` |
 | **Tomorrow Emaldo Cost** | monetary | Estimated cost for tomorrow following the Emaldo device's own AI schedule (€), netted for its own cycles | `emaldo_grid_cost`, `emaldo_wear_cost`, `emaldo_cycled_kwh`, `emaldo_import_kwh`, `emaldo_export_kwh`, `emaldo_energy`, `emaldo_transfer`, `emaldo_tax`, `emaldo_commission`, `emaldo_export_energy`, `emaldo_export_commission` |
 | **Tomorrow Optimizer Cost** | monetary | Estimated cost for tomorrow following the optimizer's plan (€). Equals `baseline_cost − net_profit` (`grid_cost + wear_cost`) | `grid_cost`, `wear_cost`, `cycled_kwh`, `grid_import_kwh`, `grid_export_kwh`, `grid_energy`, `grid_transfer`, `grid_tax`, `grid_commission`, `grid_export_energy`, `grid_export_commission` |
-| **Schedule Chart** | diagnostic | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `baseline_cost`, `activated_time`, `soc_guard_marker`, `soc_history` |
+| **Schedule Chart** | diagnostic | Summary string (e.g. `5C 8D 83I`) with full schedule in attributes | `schedule` (list of 96–192 slots), `total_profit`, `baseline_cost`, `activated_time`, `soc_guard_marker`, `soc_history`, `enforcement` (push and device read-back bookkeeping: `last_push_at`, `last_push_ok_at`, `push_fail_streak`, `confirmed_at`, `lost_at`, `repush_count`, `last_reassert_reason` — alarm on `lost_at` advancing or `repush_count` growing; `plan_source` on the Emaldo side cannot serve as this signal because it keeps the last override read-back) |
 | **Manual Sell Schedule** | diagnostic | Forced-sell (price-peak arbitrage) plan window. Summary e.g. `3 slots · 5.2 kWh (battery 4.5 · pv 0.7)`; only present when forced sell is enabled and a profitable window exists | `manual_sell` (per-slot window), `sell_target_kwh`, `sell_revenue`, `sell_profit`, `sources` (`battery`/`pv` slot counts) |
 | **Emaldo Schedule** | diagnostic | Summary string (e.g. `79C 84D 29I`) with Emaldo's internal schedule in attributes. Shows what the battery's own AI planned *before* the optimizer overrides it. | `schedule` (list of 96–192 slots with `mode`, `state`, `buy`, `sell`, `solar`) |
 | **Auto Base Load** | diagnostic | The base load value (kW) currently used by the optimizer | — |
@@ -1252,6 +1268,23 @@ the stop is issued again, rather than leaving the battery exporting to the
 grid unattended. The marker's timestamps are absolute, so a marker written
 before midnight is still understood after it.
 
+**Restart markers on disk.** Two small JSON files in the Home Assistant config
+directory carry this state across restarts:
+`battery_optimizer_sell_back_to_grid_<entry_id>.json` (the integration turned
+*Sell back to grid* on for a window and owes a restore) and
+`battery_optimizer_manual_sell_<entry_id>.json` (a sale was observed running:
+when it started, for which window, and until when). Both are written when the
+state begins and removed when it is confirmed over; they are read once at setup
+and again on every 5-minute tick until nothing is left to reconcile. Leave them
+alone; if one is ever stuck because the disk refuses the delete, the integration
+overwrites it with a payload meaning "nothing to restore". Once a sale has
+stopped, the optimizer re-plans from the settled SoC (`reason: sale_ended`) so
+the next slots are not planned from a reading that was still falling.
+
+**Sell back to grid.** Emaldo refuses *Manual selling* while its *Sell back to
+grid* switch is off. Forced sell turns that switch on for the window and off
+again afterwards; a switch you keep on yourself is left as it is.
+
 ---
 
 ## Speculative Grid Pre-Charge
@@ -1313,6 +1346,42 @@ mornings but high evening prices and weak solar. Raise *Safety SoC* for a bigger
 > optimizer projected *before* the hedge was applied. With the shipped default
 > (`precharge_horizon_days = 1`) tomorrow's prices are unknown, the hedge runs on
 > today only, and there is no second half to discontinuate.
+
+> **What pre-charge does not do.** With `precharge_horizon_days = 1` the hedge never
+> fires when the cheap window runs *past* the publish cutoff (it defers to the
+> post-publish run), and it stops at the safety SoC with a 40 % cap. A day that is
+> cheap or free for most of the daytime is therefore outside its scope; that is
+> what Cheap-Price Charging below is for.
+
+## Cheap-Price Charging
+
+An opt-in rule for days when today's prices are **free or nearly free** before
+tomorrow's prices are published (issue #31). The plan only ever covers today +
+tomorrow, so before the publish it ends at midnight and stored energy has no value
+past it: the optimizer buys nothing for an unknown tomorrow, even at a zero price.
+
+### How it works
+
+1. Runs after the plan (and after the speculative pre-charge), like a user rule.
+2. By default only while **tomorrow's prices are unknown**. As soon as they are
+   published the normal two-day plan takes over; energy already stored is simply used.
+3. Every remaining slot of today whose **effective buy price** (spot + transfer fee +
+   VAT + commission) is at or below the **threshold** is charged, cheapest first.
+4. The amount is the headroom to Max SoC **minus what today's own solar surplus
+   would fill anyway**, so the charge never displaces solar (the lesson of
+   solar-aware grid charging). Slots the plan already charges count toward that
+   amount; slots it discharges (for example a user rule) are left alone.
+5. Min/Max SoC, the charge power limit and the SoC safeguards apply unchanged.
+6. One log line per run names the slot count, the threshold, the cheapest price
+   and whether tomorrow was known.
+
+### Settings (Options → Cheap-price charging)
+
+| Setting | Default | What it does |
+|---|---|---|
+| Enable cheap-price charging | Off | Master switch. |
+| Cheap-price threshold | half of the pre-charge price ceiling (0.035 €/kWh in a EUR install) | Charge when the effective buy price is at or below this. |
+| Only while tomorrow's prices are unknown | On | Off makes the rule act on known-tomorrow days too. |
 
 ---
 

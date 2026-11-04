@@ -442,6 +442,7 @@ def _case_b_grid_charge(
     *,
     hedge_net_cost: float | None = None,
     hedge_net_benefit: float | None = None,
+    hedge_value_kwh: float | None = None,
 ) -> float:
     """How much grid charging may fund toward soc_max (Case B round trip).
 
@@ -495,7 +496,18 @@ def _case_b_grid_charge(
     # it avoids a pricier evening buy (benefit).  Keep the hedge only when the
     # benefit per kWh beats the cost; otherwise trust the median forecast.
     # Both inputs None (no price information) keeps the pre-gate behaviour.
-    if (
+    #
+    # ``hedge_value_kwh`` (issue #32, proportional form): the battery-internal
+    # energy of the discharge slots whose own benefit beats the cost.  The
+    # hedge is then kept for exactly that much above the median ceiling -
+    # the cheap-to-insure evening slots - instead of all or nothing on the
+    # average price.  Takes precedence over the binary gate when given.
+    if hedge_value_kwh is not None:
+        median_ceiling = min(full, max(0.0, soc_max_kwh - available_soc))
+        solar_ceiling = min(
+            solar_ceiling, median_ceiling + max(0.0, float(hedge_value_kwh))
+        )
+    elif (
         hedge_net_cost is not None
         and hedge_net_benefit is not None
         and hedge_net_benefit <= hedge_net_cost
@@ -602,6 +614,82 @@ def speculative_precharge_slots(
         candidates, buy_prices, cfg, current_soc_pct,
         safety_target, band_kwh, max_kwh_frac,
     )
+
+
+def cheap_charge_slots(
+    buy_prices: list[float],
+    solar_15min: list[float],
+    cfg: BatteryConfig,
+    current_soc_pct: float,
+    *,
+    now_slot: int,
+    tomorrow_available: bool,
+    only_when_tomorrow_unknown: bool,
+    price_threshold: float,
+    plan_actions: dict[int, str] | None = None,
+    min_need_kwh: float = 0.05,
+) -> set[int]:
+    """Today's slots to grid-charge because the energy is nearly free (#31).
+
+    Pure / side-effect-free; the coordinator merges the result after
+    optimize() the same way it merges the speculative pre-charge.
+
+    Before the next-day prices are published the plan ends at midnight and
+    stored energy has no value past it, so the optimizer buys nothing for an
+    unknown tomorrow even at a zero price.  This rule fills that gap: every
+    remaining slot of today whose effective buy price is at or below
+    ``price_threshold`` is charged, cheapest first, until the headroom that
+    today's own PV surplus would not fill anyway is used up - so the charge
+    never displaces solar (the #26/#32 lesson).  Slots the plan already
+    charges count toward the need; slots it discharges are left alone.
+
+    Returns the empty set when the rule is restricted to unknown-tomorrow
+    days and tomorrow is known, when no slot is cheap enough, or when PV
+    alone fills the battery.
+    """
+    if only_when_tomorrow_unknown and tomorrow_available:
+        return set()
+    n_today = min(SLOTS_PER_DAY, len(buy_prices))
+    candidates = [
+        s for s in range(max(0, now_slot), n_today)
+        if buy_prices[s] <= price_threshold
+    ]
+    if not candidates:
+        return set()
+    soc_kwh = cfg.capacity_kwh * current_soc_pct / 100.0
+    soc_max_kwh = cfg.capacity_kwh * cfg.soc_max / 100.0
+    headroom = max(0.0, soc_max_kwh - soc_kwh)
+    pv_fill = 0.0
+    for s in range(max(0, now_slot), n_today):
+        solar_kw = solar_15min[s] if s < len(solar_15min) else 0.0
+        surplus_kw = solar_kw - cfg.base_load_kw
+        if surplus_kw > 0:
+            pv_fill += (
+                min(surplus_kw, cfg.max_charge_kw)
+                * SLOT_DURATION_HOURS
+                * cfg.charge_efficiency
+            )
+    pv_fill *= cfg.solar_forecast_margin
+    need = headroom - pv_fill
+    if need < min_need_kwh:
+        return set()
+    per_slot = cfg.max_charge_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
+    if per_slot <= 0:
+        return set()
+    chosen: set[int] = set()
+    acc = 0.0
+    for s in sorted(candidates, key=lambda s: (buy_prices[s], s)):
+        action = plan_actions.get(s) if plan_actions else None
+        if action in ("charge", "charge_floor"):
+            acc += per_slot   # already charging: counts, not re-selected
+        elif action == "discharge":
+            continue          # a user rule or the plan needs this slot
+        else:
+            chosen.add(s)
+            acc += per_slot
+        if acc >= need:
+            break
+    return chosen
 
 
 def _cheap_slots(
@@ -2070,11 +2158,18 @@ def optimize(
     peak_soc_kwh = current_soc_kwh
     _soc_fwd2 = soc_min_kwh          # second sim: battery starts empty
     peak_soc_from_min_kwh = soc_min_kwh
+    # Issue #32: solar the idle-only trajectory cannot absorb (the battery is
+    # already full) is exported.  Per slot, battery-internal kWh.  A discharge
+    # BEFORE that overflow creates headroom this solar then refills, so such a
+    # discharge is replaced by PV, not by a grid purchase.
+    overflow_kwh: list[float] = [0.0] * n
     for s in range(start_slot, n):
         if net_loads[s] < 0:
             charge_kw = min(-net_loads[s], cfg.max_charge_kw)
             charge_kwh = charge_kw * SLOT_DURATION_HOURS * cfg.charge_efficiency
-            _soc_fwd = min(_soc_fwd + charge_kwh - idle_drain, soc_max_kwh)
+            raw_fwd = _soc_fwd + charge_kwh - idle_drain
+            overflow_kwh[s] = max(0.0, raw_fwd - soc_max_kwh)
+            _soc_fwd = min(raw_fwd, soc_max_kwh)
             _soc_fwd2 = min(_soc_fwd2 + charge_kwh - idle_drain, soc_max_kwh)
         else:
             _soc_fwd = _soc_fwd - idle_drain
@@ -2085,6 +2180,11 @@ def optimize(
             peak_soc_kwh = _soc_fwd
         if _soc_fwd2 > peak_soc_from_min_kwh:
             peak_soc_from_min_kwh = _soc_fwd2
+    # Overflow at or after each slot (index n is 0.0): a discharge in slot s
+    # can only be refilled by overflow that comes AFTER it.
+    overflow_from: list[float] = [0.0] * (n + 1)
+    for s in range(n - 1, -1, -1):
+        overflow_from[s] = overflow_from[s + 1] + overflow_kwh[s]
 
     # Two-cycle discharge budget:
     # — initial_usable: energy in battery right now, dischargeable before solar.
@@ -2208,6 +2308,49 @@ def optimize(
             for s in discharge_candidates:
                 if s not in discharge_set and buy_prices[s] > min_buy_for_discharge:
                     profitable_discharge.append(s)
+
+    # Issue #32: two-tier Case A floor.  On a partial-refill day the single
+    # floor above (cheapest future buy through the round trip, plus wear)
+    # assumes every discharged kWh is bought back from the grid.  But the
+    # solar the idle-only trajectory would EXPORT (overflow_kwh) refills any
+    # headroom an earlier discharge created, so up to that much discharge is
+    # replaced by PV.  Its real cost is the export revenue that PV no longer
+    # earns, through the round trip, plus wear - on the reported day 0.29
+    # instead of 0.97 SEK/kWh, which is what lets the battery cover the
+    # morning load at 0.70 instead of importing it.  Only grid slots (load
+    # above solar) qualify; surplus slots are safety nets.  Energy is capped
+    # by the overflow that comes after the slot (see the allocation loops);
+    # round-trip discharge slots added just above stay grid-funded tier 2.
+    # Gated on the solar-aware weight like the rest of #26/#32, so the
+    # default configuration stays byte-identical to the v0.3.21 plan.
+    solar_aware_on = float(cfg.grid_charge_solar_aware or 0.0) > 0.0
+    case_a_floor_tier1: float | None = None
+    tier1_refill_kwh = overflow_from[start_slot]
+    tier1_set: set[int] = set()
+    tier1_used = 0.0
+    if (
+        solar_aware_on
+        and not solar_full_recharge
+        and tier1_refill_kwh > 1e-9
+        and total_discharge_budget > 0
+    ):
+        surplus_sell = [
+            sell_prices[s] for s in range(start_slot, n) if overflow_kwh[s] > 0
+        ]
+        displaced_sell = max(0.0, sum(surplus_sell) / len(surplus_sell))
+        tier1_floor = displaced_sell / cfg.round_trip_factor + wear_cost
+        if tier1_floor < case_a_floor:
+            case_a_floor_tier1 = tier1_floor
+            already = set(profitable_discharge)
+            for s in discharge_candidates:
+                if (
+                    s not in already
+                    and net_loads[s] > 0
+                    and overflow_from[s + 1] > 1e-9
+                    and buy_prices[s] > case_a_floor_tier1
+                ):
+                    profitable_discharge.append(s)
+                    tier1_set.add(s)
 
     # Step 3: Simulate the schedule greedily.
     # Allocate charge and discharge respecting SoC limits.
@@ -2360,9 +2503,16 @@ def optimize(
                 if load_kwh <= 0:
                     continue
                 battery_kwh = load_kwh / cfg.discharge_efficiency  # internal kWh drawn from cells
+                if (
+                    s in tier1_set
+                    and tier1_used + battery_kwh > overflow_from[s + 1] + 1e-9
+                ):
+                    continue  # the PV overflow after this slot cannot refill it (#32)
                 if night_energy_available >= battery_kwh:
                     plan_actions[s] = "discharge"
                     night_energy_available -= battery_kwh
+                    if s in tier1_set:
+                        tier1_used += battery_kwh
                 else:
                     break  # Reserve exhausted — remaining night slots stay unassigned
 
@@ -2392,9 +2542,16 @@ def optimize(
             if load_kwh <= 0:
                 continue
             battery_kwh = load_kwh / cfg.discharge_efficiency  # internal kWh drawn from cells
+            if (
+                s in tier1_set
+                and tier1_used + battery_kwh > overflow_from[s + 1] + 1e-9
+            ):
+                continue  # the PV overflow after this slot cannot refill it (#32)
             if discharge_energy_available >= battery_kwh:
                 plan_actions[s] = "discharge"
                 discharge_energy_available -= battery_kwh
+                if s in tier1_set:
+                    tier1_used += battery_kwh
             else:
                 break  # Not enough energy
 
@@ -2440,9 +2597,12 @@ def optimize(
     # Battery-internal kWh consumed per discharge slot = delivered_kwh / η_d.
     # solar_actual and existing_usable are also battery-internal kWh, so all
     # terms in the energy balance are in the same unit.
+    # Tier-1 discharges (#32) are refilled by the PV overflow by construction
+    # (capped at it above), so they create no grid-charge need; counting them
+    # here would buy at night exactly the energy PV supplies for free.
     total_discharge_battery_kwh = sum(
         min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS / cfg.discharge_efficiency
-        for s, a in plan_actions.items() if a == "discharge"
+        for s, a in plan_actions.items() if a == "discharge" and s not in tier1_set
     )
     solar_actual = available_soc - current_soc_kwh
     # Same discharge reserve as the greedy budget (A): grid charging covers
@@ -2466,14 +2626,16 @@ def optimize(
     # profitable round-trip slots by filling from current SoC toward
     # soc_max (already cheapest-sorted).  On cloudy days the pass charges
     # at most up to soc_max (check below), so this cannot over-fill.
+    hedge_value_kwh: float | None = None
     if profitable_charge:
         # Price inputs for the confidence-hedge value gate (issue #32).
+        # Tier-1 slots are PV-refilled and never short, so they are not
+        # what the hedge insures.
         hedge_cost = hedge_benefit = None
-        if profitable_discharge:
+        hedge_slots = [s for s in profitable_discharge if s not in tier1_set]
+        if hedge_slots:
             charge_price = buy_prices[profitable_charge[0]]
-            short_price = sum(buy_prices[s] for s in profitable_discharge) / len(
-                profitable_discharge
-            )
+            short_price = sum(buy_prices[s] for s in hedge_slots) / len(hedge_slots)
             displaced_pv = (
                 sum(sell_prices[s] for s in solar_surplus_slots)
                 / len(solar_surplus_slots)
@@ -2484,10 +2646,28 @@ def optimize(
             hedge_benefit = (
                 (short_price - wear_cost) * cfg.round_trip_factor - charge_price
             )
+            # Proportional hedge (#32): hedge energy only ever displaces the
+            # discharge slots it would cover, most expensive first.  Keep
+            # the hedge for exactly the kWh whose own benefit beats the
+            # cost, rather than all or nothing on the average price.  Only
+            # with the solar-aware weight on; at 0.0 the ceiling is the
+            # legacy headroom anyway.
+            if solar_aware_on:
+                kept = 0.0
+                for s in sorted(hedge_slots, key=lambda s: buy_prices[s], reverse=True):
+                    if (buy_prices[s] - wear_cost) * cfg.round_trip_factor - charge_price <= hedge_cost:
+                        break
+                    if net_loads[s] > 0:
+                        slot_load = min(net_loads[s], cfg.max_discharge_kw) * SLOT_DURATION_HOURS
+                    else:
+                        slot_load = cfg.base_load_kw * SLOT_DURATION_HOURS
+                    kept += max(0.0, slot_load) / cfg.discharge_efficiency
+                hedge_value_kwh = kept
         grid_charge_needed += _case_b_grid_charge(
             cfg, soc_max_kwh, current_soc_kwh, available_soc, solar_confidence_ratio,
             hedge_net_cost=hedge_cost,
             hedge_net_benefit=hedge_benefit,
+            hedge_value_kwh=hedge_value_kwh,
         )
 
     # Forward-sim from the true current SoC (not the solar-only end-state).
@@ -3172,6 +3352,16 @@ def optimize(
             ),
             "solar_confidence_ratio": (
                 None if solar_confidence_ratio is None else round(float(solar_confidence_ratio), 4)
+            ),
+            # Issue #32: two-tier Case A floor and the proportional hedge.
+            "case_a_floor_tier1": (
+                None if case_a_floor_tier1 is None else round(case_a_floor_tier1, 6)
+            ),
+            "tier1_refill_kwh": round(tier1_refill_kwh, 3),
+            "tier1_discharge_kwh": round(tier1_used, 3),
+            "n_tier1_discharge": len(tier1_set),
+            "hedge_value_kwh": (
+                None if hedge_value_kwh is None else round(hedge_value_kwh, 3)
             ),
         }
         if night_drain_plan is not None and initial_soc_pct is not None:

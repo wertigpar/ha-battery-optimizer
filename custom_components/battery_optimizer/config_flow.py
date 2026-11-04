@@ -92,6 +92,12 @@ from .const import (
     DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR,
     DEFAULT_PRECHARGE_HORIZON_DAYS,
     DEFAULT_PRECHARGE_PUBLISH_HOUR,
+    CONF_CHEAP_CHARGE_ENABLED,
+    CONF_CHEAP_CHARGE_PRICE_THRESHOLD,
+    CONF_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
+    DEFAULT_CHEAP_CHARGE_ENABLED,
+    DEFAULT_CHEAP_CHARGE_THRESHOLD_FRACTION,
+    DEFAULT_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
     SOLAR_FORECAST_P50,
     SOLAR_FORECAST_P10,
     DEFAULT_VAT_MULTIPLIER,
@@ -520,6 +526,31 @@ def _build_schema(
                     min=0.0, max=23.0, mode=NumberSelectorMode.BOX
                 )
             ),
+            # ── Cheap-price opportunistic charge (issue #31; default-off) ──
+            vol.Optional(
+                CONF_CHEAP_CHARGE_ENABLED,
+                default=d.get(
+                    CONF_CHEAP_CHARGE_ENABLED, DEFAULT_CHEAP_CHARGE_ENABLED
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_CHEAP_CHARGE_PRICE_THRESHOLD,
+                default=d.get(
+                    CONF_CHEAP_CHARGE_PRICE_THRESHOLD,
+                    round(
+                        loc.precharge_price_ceiling
+                        * DEFAULT_CHEAP_CHARGE_THRESHOLD_FRACTION,
+                        4,
+                    ),
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0)),
+            vol.Optional(
+                CONF_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
+                default=d.get(
+                    CONF_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
+                    DEFAULT_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
+                ),
+            ): bool,
             # ── Forced sell (manual sell arbitrage; default-off) ──
             vol.Optional(
                 CONF_FORCED_SELL_ENABLED,

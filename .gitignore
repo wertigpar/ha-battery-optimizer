@@ -20,6 +20,8 @@
 # ── Allowed: offline regression tests ────────────────────────────────
 !/tests/
 !/tests/*.py
+!/tests/fixtures/
+!/tests/fixtures/*.json
 
 # ── Allowed: integration code ──────────────────────────────────────────
 !/custom_components/

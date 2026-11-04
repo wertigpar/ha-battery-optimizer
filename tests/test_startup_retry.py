@@ -46,6 +46,8 @@ class StartupRetryTests(unittest.TestCase):
         coordinator._unsub_startup = None
         coordinator._startup_attempts = 0
         coordinator._startup_retry_delay_s = coordinator._STARTUP_RETRY_DELAY_S
+        coordinator._startup_stopped = False
+        coordinator._startup_failed_runs = 0
         coordinator._ran_this_session = False
         coordinator._get_battery_soc = Mock(return_value=None)
         coordinator.run_optimizer = Mock(return_value=object())
@@ -87,6 +89,82 @@ class StartupRetryTests(unittest.TestCase):
         coordinator.async_shutdown()
         cancel.assert_called_once_with()
         self.assertIsNone(coordinator._unsub_startup)
+
+    def done_task(self, *, cancelled=False, error=None):
+        task = Mock()
+        task.cancelled.return_value = cancelled
+        task.exception.return_value = error
+        return task
+
+    def test_run_that_ends_without_a_plan_is_retried(self):
+        # SoC readable at the timer, but run_optimizer returned early (no
+        # prices / parse error / SoC dropped): _ran_this_session stays False.
+        coordinator = self.coordinator()
+        coordinator._get_battery_soc.return_value = 50.0
+        task = Mock()
+        coordinator.hass.async_create_task.return_value = task
+        with patch.object(MODULE, 'async_call_later', return_value=Mock()) as later:
+            coordinator._startup_callback(None)
+            task.add_done_callback.assert_called_once_with(coordinator._startup_run_done)
+            coordinator._startup_run_done(self.done_task())
+            coordinator._startup_run_done(self.done_task())
+        self.assertEqual([call.args[1] for call in later.call_args_list], [30, 60])
+
+    def test_completed_run_is_not_retried(self):
+        coordinator = self.coordinator()
+        coordinator._ran_this_session = True
+        with patch.object(MODULE, 'async_call_later') as later:
+            coordinator._startup_run_done(self.done_task())
+        later.assert_not_called()
+
+    def test_no_retry_after_shutdown(self):
+        coordinator = self.coordinator()
+        coordinator._startup_stopped = True
+        with patch.object(MODULE, 'async_call_later') as later:
+            coordinator._startup_run_done(self.done_task())
+        later.assert_not_called()
+
+    def test_cancelled_run_is_not_retried(self):
+        coordinator = self.coordinator()
+        with patch.object(MODULE, 'async_call_later') as later:
+            coordinator._startup_run_done(self.done_task(cancelled=True))
+        later.assert_not_called()
+
+    def test_failed_run_is_logged_and_retried(self):
+        coordinator = self.coordinator()
+        with patch.object(MODULE, 'async_call_later', return_value=Mock()) as later, \
+                self.assertLogs(MODULE._LOGGER, level='ERROR'):
+            coordinator._startup_run_done(self.done_task(error=RuntimeError('boom')))
+        later.assert_called_once()
+        self.assertEqual(later.call_args.args[1], 30)
+
+    def test_retry_gives_up_after_the_failed_run_cap(self):
+        # A misconfigured install must not re-arm forever: after
+        # _STARTUP_MAX_FAILED_RUNS runs without a plan the retry stops with
+        # one WARNING and the checkpoint takes over.
+        coordinator = self.coordinator()
+        cap = coordinator._STARTUP_MAX_FAILED_RUNS
+        with patch.object(MODULE, 'async_call_later', return_value=Mock()) as later:
+            for _ in range(cap - 1):
+                coordinator._startup_run_done(self.done_task())
+            self.assertEqual(later.call_count, cap - 1)
+            with self.assertLogs(MODULE._LOGGER, level='WARNING') as logs:
+                coordinator._startup_run_done(self.done_task())
+        self.assertEqual(later.call_count, cap - 1)
+        self.assertIn('giving up', logs.output[0])
+
+    def test_shutdown_stops_further_retries(self):
+        coordinator = self.coordinator()
+        coordinator._unsub_pv_transitions = []
+        coordinator._unsub_listeners = []
+        coordinator._unsub_guard = None
+        coordinator._unsub_ha_started = None
+        coordinator._sell_back_to_grid_saved = False
+        coordinator.async_shutdown()
+        self.assertTrue(coordinator._startup_stopped)
+        with patch.object(MODULE, 'async_call_later') as later:
+            coordinator._startup_run_done(self.done_task())
+        later.assert_not_called()
 
 
 if __name__ == '__main__':

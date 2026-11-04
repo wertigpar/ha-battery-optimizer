@@ -58,12 +58,15 @@ def serialize_runtime(
     last_run_ts: str,
     snapshot: dict,
     plan_slots: list,
+    last_push_ok_at: str | None = None,
 ) -> dict:
     """JSON-able sidecar payload for the last optimizer run.
 
     ``plan_slots`` is the output of :func:`prune_plan_slots` (list of
     4-tuples). ``last_run_ts`` is the run time as ISO string. ``snapshot`` is
-    copied (not referenced).
+    copied (not referenced). ``last_push_ok_at`` is the ISO time of the last
+    override push the Emaldo service accepted (issue #36), or None; the key
+    is always written so a reader can tell "never pushed" from "old file".
     """
     return {
         "last_run_slot": last_run_slot,
@@ -72,6 +75,7 @@ def serialize_runtime(
         "last_run": last_run_ts,
         "snapshot": dict(snapshot),
         "plan_slots": [list(entry) for entry in plan_slots],
+        "last_push_ok_at": last_push_ok_at,
     }
 
 
@@ -133,6 +137,17 @@ def rebuild_runtime(data, now: datetime) -> dict | None:
             return None
         normalized.append((index, action, float(soc_after), float(solar_kw)))
 
+    # Optional (issue #36): files written before v0.3.29 have no key, and a
+    # malformed value must not discard an otherwise usable payload.
+    last_push_ok_at = data.get("last_push_ok_at")
+    if isinstance(last_push_ok_at, str):
+        try:
+            datetime.fromisoformat(last_push_ok_at)
+        except ValueError:
+            last_push_ok_at = None
+    else:
+        last_push_ok_at = None
+
     return {
         "last_run_slot": last_run_slot,
         "last_run_initial_soc": initial_soc,
@@ -140,4 +155,5 @@ def rebuild_runtime(data, now: datetime) -> dict | None:
         "last_run": last_run,
         "snapshot": snapshot,
         "plan_slots": normalized,
+        "last_push_ok_at": last_push_ok_at,
     }

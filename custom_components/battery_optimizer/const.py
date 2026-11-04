@@ -172,6 +172,19 @@ DEFAULT_PRECHARGE_REQUIRE_LOW_SOLAR = True   # gate on solar signal
 DEFAULT_PRECHARGE_HORIZON_DAYS = 1           # 1 = pre-publish only; 2 = also day+2
 DEFAULT_PRECHARGE_PUBLISH_HOUR = None        # None = auto (Nord Pool publish converted to HA timezone)
 
+# ── Cheap-price opportunistic charge (issue #31) ─────────────────────
+# Before the next-day prices are published the plan ends at midnight and
+# stored energy has no value past it, so the optimizer buys nothing for an
+# unknown tomorrow even at a zero price.  Opt-in: charge today's nearly
+# free slots into the headroom today's own solar would not fill anyway.
+CONF_CHEAP_CHARGE_ENABLED = "cheap_charge_enabled"
+CONF_CHEAP_CHARGE_PRICE_THRESHOLD = "cheap_charge_price_threshold"
+CONF_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN = "cheap_charge_only_when_tomorrow_unknown"
+DEFAULT_CHEAP_CHARGE_ENABLED = False
+DEFAULT_CHEAP_CHARGE_THRESHOLD_FRACTION = 0.5   # of the locale's pre-charge price ceiling
+DEFAULT_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN = True
+CHEAP_CHARGE_MIN_NEED_KWH = 0.05                # below this headroom, do nothing
+
 # ── Solar forecast scale (over-forecast compensation) ────────────────
 DEFAULT_SOLAR_FORECAST_SCALE = 0.0   # 0.0 = auto-tune sentinel (0 = auto)
 DEFAULT_SOLAR_ACTUAL_SENSOR = ""      # empty = Emaldo-internal estimate
@@ -214,6 +227,19 @@ OPTIMIZER_INTERVALS = [15, 30, 60, 120]
 CONF_STALE_PUSH_RETRY_COUNT = "stale_push_retry_count"
 DEFAULT_STALE_PUSH_RETRY_COUNT = 3     # additional attempts after the first
 STALE_PUSH_RETRY_BACKOFF_S = 30.0
+
+# ── Override enforcement (issue #36) ─────────────────────────────────
+# The Emaldo apply_bulk_schedule service returns nothing on failure, so the
+# coordinator keeps its own push bookkeeping and reads the device back.
+PUSH_FAIL_REASSERT_WINDOW_S = 600     # re-push an unchanged plan after a recent failure
+PUSH_SETTLE_S = 300                   # a push this fresh is not judged yet
+ENFORCEMENT_REASSERT_MIN_S = 1800     # re-push an unchanged plan after this long
+ACCURACY_REASSERT_COOLDOWN_S = 900    # min age of the last push before the
+                                      # accuracy shortfall may trigger a re-push
+ACCURACY_REASSERT_SHORTFALL_KWH = 0.35  # planned discharge needed to judge
+ACCURACY_REASSERT_RATIO = 0.25        # actual < planned × ratio ⇒ shortfall
+ENFORCEMENT_CHECK_SETTLE_S = 120      # do not read the device back sooner after a push
+ENFORCEMENT_REPUSH_MIN_S = 600        # min spacing between read-back re-pushes
 
 # ── SoC Guard ────────────────────────────────────────────────────────
 DEFAULT_SOC_GUARD_INTERVAL = 0   # minutes, 0 = disabled
