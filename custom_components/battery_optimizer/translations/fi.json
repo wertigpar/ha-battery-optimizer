@@ -59,6 +59,7 @@
     },
     "error": {
       "sensor_not_found": "Yhtä tai useampaa määritettyä anturia ei löytynyt.",
+      "invalid_currency": "Valuutan on oltava 3-kirjaiminen koodi, kuten EUR, SEK, NOK tai DKK, tai tyhjä.",
       "invalid_params": "Virheelliset parametrit."
     },
     "abort": {
@@ -66,6 +67,10 @@
     }
   },
   "options": {
+    "error": {
+      "sensor_not_found": "Yhtä tai useampaa määritettyä anturia ei löytynyt.",
+      "invalid_currency": "Valuutan on oltava 3-kirjaiminen koodi, kuten EUR, SEK, NOK tai DKK, tai tyhjä."
+    },
     "step": {
       "init": {
         "title": "Battery Optimizerin asetukset",

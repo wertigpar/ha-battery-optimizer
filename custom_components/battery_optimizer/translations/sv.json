@@ -59,6 +59,7 @@
     },
     "error": {
       "sensor_not_found": "En eller flera konfigurerade sensorer hittades inte.",
+      "invalid_currency": "Valutan måste vara en kod med 3 bokstäver, till exempel EUR, SEK, NOK eller DKK, eller tom.",
       "invalid_params": "Ogiltiga parametrar."
     },
     "abort": {
@@ -66,6 +67,10 @@
     }
   },
   "options": {
+    "error": {
+      "sensor_not_found": "En eller flera konfigurerade sensorer hittades inte.",
+      "invalid_currency": "Valutan måste vara en kod med 3 bokstäver, till exempel EUR, SEK, NOK eller DKK, eller tom."
+    },
     "step": {
       "init": {
         "title": "Battery Optimizer-inställningar",

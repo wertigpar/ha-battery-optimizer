@@ -1,5 +1,25 @@
 # Changes
 
+## v0.3.30
+
+### Fixed
+
+- **The add and Configure forms no longer fail with a 500 on Home Assistant
+  2026.9** (v0.3.27 - v0.3.29) — the currency field validated its value with
+  `vol.Match`. Home Assistant converts every flow schema to JSON for the
+  frontend and has no converter for `vol.Match`, so the whole form raised
+  `ValueError: unable to serialize schema` instead of rendering. The field is
+  now a plain string and the 3-letter check happens when the form is
+  submitted: a bad code shows a field error ("Currency must be a 3-letter
+  code such as EUR, SEK, NOK or DKK, or empty"), a valid one is stored
+  upper-cased, and blank still means "no override". The error is translated
+  in en/fi/sv/da/nb. Reported in #37. File: `config_flow.py`.
+
+  The existing schema-serialisation test only runs where Home Assistant is
+  installed, which is why it never caught this. A new test walks the schema
+  without Home Assistant and rejects any validator Home Assistant cannot
+  serialise.
+
 ## v0.3.29
 
 ### Fixed

@@ -59,6 +59,7 @@
     },
     "error": {
       "sensor_not_found": "One or more configured sensors not found.",
+      "invalid_currency": "Currency must be a 3-letter code such as EUR, SEK, NOK or DKK, or empty.",
       "invalid_params": "Invalid parameters."
     },
     "abort": {
@@ -66,6 +67,10 @@
     }
   },
   "options": {
+    "error": {
+      "sensor_not_found": "One or more configured sensors not found.",
+      "invalid_currency": "Currency must be a 3-letter code such as EUR, SEK, NOK or DKK, or empty."
+    },
     "step": {
       "init": {
         "title": "Battery Optimizer Options",

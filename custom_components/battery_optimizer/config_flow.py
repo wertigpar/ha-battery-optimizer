@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 # On Home Assistant 2026.10+ this resolves through Home Assistant's compat
@@ -164,6 +165,29 @@ from .money import LocaleMoney, locale_money
 _LOGGER = logging.getLogger(__name__)
 
 
+_CURRENCY_CODE = re.compile(r"^[A-Za-z]{3}$")
+
+
+def _currency_error(user_input: dict[str, Any]) -> str | None:
+    """Validate the optional currency override and normalise it in place.
+
+    Done in the step handler, not in the schema: Home Assistant converts the
+    schema to JSON for the frontend, and a ``vol.Match`` validator has no
+    converter, so it made the whole form fail with a 500 (#37).  Blank means
+    "no override" and is dropped; anything else must be a 3-letter code and
+    is stored upper-cased.  Returns the error key, or None when valid.
+    """
+    value = user_input.get(CONF_CURRENCY)
+    if value is None or not str(value).strip():
+        user_input.pop(CONF_CURRENCY, None)
+        return None
+    value = str(value).strip()
+    if not _CURRENCY_CODE.match(value):
+        return "invalid_currency"
+    user_input[CONF_CURRENCY] = value.upper()
+    return None
+
+
 def _locale_money_for(
     hass: HomeAssistant, defaults: dict[str, Any] | None
 ) -> LocaleMoney:
@@ -277,7 +301,7 @@ def _build_schema(
             vol.Optional(
                 CONF_CURRENCY,
                 default=d.get(CONF_CURRENCY, ""),
-            ): vol.All(str, vol.Match(r"^$|^[A-Za-z]{3}$")),
+            ): str,
             vol.Required(
                 CONF_SOLCAST_TODAY,
                 default=d.get(CONF_SOLCAST_TODAY, "sensor.solcast_pv_forecast_forecast_today"),
@@ -872,9 +896,11 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                 if not sensor_id or not self.hass.states.get(sensor_id):
                     errors["base"] = "sensor_not_found"
 
+            currency_error = _currency_error(user_input)
+            if currency_error:
+                errors[CONF_CURRENCY] = currency_error
+
             if not errors:
-                if not user_input.get(CONF_CURRENCY):
-                    user_input.pop(CONF_CURRENCY, None)
                 await self.async_set_unique_id(DOMAIN)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
@@ -885,6 +911,7 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=_build_schema(
+                user_input,
                 emaldo_options=emaldo_options,
                 money=_locale_money_for(self.hass, None),
             ),
@@ -908,6 +935,9 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
             sensor_id = user_input.get(CONF_SOLAR_ACTUAL_SENSOR, "")
             if sensor_id and not self.hass.states.get(sensor_id):
                 errors["base"] = "sensor_not_found"
+            currency_error = _currency_error(user_input)
+            if currency_error:
+                errors[CONF_CURRENCY] = currency_error
             if errors:
                 cur = {**self.config_entry.data, **self.config_entry.options}
                 money = _locale_money_for(self.hass, cur)
@@ -921,8 +951,6 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
                 )
             if is_blank(user_input.get(CONF_PRECHARGE_PUBLISH_HOUR)):
                 user_input.pop(CONF_PRECHARGE_PUBLISH_HOUR, None)
-            if not user_input.get(CONF_CURRENCY):
-                user_input.pop(CONF_CURRENCY, None)
             return self.async_create_entry(title="", data=user_input)
 
         # Merge config entry data with any existing options
