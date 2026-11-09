@@ -4820,6 +4820,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "SoC guard active: high_marker=%d%%, low_marker=%d%%",
                 high_marker, int(cfg.soc_min),
             )
+        else:
+            # Issue #38: with the guard off the planner's per-slot stop
+            # levels used to go out raw.  They match neither Battery Range
+            # marker, the app then shows no option selected for the slot and
+            # the battery can sit at 0 W instead of discharging.  Send the
+            # optimizer's discharge slots at the low marker and state that
+            # marker explicitly, so slot and marker always agree.
+            low_marker = self._normalise_discharge_bytes(slot_values, now_slot)
+            if low_marker is not None:
+                service_data["low_marker"] = low_marker
 
         self._last_sent_slots = list(slot_values)
 
@@ -4896,6 +4906,37 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         return overrides_needed
+
+    def _normalise_discharge_bytes(
+        self, slot_values: list[int], now_slot: int
+    ) -> int | None:
+        """Rewrite optimizer discharge bytes to the low marker (issue #38).
+
+        ``slot_values`` is the rolling 96-slot array, edited in place:
+        positions from ``now_slot`` on are today's slots, earlier positions
+        are tomorrow's.  Discharge slots set by a user rule keep the level
+        the user asked for.  Returns the low marker to send with the push,
+        or None when no byte was rewritten.
+        """
+        today_sources = getattr(self, "_last_sources", None)
+        tomorrow_sources = getattr(self, "_last_sources_tomorrow", None)
+        low_marker: int | None = None
+        for pos, val in enumerate(slot_values):
+            if val <= 0x80:  # not a discharge byte (129-255)
+                continue
+            sources = today_sources if pos >= now_slot else tomorrow_sources
+            if (
+                sources is not None
+                and pos < len(sources)
+                and sources[pos] == "user"
+            ):
+                continue
+            if low_marker is None:
+                # At least 1: a marker of 0 would encode as byte 0, which is
+                # the idle byte, so soc_min = 0 would stop every discharge.
+                low_marker = max(int(self._build_battery_config().soc_min), 1)
+            slot_values[pos] = (256 - low_marker) & 0xFF
+        return low_marker
 
     def _should_reassert_override(self) -> tuple[bool, str | None]:
         """Force re-push even if plan unchanged (issue #36).

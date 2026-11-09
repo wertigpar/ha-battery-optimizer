@@ -1,5 +1,25 @@
 # Changes
 
+## v0.3.31
+
+### Fixed
+
+- **Discharge slots could fail to start discharging when the SoC guard is
+  off** — with the guard off, the planner's per-slot stop level
+  (`max(soc_after, soc_min)`) went out as the slot byte unchanged. That level
+  matches neither Battery Range marker, so the Emaldo app showed no option
+  selected for the slot and the battery could sit at 0 W with plenty of
+  energy, typically right after a re-plan from idle or solar charging.
+  Optimizer discharge slots are now sent at the low marker (`soc_min`) and the
+  push states that marker explicitly, so slot and marker always agree. A
+  discharge slot set by a user schedule rule keeps the level the user asked
+  for, and with the guard on nothing changes. The plan, charts and sensors
+  still show the planned level. Reported in #38. File: `coordinator.py`.
+
+  Also reported in #38: ha-emaldo re-sent its cached Battery Range markers
+  on every write, reverting a marker changed in the app until the integration
+  was reloaded. That is fixed on the ha-emaldo side (1.0.0-beta54), not here.
+
 ## v0.3.30
 
 ### Fixed

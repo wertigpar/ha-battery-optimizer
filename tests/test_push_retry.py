@@ -229,6 +229,92 @@ def test_rejecting_service_response_counts_as_a_failure(sleep_mock) -> None:
     _current_slot_index,
 )
 @patch("asyncio.sleep", new_callable=AsyncMock)
+def test_guard_off_discharge_byte_is_sent_at_the_low_marker(sleep_mock) -> None:
+    """Issue #38: with the SoC guard off, a planned per-slot stop level
+    (discharge to 55 %) goes out as discharge-to-soc_min, and the low marker
+    is stated explicitly so slot and Battery Range marker agree."""
+    coord = _coord(stale=False, retries=0)
+    coord._build_battery_config = MagicMock(
+        return_value=SimpleNamespace(soc_min=13.0)
+    )
+    result = SimpleNamespace(
+        slots=[_slot(60, action="discharge", slot_value=256 - 55)]
+    )
+
+    asyncio.run(coord._push_schedule(result, None))
+
+    data = coord.hass.services.async_call.call_args.args[2]
+    assert data["slots"][60] == 256 - 13
+    assert data["low_marker"] == 13
+    assert "high_marker" not in data
+    assert coord._last_sent_slots[60] == 256 - 13
+    # The plan itself keeps the planned level for sensors and charts.
+    assert result.slots[0].slot_value == 256 - 55
+
+
+@pytest.mark.usefixtures("socket_enabled")
+@patch(
+    "custom_components.battery_optimizer.coordinator._current_slot_index",
+    _current_slot_index,
+)
+@patch("asyncio.sleep", new_callable=AsyncMock)
+def test_guard_off_user_discharge_level_is_kept(sleep_mock) -> None:
+    """Issue #38: a discharge slot set by a user rule keeps the level the
+    user asked for; with no optimizer discharge slot no marker is sent."""
+    coord = _coord(stale=False, retries=0)
+    coord._build_battery_config = MagicMock(
+        return_value=SimpleNamespace(soc_min=13.0)
+    )
+    sources = ["optimizer"] * 96
+    sources[60] = "user"
+    coord._last_sources = sources
+    result = SimpleNamespace(
+        slots=[_slot(60, action="discharge", slot_value=256 - 40)]
+    )
+
+    asyncio.run(coord._push_schedule(result, None))
+
+    data = coord.hass.services.async_call.call_args.args[2]
+    assert data["slots"][60] == 256 - 40
+    assert "low_marker" not in data
+    coord._build_battery_config.assert_not_called()
+
+
+@pytest.mark.usefixtures("socket_enabled")
+@patch(
+    "custom_components.battery_optimizer.coordinator._current_slot_index",
+    _current_slot_index,
+)
+@patch("asyncio.sleep", new_callable=AsyncMock)
+def test_guard_off_tomorrow_region_uses_tomorrow_sources(sleep_mock) -> None:
+    """Issue #38: positions before now_slot are tomorrow's slots, so the
+    user-rule check reads tomorrow's sources there, not today's."""
+    coord = _coord(stale=False, retries=0)
+    coord._build_battery_config = MagicMock(
+        return_value=SimpleNamespace(soc_min=13.0)
+    )
+    today_sources = ["optimizer"] * 96
+    today_sources[10] = "user"  # today's slot 10 is in the past
+    coord._last_sources = today_sources
+    coord._last_sources_tomorrow = ["optimizer"] * 96
+    today = SimpleNamespace(slots=[_slot(60)])
+    tomorrow = SimpleNamespace(
+        slots=[_slot(10, action="discharge", slot_value=256 - 55)]
+    )
+
+    asyncio.run(coord._push_schedule(today, tomorrow))
+
+    data = coord.hass.services.async_call.call_args.args[2]
+    assert data["slots"][10] == 256 - 13
+    assert data["low_marker"] == 13
+
+
+@pytest.mark.usefixtures("socket_enabled")
+@patch(
+    "custom_components.battery_optimizer.coordinator._current_slot_index",
+    _current_slot_index,
+)
+@patch("asyncio.sleep", new_callable=AsyncMock)
 def test_non_stale_stream_single_attempt_no_sleep(sleep_mock) -> None:
     """Healthy stream: one attempt, no backoff sleep, no retry log — the
     legacy pre-storm path."""
