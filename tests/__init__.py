@@ -67,6 +67,32 @@ def load_solar_scale():
     return solar_scale, pkg.const
 
 
+def load_emaldo_solar():
+    """Return (emaldo_solar_module, const_module) loaded from the repo source.
+
+    ``emaldo_solar.py`` does ``from .const import SLOTS_PER_DAY`` (relative
+    import), so it runs inside the fabricated ``bopt_pkg`` next to the real
+    ``const``.
+    """
+    if _PKG_NAME in sys.modules and hasattr(sys.modules[_PKG_NAME], "emaldo_solar"):
+        return (
+            sys.modules[_PKG_NAME].emaldo_solar,
+            sys.modules[_PKG_NAME].const,
+        )
+
+    load_optimizer()  # builds bopt_pkg + const
+    pkg = sys.modules[_PKG_NAME]
+
+    spec = spec_from_file_location(
+        f"{_PKG_NAME}.emaldo_solar", str(_SRC_DIR / "emaldo_solar.py")
+    )
+    mod = module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    pkg.emaldo_solar = mod
+    return mod, pkg.const
+
+
 def load_solar_actual():
     """Return (solar_actual_module, const_module) loaded from the repo source.
 
@@ -232,6 +258,9 @@ def _install_fake_homeassistant():
     dt = types.ModuleType("homeassistant.util.dt")
     dt.dt_util = types.SimpleNamespace(now=lambda: None)
     dt.now = lambda: _dt.datetime(2026, 1, 1, 0, 0, 0)
+    # Fixed +01:00 zone: fixtures can write "+01:00" timestamps and read the
+    # wall clock back as local time, with no IANA database dependency.
+    dt.get_time_zone = lambda tz: _dt.timezone(_dt.timedelta(hours=1))
     util.dt = dt
 
     core = types.ModuleType("homeassistant.core")
@@ -363,7 +392,7 @@ def load_coordinator():
 
     for mod_name in (
         "money", "solar_regime", "runtime_state", "cost_history", "plan_export",
-        "push_state",
+        "push_state", "emaldo_solar",
     ):
         if not hasattr(pkg, mod_name):
             _exec(f"{_PKG_NAME}.{mod_name}", _SRC_DIR / f"{mod_name}.py")

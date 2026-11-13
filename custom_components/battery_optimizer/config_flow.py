@@ -71,6 +71,7 @@ from .const import (
     CONF_ENABLE_PV_CUT_WHEN_FULL,
     CONF_PV_CUT_RESUME_SOC,
     CONF_SOLAR_FORECAST_MODE,
+    CONF_SOLAR_FORECAST_SOURCE,
     CONF_SOLAR_FORECAST_SCALE,
     CONF_GRID_CHARGE_SOLAR_AWARE,
     CONF_SOLAR_ACTUAL_SENSOR,
@@ -101,6 +102,7 @@ from .const import (
     DEFAULT_CHEAP_CHARGE_ONLY_WHEN_TOMORROW_UNKNOWN,
     SOLAR_FORECAST_P50,
     SOLAR_FORECAST_P10,
+    SOLAR_SOURCE_EMALDO, SOLAR_SOURCE_SOLCAST,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_TRANSFER_FEE_BUY,
     DEFAULT_SALES_COMMISSION,
@@ -127,6 +129,7 @@ from .const import (
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_SOLAR_FORECAST_MODE,
+    DEFAULT_SOLAR_FORECAST_SOURCE,
     DEFAULT_SOLAR_FORECAST_SCALE,
     DEFAULT_GRID_CHARGE_SOLAR_AWARE,
     DEFAULT_SOLAR_ACTUAL_SENSOR,
@@ -290,6 +293,35 @@ def _build_schema(
                 default=d.get(CONF_SPOT_SENSOR, ""),
             ): str
         }
+    solar_source = d.get(CONF_SOLAR_FORECAST_SOURCE, DEFAULT_SOLAR_FORECAST_SOURCE)
+    # The Solcast sensor fields are only read when the forecast comes from an
+    # external sensor.  With the Emaldo-native source they stay optional (and
+    # blank), so the form does not ask for a Solcast integration the install
+    # does not have.
+    if solar_source == SOLAR_SOURCE_EMALDO:
+        solcast_fields = {
+            vol.Optional(
+                CONF_SOLCAST_TODAY,
+                default=d.get(CONF_SOLCAST_TODAY, ""),
+            ): str,
+            vol.Optional(
+                CONF_SOLCAST_TOMORROW,
+                default=d.get(CONF_SOLCAST_TOMORROW, ""),
+            ): str,
+        }
+    else:
+        solcast_fields = {
+            vol.Required(
+                CONF_SOLCAST_TODAY,
+                default=d.get(CONF_SOLCAST_TODAY)
+                or "sensor.solcast_pv_forecast_forecast_today",
+            ): str,
+            vol.Required(
+                CONF_SOLCAST_TOMORROW,
+                default=d.get(CONF_SOLCAST_TOMORROW)
+                or "sensor.solcast_pv_forecast_forecast_tomorrow",
+            ): str,
+        }
     return vol.Schema(
         {
             **emaldo_field,
@@ -303,13 +335,15 @@ def _build_schema(
                 default=d.get(CONF_CURRENCY, ""),
             ): str,
             vol.Required(
-                CONF_SOLCAST_TODAY,
-                default=d.get(CONF_SOLCAST_TODAY, "sensor.solcast_pv_forecast_forecast_today"),
-            ): str,
-            vol.Required(
-                CONF_SOLCAST_TOMORROW,
-                default=d.get(CONF_SOLCAST_TOMORROW, "sensor.solcast_pv_forecast_forecast_tomorrow"),
-            ): str,
+                CONF_SOLAR_FORECAST_SOURCE,
+                default=solar_source,
+            ): vol.In(
+                {
+                    SOLAR_SOURCE_SOLCAST: "External PV forecast sensor (Solcast-shaped)",
+                    SOLAR_SOURCE_EMALDO: "Emaldo internal solar forecast (schedule chart)",
+                }
+            ),
+            **solcast_fields,
             vol.Required(
                 CONF_VAT_MULTIPLIER,
                 default=d.get(CONF_VAT_MULTIPLIER, loc.vat_multiplier),
