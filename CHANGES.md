@@ -1,5 +1,24 @@
 # Changes
 
+## v0.3.32
+
+### Fixed
+
+- **The optimizer switched Third-party PV on for installs that have none** — with
+  **PV Sell Strategy** off (the default) every run reached
+  `_apply_pv_strategy`, which called `_ensure_pv_switch_matches_plan(True)`
+  unconditionally.  That reads the real switch state, and on a unit whose
+  third-party PV is off it logged `PV switch mismatch: actual=off, desired=on —
+  correcting` and issued `switch.turn_on`.  The switch then belongs to the user,
+  and forcing it on changes the Emaldo's own control model — top-off charge
+  pulses and the cooling fan — on a system that has no third-party PV to sell.
+  The restore is now gated on a new `_pv_switch_owned` marker: a state may only
+  be handed back if this integration wrote it, and the marker is dropped once it
+  has been handed back.  A cut left in place by an earlier process across a
+  restart is deliberately not undone (the flag is process-local); the next
+  strategy-enabled run re-asserts its own plan. Test:
+  `tests/test_pv_switch_ownership.py`. File: `coordinator.py`.
+
 ## v0.3.31
 
 ### Fixed

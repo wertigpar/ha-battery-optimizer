@@ -729,6 +729,15 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # switch does not toggle as the battery hovers at full. Restored to
         # False on restart and when the feature is disabled.
         self._pv_cut_latch: bool = False
+        # The PV state this integration itself wrote (None = never wrote).  Only a
+        # state we own may be handed back when the strategy is switched off: on a
+        # unit without third-party PV the switch belongs to the user, and
+        # asserting "on" there changes the Emaldo's control model (top-off charge
+        # pulses, fan churn) for a system that has no third-party PV at all.
+        # The flag is process-local (not persisted): a cut made by an earlier
+        # process and left in place across a restart is not undone here — the
+        # next strategy-enabled run re-asserts its own plan instead.
+        self._pv_switch_owned: bool | None = None
         # Emaldo control enable/disable
         self._emaldo_control_enabled: bool = self.config.get(
             CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
@@ -5761,6 +5770,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "switch", service, {"entity_id": entity_id}, blocking=True,
             )
             self._pv_switch_state = turn_on
+            self._pv_switch_owned = turn_on
             _LOGGER.debug("PV switch %s: %s", entity_id, service)
         except Exception as err:
             _LOGGER.error(
@@ -5895,9 +5905,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         if not self._pv_strategy_enabled:
-            # Strategy is off — restore PV to on and clear the cut latch.
+            # Strategy is off — hand the switch back, but only if we were the one
+            # that took it.  Asserting "third-party PV on" on a unit that has no
+            # third-party PV writes a switch the user owns and changes the
+            # Emaldo's control model, so it must never happen.
+            owned_by_us_off = self._pv_switch_owned is False
             self._pv_cut_latch = False
-            await self._ensure_pv_switch_matches_plan(True)
+            self._pv_switch_owned = None
+            if owned_by_us_off:
+                await self._ensure_pv_switch_matches_plan(True)
+                # The hand-back write itself re-marked the switch as ours; we are
+                # done with it, so the invariant "after this branch we own
+                # nothing" has to be restored explicitly.
+                self._pv_switch_owned = None
             return
 
         # Solar forecast guard: skip on cloudy days.
