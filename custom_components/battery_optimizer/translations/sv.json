@@ -21,6 +21,12 @@
           "discharge_efficiency": "Urladdningseffektivitet (0–1)",
           "soc_min": "Minsta SoC (%)",
           "soc_max": "Högsta SoC (%)",
+          "battery_range_low_marker": "Battery Range nedre gräns (%)",
+          "battery_range_low_marker_description": "Behövs bara för Guaranteed Grid Rewards-avtal, där appens Battery Range-reglage är en procentandel av kapaciteten som återstår efter avtalets reserver, medan Min SoC är en procentandel av hela batteriet. Ange reglagets värde som ska skickas. Lämna tomt för att skicka det planerade golvet, vilket är rätt för Flexible Grid Rewards.",
+          "reserved_bottom_kwh": "Reserverat i botten (kWh)",
+          "reserved_bottom_kwh_description": "Kapacitet som avtalet reserverar i botten av batteriet och inte släpper. 0 för Flexible Grid Rewards. Det planerade golvet höjs för att täcka det.",
+          "reserved_top_kwh": "Reserverat i toppen (kWh)",
+          "reserved_top_kwh_description": "Kapacitet som avtalet reserverar i toppen av batteriet och inte fyller. 0 för Flexible Grid Rewards. Det planerade taket sänks i enlighet med det.",
           "base_load_kw": "Uppskattad baskraft (kW)",
           "battery_wear_cost": "Batterislitagekostnad (per kWh cyklad, t.ex. 0,03)",
           "idle_power_kw": "Batterienhetens tomgångsförbrukning (kW)",
@@ -60,7 +66,9 @@
     "error": {
       "sensor_not_found": "En eller flera konfigurerade sensorer hittades inte.",
       "invalid_currency": "Valutan måste vara en kod med 3 bokstäver, till exempel EUR, SEK, NOK eller DKK, eller tom.",
-      "invalid_params": "Ogiltiga parametrar."
+      "invalid_params": "Ogiltiga parametrar.",
+      "invalid_reserved_band": "De reserverade kWh lämnar inget användbart intervall: minska reserverna eller vidga Min/Max SoC.",
+      "reserved_exceeds_capacity": "En reserv kan inte vara större än batterikapaciteten."
     },
     "abort": {
       "already_configured": "Battery Optimizer är redan konfigurerat."
@@ -69,11 +77,14 @@
   "options": {
     "error": {
       "sensor_not_found": "En eller flera konfigurerade sensorer hittades inte.",
-      "invalid_currency": "Valutan måste vara en kod med 3 bokstäver, till exempel EUR, SEK, NOK eller DKK, eller tom."
+      "invalid_currency": "Valutan måste vara en kod med 3 bokstäver, till exempel EUR, SEK, NOK eller DKK, eller tom.",
+      "invalid_reserved_band": "De reserverade kWh lämnar inget användbart intervall: minska reserverna eller vidga Min/Max SoC.",
+      "reserved_exceeds_capacity": "En reserv kan inte vara större än batterikapaciteten."
     },
     "step": {
       "init": {
         "title": "Battery Optimizer-inställningar",
+        "description": "Inställningar för Battery Optimizer. Effektivt planerat SoC-intervall: {effective_band}.",
         "data": {
           "emaldo_entry_id": "Emaldo-batterienhet",
           "price_source": "Datakälla för priser (emaldo = Emaldo internt, sensor = extern sensor)",
@@ -93,6 +104,12 @@
           "discharge_efficiency": "Urladdningseffektivitet (0–1)",
           "soc_min": "Minsta SoC (%)",
           "soc_max": "Högsta SoC (%)",
+          "battery_range_low_marker": "Battery Range nedre gräns (%)",
+          "battery_range_low_marker_description": "Behövs bara för Guaranteed Grid Rewards-avtal, där appens Battery Range-reglage är en procentandel av kapaciteten som återstår efter avtalets reserver, medan Min SoC är en procentandel av hela batteriet. Ange reglagets värde som ska skickas. Lämna tomt för att skicka det planerade golvet, vilket är rätt för Flexible Grid Rewards.",
+          "reserved_bottom_kwh": "Reserverat i botten (kWh)",
+          "reserved_bottom_kwh_description": "Kapacitet som avtalet reserverar i botten av batteriet och inte släpper. 0 för Flexible Grid Rewards. Det planerade golvet höjs för att täcka det.",
+          "reserved_top_kwh": "Reserverat i toppen (kWh)",
+          "reserved_top_kwh_description": "Kapacitet som avtalet reserverar i toppen av batteriet och inte fyller. 0 för Flexible Grid Rewards. Det planerade taket sänks i enlighet med det.",
           "base_load_kw": "Hushållets baskraft (kW)",
           "battery_wear_cost": "Batterislitagekostnad (per kWh, t.ex. 0,03)",
           "idle_power_kw": "Batterienhetens tomgångseffekt (kW)",

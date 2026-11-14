@@ -21,6 +21,12 @@
           "discharge_efficiency": "Purkauksen hyötysuhde (0–1)",
           "soc_min": "Minimi SoC (%)",
           "soc_max": "Maksimi SoC (%)",
+          "battery_range_low_marker": "Battery Range -alaraja (%)",
+          "battery_range_low_marker_description": "Tarvitaan vain Guaranteed Grid Rewards -sopimuksissa, joissa sovelluksen Battery Range -liukusäädin on prosenttiosuus sopimuksen varaaman kapasiteetin jälkeen jäljellä olevasta kapasiteetista, kun taas Min SoC on prosenttiosuus koko akusta. Anna työnnettävä liukusäätimen arvo. Jätä tyhjäksi, niin suunniteltu alaraja lähetetään – oikein Flexible Grid Rewards -sopimuksille.",
+          "reserved_bottom_kwh": "Varattu alaosaan (kWh)",
+          "reserved_bottom_kwh_description": "Sopimuksen akun alaosaan varaama kapasiteetti, jota ei vapauteta. 0 Flexible Grid Rewards -sopimuksille. Suunniteltu alaraja nostetaan kattamaan se.",
+          "reserved_top_kwh": "Varattu yläosaan (kWh)",
+          "reserved_top_kwh_description": "Sopimuksen akun yläosaan varaama kapasiteetti, jota ei täytetä. 0 Flexible Grid Rewards -sopimuksille. Suunniteltu yläraja lasketaan sen mukaisesti.",
           "base_load_kw": "Arvioitu peruskuorma (kW)",
           "battery_wear_cost": "Akun kulumiskustannus (per sykletty kWh, esim. 0,03)",
           "idle_power_kw": "Akun tyhjäkäynnin tehonkulutus (kW)",
@@ -60,7 +66,9 @@
     "error": {
       "sensor_not_found": "Yhtä tai useampaa määritettyä anturia ei löytynyt.",
       "invalid_currency": "Valuutan on oltava 3-kirjaiminen koodi, kuten EUR, SEK, NOK tai DKK, tai tyhjä.",
-      "invalid_params": "Virheelliset parametrit."
+      "invalid_params": "Virheelliset parametrit.",
+      "invalid_reserved_band": "Varattu kapasiteetti ei jätä käyttökelpoista aluetta: pienennä varauksia tai levennä Min/Max SoC -arvoja.",
+      "reserved_exceeds_capacity": "Varaus ei voi olla suurempi kuin akun kapasiteetti."
     },
     "abort": {
       "already_configured": "Battery Optimizer on jo määritetty."
@@ -69,11 +77,14 @@
   "options": {
     "error": {
       "sensor_not_found": "Yhtä tai useampaa määritettyä anturia ei löytynyt.",
-      "invalid_currency": "Valuutan on oltava 3-kirjaiminen koodi, kuten EUR, SEK, NOK tai DKK, tai tyhjä."
+      "invalid_currency": "Valuutan on oltava 3-kirjaiminen koodi, kuten EUR, SEK, NOK tai DKK, tai tyhjä.",
+      "invalid_reserved_band": "Varattu kapasiteetti ei jätä käyttökelpoista aluetta: pienennä varauksia tai levennä Min/Max SoC -arvoja.",
+      "reserved_exceeds_capacity": "Varaus ei voi olla suurempi kuin akun kapasiteetti."
     },
     "step": {
       "init": {
         "title": "Battery Optimizerin asetukset",
+        "description": "Battery Optimizerin asetukset. Tehollinen suunniteltu SoC-alue: {effective_band}.",
         "data": {
           "emaldo_entry_id": "Emaldo-akkulaite",
           "price_source": "Hintatietolähde (emaldo = Emaldon sisäinen, sensor = ulkoinen anturi)",
@@ -93,6 +104,12 @@
           "discharge_efficiency": "Purkauksen hyötysuhde (0–1)",
           "soc_min": "Minimi SoC (%)",
           "soc_max": "Maksimi SoC (%)",
+          "battery_range_low_marker": "Battery Range -alaraja (%)",
+          "battery_range_low_marker_description": "Tarvitaan vain Guaranteed Grid Rewards -sopimuksissa, joissa sovelluksen Battery Range -liukusäädin on prosenttiosuus sopimuksen varaaman kapasiteetin jälkeen jäljellä olevasta kapasiteetista, kun taas Min SoC on prosenttiosuus koko akusta. Anna työnnettävä liukusäätimen arvo. Jätä tyhjäksi, niin suunniteltu alaraja lähetetään – oikein Flexible Grid Rewards -sopimuksille.",
+          "reserved_bottom_kwh": "Varattu alaosaan (kWh)",
+          "reserved_bottom_kwh_description": "Sopimuksen akun alaosaan varaama kapasiteetti, jota ei vapauteta. 0 Flexible Grid Rewards -sopimuksille. Suunniteltu alaraja nostetaan kattamaan se.",
+          "reserved_top_kwh": "Varattu yläosaan (kWh)",
+          "reserved_top_kwh_description": "Sopimuksen akun yläosaan varaama kapasiteetti, jota ei täytetä. 0 Flexible Grid Rewards -sopimuksille. Suunniteltu yläraja lasketaan sen mukaisesti.",
           "base_load_kw": "Kotitalouden peruskuorma (kW)",
           "battery_wear_cost": "Akun kulumiskustannus (per kWh, esim. 0,03)",
           "idle_power_kw": "Akun tyhjäkäyntiteho (kW)",

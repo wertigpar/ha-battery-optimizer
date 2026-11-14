@@ -22,6 +22,12 @@
           "discharge_efficiency": "Discharge efficiency (0–1)",
           "soc_min": "Min SoC (%)",
           "soc_max": "Max SoC (%)",
+          "battery_range_low_marker": "Battery Range low marker (%)",
+          "battery_range_low_marker_description": "Only needed for Guaranteed Grid Rewards contracts, where the app's Battery Range slider is a percentage of the capacity left after the contract's reserves, while Min SoC is a percentage of the whole pack. Enter the slider value you want pushed. Leave empty to send the planned floor, which is right for Flexible Grid Rewards contracts.",
+          "reserved_bottom_kwh": "Reserved at bottom (kWh)",
+          "reserved_bottom_kwh_description": "Capacity the contract reserves at the bottom of the pack and will not release. 0 for Flexible Grid Rewards. The planned floor is raised to cover it.",
+          "reserved_top_kwh": "Reserved at top (kWh)",
+          "reserved_top_kwh_description": "Capacity the contract reserves at the top of the pack and will not fill. 0 for Flexible Grid Rewards. The planned ceiling is lowered to respect it.",
           "base_load_kw": "Base household load estimate (kW)",
           "battery_wear_cost": "Battery wear cost (per kWh cycled, e.g. 0.03)",
           "idle_power_kw": "Battery unit idle power consumption (kW)",
@@ -61,7 +67,9 @@
     "error": {
       "sensor_not_found": "One or more configured sensors not found.",
       "invalid_currency": "Currency must be a 3-letter code such as EUR, SEK, NOK or DKK, or empty.",
-      "invalid_params": "Invalid parameters."
+      "invalid_params": "Invalid parameters.",
+      "invalid_reserved_band": "The reserved capacity leaves no usable band: lower the reserves or widen Min/Max SoC.",
+      "reserved_exceeds_capacity": "A reserve cannot be larger than the battery capacity."
     },
     "abort": {
       "already_configured": "Battery Optimizer is already configured."
@@ -70,11 +78,14 @@
   "options": {
     "error": {
       "sensor_not_found": "One or more configured sensors not found.",
-      "invalid_currency": "Currency must be a 3-letter code such as EUR, SEK, NOK or DKK, or empty."
+      "invalid_currency": "Currency must be a 3-letter code such as EUR, SEK, NOK or DKK, or empty.",
+      "invalid_reserved_band": "The reserved capacity leaves no usable band: lower the reserves or widen Min/Max SoC.",
+      "reserved_exceeds_capacity": "A reserve cannot be larger than the battery capacity."
     },
     "step": {
       "init": {
         "title": "Battery Optimizer Options",
+        "description": "Options for Battery Optimizer. Effective planned SoC band: {effective_band}.",
         "data": {
           "emaldo_entry_id": "Emaldo battery device",
           "price_source": "Price data source (emaldo = Emaldo internal, sensor = external sensor)",
@@ -95,6 +106,12 @@
           "discharge_efficiency": "Discharge efficiency (0–1)",
           "soc_min": "Min SoC (%)",
           "soc_max": "Max SoC (%)",
+          "battery_range_low_marker": "Battery Range low marker (%)",
+          "battery_range_low_marker_description": "Only needed for Guaranteed Grid Rewards contracts, where the app's Battery Range slider is a percentage of the capacity left after the contract's reserves, while Min SoC is a percentage of the whole pack. Enter the slider value you want pushed. Leave empty to send the planned floor, which is right for Flexible Grid Rewards contracts.",
+          "reserved_bottom_kwh": "Reserved at bottom (kWh)",
+          "reserved_bottom_kwh_description": "Capacity the contract reserves at the bottom of the pack and will not release. 0 for Flexible Grid Rewards. The planned floor is raised to cover it.",
+          "reserved_top_kwh": "Reserved at top (kWh)",
+          "reserved_top_kwh_description": "Capacity the contract reserves at the top of the pack and will not fill. 0 for Flexible Grid Rewards. The planned ceiling is lowered to respect it.",
           "base_load_kw": "Base household load (kW)",
           "battery_wear_cost": "Battery wear cost (per kWh, e.g. 0.03)",
           "idle_power_kw": "Battery unit idle power (kW)",

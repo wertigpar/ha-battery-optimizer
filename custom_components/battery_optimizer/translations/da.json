@@ -21,6 +21,12 @@
           "discharge_efficiency": "Afladningseffektivitet (0–1)",
           "soc_min": "Min. SoC (%)",
           "soc_max": "Maks. SoC (%)",
+          "battery_range_low_marker": "Battery Range nedre grænse (%)",
+          "battery_range_low_marker_description": "Kun nødvendigt for Guaranteed Grid Rewards-kontrakter, hvor appens Battery Range-skyder er en procentdel af den kapacitet, der er tilbage efter kontraktens reserver, mens Min SoC er en procentdel af hele batteriet. Angiv den skyder-værdi, der skal sendes. Lad feltet stå tomt for at sende det planlagte gulv, hvilket er rigtigt for Flexible Grid Rewards.",
+          "reserved_bottom_kwh": "Reserveret i bunden (kWh)",
+          "reserved_bottom_kwh_description": "Kapacitet, som kontrakten reserverer i bunden af batteriet og ikke frigiver. 0 for Flexible Grid Rewards. Det planlagte gulv hæves for at dække det.",
+          "reserved_top_kwh": "Reserveret i toppen (kWh)",
+          "reserved_top_kwh_description": "Kapacitet, som kontrakten reserverer i toppen af batteriet og ikke fylder. 0 for Flexible Grid Rewards. Det planlagte loft sænkes i overensstemmelse hermed.",
           "base_load_kw": "Estimeret grundlast (kW)",
           "battery_wear_cost": "Batterislidomkostning (per kWh cyklet, f.eks. 0,03)",
           "idle_power_kw": "Batterienhedens tomgangsforbrug (kW)",
@@ -60,7 +66,9 @@
     "error": {
       "sensor_not_found": "En eller flere konfigurerede sensorer blev ikke fundet.",
       "invalid_currency": "Valutaen skal være en kode med 3 bogstaver, for eksempel EUR, SEK, NOK eller DKK, eller tom.",
-      "invalid_params": "Ugyldige parametre."
+      "invalid_params": "Ugyldige parametre.",
+      "invalid_reserved_band": "De reserverede kWh efterlader intet brugbart interval: sænk reserverne eller udvid Min/Max SoC.",
+      "reserved_exceeds_capacity": "En reserve kan ikke være større end batterikapaciteten."
     },
     "abort": {
       "already_configured": "Battery Optimizer er allerede konfigureret."
@@ -69,11 +77,14 @@
   "options": {
     "error": {
       "sensor_not_found": "En eller flere konfigurerede sensorer blev ikke fundet.",
-      "invalid_currency": "Valutaen skal være en kode med 3 bogstaver, for eksempel EUR, SEK, NOK eller DKK, eller tom."
+      "invalid_currency": "Valutaen skal være en kode med 3 bogstaver, for eksempel EUR, SEK, NOK eller DKK, eller tom.",
+      "invalid_reserved_band": "De reserverede kWh efterlader intet brugbart interval: sænk reserverne eller udvid Min/Max SoC.",
+      "reserved_exceeds_capacity": "En reserve kan ikke være større end batterikapaciteten."
     },
     "step": {
       "init": {
         "title": "Battery Optimizer-indstillinger",
+        "description": "Indstillinger for Battery Optimizer. Effektivt planlagt SoC-interval: {effective_band}.",
         "data": {
           "emaldo_entry_id": "Emaldo-batterienhed",
           "price_source": "Datakilde for priser (emaldo = Emaldo internt, sensor = ekstern sensor)",
@@ -93,6 +104,12 @@
           "discharge_efficiency": "Afladningseffektivitet (0–1)",
           "soc_min": "Min. SoC (%)",
           "soc_max": "Maks. SoC (%)",
+          "battery_range_low_marker": "Battery Range nedre grænse (%)",
+          "battery_range_low_marker_description": "Kun nødvendigt for Guaranteed Grid Rewards-kontrakter, hvor appens Battery Range-skyder er en procentdel af den kapacitet, der er tilbage efter kontraktens reserver, mens Min SoC er en procentdel af hele batteriet. Angiv den skyder-værdi, der skal sendes. Lad feltet stå tomt for at sende det planlagte gulv, hvilket er rigtigt for Flexible Grid Rewards.",
+          "reserved_bottom_kwh": "Reserveret i bunden (kWh)",
+          "reserved_bottom_kwh_description": "Kapacitet, som kontrakten reserverer i bunden af batteriet og ikke frigiver. 0 for Flexible Grid Rewards. Det planlagte gulv hæves for at dække det.",
+          "reserved_top_kwh": "Reserveret i toppen (kWh)",
+          "reserved_top_kwh_description": "Kapacitet, som kontrakten reserverer i toppen af batteriet og ikke fylder. 0 for Flexible Grid Rewards. Det planlagte loft sænkes i overensstemmelse hermed.",
           "base_load_kw": "Husholdningens grundlast (kW)",
           "battery_wear_cost": "Batterislidomkostning (per kWh, f.eks. 0,03)",
           "idle_power_kw": "Batterienhedens tomgangseffekt (kW)",
