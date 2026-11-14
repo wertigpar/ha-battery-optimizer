@@ -49,6 +49,9 @@ from .const import (
     CONF_DISCHARGE_EFFICIENCY,
     CONF_SOC_MIN,
     CONF_SOC_MAX,
+    CONF_BATTERY_RANGE_LOW_MARKER,
+    CONF_RESERVED_BOTTOM_KWH,
+    CONF_RESERVED_TOP_KWH,
     CONF_BASE_LOAD_KW,
     CONF_BATTERY_WEAR_COST,
     CONF_IDLE_POWER_KW,
@@ -163,6 +166,7 @@ from .rules import (
 )
 from .optional_value import is_blank
 from .money import LocaleMoney, locale_money
+from .battery_range import effective_soc_band, reserved_capacity_error
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -189,6 +193,29 @@ def _currency_error(user_input: dict[str, Any]) -> str | None:
         return "invalid_currency"
     user_input[CONF_CURRENCY] = value.upper()
     return None
+
+
+def _reserved_error_fields(user_input: dict[str, Any]) -> dict[str, str]:
+    """Return the ``errors`` fragment for impossible reserved capacity.
+
+    Only physically impossible input is rejected; a reserve that merely moves
+    the band is accepted and reported through the effective-band placeholder,
+    because reconciling the two scales is the user's call (issue #42).
+    """
+    problem = reserved_capacity_error(
+        capacity_kwh=user_input.get(CONF_BATTERY_CAPACITY_KWH, 5.0),
+        soc_min=user_input.get(CONF_SOC_MIN, 20),
+        soc_max=user_input.get(CONF_SOC_MAX, 100),
+        reserved_bottom_kwh=user_input.get(CONF_RESERVED_BOTTOM_KWH, 0.0) or 0.0,
+        reserved_top_kwh=user_input.get(CONF_RESERVED_TOP_KWH, 0.0) or 0.0,
+    )
+    if problem is None:
+        return {}
+    side, error = problem
+    field = (
+        CONF_RESERVED_BOTTOM_KWH if side == "bottom" else CONF_RESERVED_TOP_KWH
+    )
+    return {field: error}
 
 
 def _locale_money_for(
@@ -384,6 +411,20 @@ def _build_schema(
                 CONF_SOC_MAX,
                 default=d.get(CONF_SOC_MAX, DEFAULT_SOC_MAX),
             ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            vol.Optional(
+                CONF_BATTERY_RANGE_LOW_MARKER,
+                default=d.get(CONF_BATTERY_RANGE_LOW_MARKER),
+            ): _OptionalNumberSelector(
+                NumberSelectorConfig(min=1.0, max=99.0, mode=NumberSelectorMode.BOX)
+            ),
+            vol.Optional(
+                CONF_RESERVED_BOTTOM_KWH,
+                default=d.get(CONF_RESERVED_BOTTOM_KWH, 0.0),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
+            vol.Optional(
+                CONF_RESERVED_TOP_KWH,
+                default=d.get(CONF_RESERVED_TOP_KWH, 0.0),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
             vol.Required(
                 CONF_BASE_LOAD_KW,
                 default=d.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW),
@@ -934,6 +975,8 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
             if currency_error:
                 errors[CONF_CURRENCY] = currency_error
 
+            errors.update(_reserved_error_fields(user_input))
+
             if not errors:
                 await self.async_set_unique_id(DOMAIN)
                 self._abort_if_unique_id_configured()
@@ -964,6 +1007,16 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
     ) -> ConfigFlowResult:
         emaldo_options = _get_emaldo_options(self.hass)
 
+        def _band_placeholder(values: dict[str, Any]) -> str:
+            eff_min, eff_max = effective_soc_band(
+                capacity_kwh=values.get(CONF_BATTERY_CAPACITY_KWH, 5.0),
+                soc_min=values.get(CONF_SOC_MIN, 20),
+                soc_max=values.get(CONF_SOC_MAX, 100),
+                reserved_bottom_kwh=values.get(CONF_RESERVED_BOTTOM_KWH, 0.0) or 0.0,
+                reserved_top_kwh=values.get(CONF_RESERVED_TOP_KWH, 0.0) or 0.0,
+            )
+            return f"{eff_min:.0f}–{eff_max:.0f} %"
+
         if user_input is not None:
             errors: dict[str, str] = {}
             sensor_id = user_input.get(CONF_SOLAR_ACTUAL_SENSOR, "")
@@ -972,6 +1025,7 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
             currency_error = _currency_error(user_input)
             if currency_error:
                 errors[CONF_CURRENCY] = currency_error
+            errors.update(_reserved_error_fields(user_input))
             if errors:
                 cur = {**self.config_entry.data, **self.config_entry.options}
                 money = _locale_money_for(self.hass, cur)
@@ -981,7 +1035,10 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
                         cur, emaldo_options=emaldo_options, money=money
                     ),
                     errors=errors,
-                    description_placeholders={"currency": money.currency},
+                    description_placeholders={
+                        "currency": money.currency,
+                        "effective_band": _band_placeholder(cur),
+                    },
                 )
             if is_blank(user_input.get(CONF_PRECHARGE_PUBLISH_HOUR)):
                 user_input.pop(CONF_PRECHARGE_PUBLISH_HOUR, None)
@@ -995,5 +1052,8 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
             data_schema=_build_schema(
                 current, emaldo_options=emaldo_options, money=money
             ),
-            description_placeholders={"currency": money.currency},
+            description_placeholders={
+                "currency": money.currency,
+                "effective_band": _band_placeholder(current),
+            },
         )
