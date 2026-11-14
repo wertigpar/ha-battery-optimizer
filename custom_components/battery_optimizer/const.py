@@ -44,6 +44,7 @@ CONF_ENABLE_PV_STRATEGY = "enable_pv_strategy"
 CONF_SOLAR_SELL_MIN_FORECAST_KWH = "solar_sell_min_forecast_kwh"
 CONF_ENABLE_EMALDO_CONTROL = "enable_emaldo_control"
 CONF_SOLAR_FORECAST_MODE = "solar_forecast_mode"
+CONF_SOLAR_FORECAST_SOURCE = "solar_forecast_source"
 CONF_SOLAR_FORECAST_SCALE = "solar_forecast_scale"
 CONF_GRID_CHARGE_SOLAR_AWARE = "grid_charge_solar_aware"
 CONF_SOLAR_ACTUAL_SENSOR = "solar_actual_sensor"
@@ -67,6 +68,14 @@ CONF_PRECHARGE_PUBLISH_HOUR = "precharge_publish_hour"
 # ── Solar forecast mode options ──────────────────────────────────────
 SOLAR_FORECAST_P50 = "p50"  # Solcast median (optimistic, current legacy)
 SOLAR_FORECAST_P10 = "p10"  # Solcast 10th-percentile (pessimistic, weather-aware)
+
+# PV forecast source.  "solcast" (default, unchanged behaviour): an external
+# sensor whose `detailedForecast` attribute carries Solcast-shaped slots.
+# "emaldo": the Emaldo unit's own per-slot solar forecast, read from the
+# `solar` field (watts) of its schedule_chart sensor — no forecast integration,
+# no third-party account.  See `emaldo_solar.py`.
+SOLAR_SOURCE_SOLCAST = "solcast"
+SOLAR_SOURCE_EMALDO = "emaldo"
 
 # ── Defaults ─────────────────────────────────────────────────────────
 # ── Locale defaults ──────────────────────────────────────────────────
@@ -160,6 +169,7 @@ DEFAULT_ENABLE_PV_STRATEGY = False
 DEFAULT_ENABLE_EMALDO_CONTROL = True
 DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH = 10.0  # kWh; below this, cloudy day → skip
 DEFAULT_SOLAR_FORECAST_MODE = SOLAR_FORECAST_P10  # conservative planning by default
+DEFAULT_SOLAR_FORECAST_SOURCE = SOLAR_SOURCE_SOLCAST  # existing installs keep Solcast
 DEFAULT_GRID_CHARGE_SOLAR_AWARE = 0.0  # 0.0 = legacy sizing (issue #26 off)
 
 # ── Speculative grid pre-charge defaults ───────────────────────────

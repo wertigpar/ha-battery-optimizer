@@ -1,5 +1,51 @@
 # Changes
 
+## v0.3.32
+
+### Added
+
+- **PV forecast source — the Emaldo unit's own solar forecast** — **PV forecast
+  source** now offers `emaldo`: the planner runs on the per-slot `solar` field
+  (watts, AC side) of the Emaldo `schedule_chart` sensor the price path already
+  reads, so no forecast integration, third-party account or API quota is needed.
+  New pure module `emaldo_solar.py` maps the unit's rolling ISO window onto the
+  96 x 15-min local day (timestamps converted through HA's local timezone — not
+  string-sliced, or a `+00:00` late-evening slot lands in the wrong day) and
+  converts W to kW.  `_get_solcast_forecast` dispatches on the option, so all
+  seven planner call sites, the PV-sell cutover, the solar guards and the
+  accuracy accounting work on either source unchanged; the whole-day
+  `solar_forecast_scale` applies to both.  Whether the field carries data
+  depends on the unit model / third-party-PV setting — a Store with third-party
+  PV off reports `solar: 0` for every slot — so an entirely zero day logs a
+  one-time warning naming the sensor instead of planning on an empty forecast
+  silently.  A single estimate has no percentile spread, so
+  `_get_solar_confidence_ratio` reports "no confidence data" for this source
+  rather than reading Solcast keys such a config never stored (that would have
+  been a `KeyError` on the solar-aware grid-charge path).  The two Solcast
+  sensor fields become optional in the form when `emaldo` is selected; `solcast`
+  stays the default, so existing entries keep behaving as before.
+  Tests: `tests/test_emaldo_solar.py` (pure mapping/unknown-data contract),
+  `tests/test_emaldo_solar_coord.py` (source dispatch, one-shot warning,
+  confidence ratio).  Files: `emaldo_solar.py`, `coordinator.py`,
+  `config_flow.py`, `const.py`, `strings.json`, `translations/en.json`.
+
+### Fixed
+
+- **The optimizer switched Third-party PV on for installs that have none** — with
+  **PV Sell Strategy** off (the default) every run reached
+  `_apply_pv_strategy`, which called `_ensure_pv_switch_matches_plan(True)`
+  unconditionally.  That reads the real switch state, and on a unit whose
+  third-party PV is off it logged `PV switch mismatch: actual=off, desired=on —
+  correcting` and issued `switch.turn_on`.  The switch then belongs to the user,
+  and forcing it on changes the Emaldo's own control model — top-off charge
+  pulses and the cooling fan — on a system that has no third-party PV to sell.
+  The restore is now gated on a new `_pv_switch_owned` marker: a state may only
+  be handed back if this integration wrote it, and the marker is dropped once it
+  has been handed back.  A cut left in place by an earlier process across a
+  restart is deliberately not undone (the flag is process-local); the next
+  strategy-enabled run re-asserts its own plan. Test:
+  `tests/test_pv_switch_ownership.py`. File: `coordinator.py`.
+
 ## v0.3.31
 
 ### Fixed

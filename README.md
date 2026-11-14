@@ -83,9 +83,9 @@ A push that fails on every attempt is logged as a failure, not as success, and i
 | **Home Assistant** | 2024.1+ |
 | **Emaldo integration** | Must be installed and configured. The optimizer calls `emaldo.apply_bulk_schedule` to push the schedule. Battery SoC and balancing state are auto-discovered from the selected Emaldo entry. |
 | **Spot price sensor** | Required only when **Price data source** is set to `sensor`. A sensor with a `data` attribute containing 15-minute price entries (e.g. an Entso-E / Nordpool integration). See [Price Sensor Format](#price-sensor-format). When using `emaldo` (default), prices come from the Emaldo integration automatically. |
-| **Solcast PV integration** *(optional)* | [Solcast PV Forecast](https://github.com/BJReplay/ha-solcast-solar) with `detailedForecast` attribute on today/tomorrow sensors. If not available, solar production is assumed zero. |
+| **PV forecast source** | Either an external PV forecast or the Emaldo unit's own forecast. The external option needs [Solcast PV Forecast](https://github.com/BJReplay/ha-solcast-solar) installed (`detailedForecast` attribute on the today/tomorrow sensors); the `emaldo` option needs nothing extra. See [PV Forecast Source](#pv-forecast-source). |
 
-> **Note — Emaldo internal solar forecast:** The Emaldo `schedule_chart` entity (`sensor.power_store_schedule_chart`) contains a `solar` field per slot, but this data is only populated when the Emaldo device is configured as a model that supports solar (e.g. **Store+Solar** or **3rd Party PV enabled**). When the device model is **Store** with **3rd Party PV = off**, the Emaldo backend does not provide solar forecast data and the `solar` field is always zero. This means Emaldo's internal solar forecast **cannot be used as a Solcast replacement** in that configuration. Any future feature that reads solar data from Emaldo must first check whether the device model/configuration actually supplies it, and fall back to zero (or Solcast) if not.
+> **Note — the Emaldo unit can be the forecast source.** Set **PV forecast source** to `emaldo` and the optimizer plans from the per-slot `solar` field (watts) of the Emaldo `schedule_chart` entity, with no forecast integration and no third-party account. That field is only populated when the Emaldo model/configuration actually supplies solar (e.g. **Store+Solar** or **3rd Party PV = on**); on a **Store** with **3rd Party PV = off** the backend reports it as zero for every slot, and the optimizer then logs a one-time warning instead of silently planning with no PV. Solcast remains the default because it is a two-percentile forecast (`pv_estimate` / `pv_estimate10`) refreshed several times a day, while the unit publishes a single estimate — see [PV Forecast Source](#pv-forecast-source).
 
 ## Installation
 
@@ -114,8 +114,9 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 |---|---|---|
 | **Price data source** | Where to read spot prices from. `emaldo` = use Emaldo's internal Nord Pool data (no extra sensor needed, 15-min resolution). `sensor` = use an external price sensor. | `emaldo` |
 | **Spot price sensor** | Entity ID of your electricity price sensor. Only used when **Price data source** is `sensor`. | `sensor.electricity_prices` |
-| **Solcast today sensor** | Entity ID of the Solcast today forecast sensor | `sensor.solcast_pv_forecast_forecast_today` |
-| **Solcast tomorrow sensor** | Entity ID of the Solcast tomorrow forecast sensor | `sensor.solcast_pv_forecast_forecast_tomorrow` |
+| **PV forecast source** | Where the PV forecast comes from. `solcast` = an external PV forecast sensor (default, unchanged; every install predating this option keeps Solcast). `emaldo` = the Emaldo unit's own forecast, read from the `solar` field of its `schedule_chart` sensor — no forecast integration needed. See [PV Forecast Source](#pv-forecast-source). | `solcast` |
+| **Solcast today sensor** | Entity ID of the Solcast today forecast sensor. Only used when **PV forecast source** is `solcast`. | `sensor.solcast_pv_forecast_forecast_today` |
+| **Solcast tomorrow sensor** | Entity ID of the Solcast tomorrow forecast sensor. Only used when **PV forecast source** is `solcast`. | `sensor.solcast_pv_forecast_forecast_tomorrow` |
 | **VAT multiplier** | VAT multiplier applied to spot price when buying (1.255 = 25.5% Finnish VAT) | `1.255` |
 | **Grid transfer fee** | Transfer fee added to buy price (€/kWh) | `0.0776` |
 | **Sales commission** | Commission deducted from sell price (€/kWh) | `0.003` |
@@ -139,8 +140,8 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Min solar forecast for PV sell** | Minimum Solcast forecast (kWh) required to activate PV sell strategy. Below this threshold the strategy is skipped (cloudy day guard). | `10.0` |
 | **Cut third-party PV while the battery is full** | While the battery is full (SoC ≥ **Max SoC**) with solar surplus, turn **Third Party PV** off. Emaldo's own AI retries a short top-up charge roughly every two minutes at 99–100 % SoC; the BMS aborts each attempt after 1–3 s and the cooling fan starts every time (Emaldo support confirms this is expected behaviour with no product setting for it — 56–156 fan starts per sunny day on the reporting system). A full battery cannot absorb more energy, so the surplus is exported either way and holding PV off there cannot deprive the house. See [Full-Battery PV Cut](#full-battery-pv-cut). | `false` |
 | **PV cut resume SoC** | SoC (%) at which Third Party PV is switched back on after a full-battery cut. Below this the battery has headroom again and the surplus is worth keeping. | `97.0` |
-| **Solar forecast mode** | Which Solcast percentile to use for charge planning. `p10` (default) uses the pessimistic 10th-percentile forecast — weather-aware, causes the optimizer to add more grid charge slots on cloudy/uncertain days. `p50` uses the median, which can leave the battery undercharged when actual solar is lower than expected. | `p10` |
-| **Solar forecast scale** | Whole-day multiplier applied to the solar forecast before planning. `0` (default) = auto-tune from the accuracy history (see [Plan Accuracy](#plan-accuracy)); e.g. `0.8` scales the forecast down by 20% when it over-predicts. Manual values are clamped to 0.3–1.2. | `0` (auto) |
+| **Solar forecast mode** | *(Solcast source only)* Which Solcast percentile to use for charge planning. `p10` (default) uses the pessimistic 10th-percentile forecast — weather-aware, causes the optimizer to add more grid charge slots on cloudy/uncertain days. `p50` uses the median, which can leave the battery undercharged when actual solar is lower than expected. | `p10` |
+| **Solar forecast scale** | Whole-day multiplier applied to the solar forecast before planning (either source). `0` (default) = auto-tune from the accuracy history (see [Plan Accuracy](#plan-accuracy)); e.g. `0.8` scales the forecast down by 20% when it over-predicts. Manual values are clamped to 0.3–1.2. | `0` (auto) |
 | **Solar-aware grid charging** | How strongly Case B round-trip grid charging is sized against the solar forecast. `1.0` sizes the charge to only what the battery will actually discharge before the first solar-surplus slot, using the pessimistic (P10) forecast, so a cheap night before a sunny day does not buy energy that solar would have supplied anyway. `0` (default) disables it and sizes the charge to `soc_max` as before. See [Solar-Aware Grid Charging](#solar-aware-grid-charging). | `0.0` (off) |
 | **Actual solar sensor** | Entity ID of a cumulative energy counter for actual PV production (e.g. daily inverter yield, Wh or kWh). Used for plan-vs-actual accuracy and the solar-scale auto-tune instead of the Emaldo-internal estimate (balance-derived, distorted by household loads). Empty (default) = Emaldo-internal estimate. | *(empty)* |
 | **Grid import sensor** | Entity ID of a cumulative energy counter for grid import (Wh or kWh) — the basis for the Realized Cost sensors. **Empty (default) = auto-detect** the linked Emaldo unit's `grid_import_today` sensor (model-agnostic, works for any Emaldo model). Override with a lifetime meter (e.g. an EM24 `_total` counter) for a non-Emaldo or cloud-free install. | *(empty — auto)* |
@@ -156,6 +157,45 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 > **Internal PV-sell tuning constants** (not UI-configurable — edit the `BatteryConfig` dataclass defaults in `optimizer.py` to change): `pv_sell_solar_margin` (default `0.95`, minimum fraction of needed solar energy required to allow selling), `pv_sell_min_price_spread` (default `0.0`, absolute sell-price floor in €/kWh — selling also requires the sell price to exceed the slot's stored value), `pv_sell_margin` (default `1.0`, multiplier on the stored-value sell threshold — `1.05` requires a 5% premium over storage before exporting), `solar_forecast_margin` (default `0.85`, fraction of discharge-slot surplus solar credited to the grid-charge balance).
 
 All parameters can be changed later via **Settings → Devices & Services → Battery Optimizer → Configure**.
+
+### PV Forecast Source
+
+Every planner decision that involves PV (idle absorption, solar-guard/smart-override
+idle strategies, PV sell cutover, Case B grid-charge sizing, night-pool
+reservation, plan accuracy accounting) reads one 96-slot, 15-minute kW series.
+**PV forecast source** decides where that series comes from; everything
+downstream is identical.
+
+| Source | Where it reads | Requires |
+|---|---|---|
+| `solcast` *(default)* | `detailedForecast` on the configured today/tomorrow sensors | Solcast PV integration, Solcast account |
+| `emaldo` | the `solar` field (watts, AC side) of the Emaldo `schedule_chart` sensor the price path already reads | nothing beyond the Emaldo integration |
+
+Choosing `emaldo`:
+
+* **No extra integration or account.** The unit's own forecast is already on the
+  `schedule_chart` attribute: `{"t": "2026-11-13T10:45:00+01:00", "price": 130.03,
+  "solar": 16, ...}`. Slots are mapped to 15-minute indices by their timestamp
+  converted to HA's local timezone, and converted W → kW.
+* **Only if the unit actually reports it.** Whether the field carries data
+  depends on the Emaldo model and its third-party-PV setting: a **Store** with
+  **3rd Party PV = off** reports `solar: 0` for every slot. The optimizer cannot
+  tell that from a clear night, so an entirely zero day produces one
+  `WARNING` in the log naming the sensor and telling you to either fix the
+  Emaldo configuration or switch back to `solcast` — it never plans on a silently
+  empty forecast.
+* **Single estimate, no percentile spread.** The unit publishes one number per
+  slot, so **Solar forecast mode** (`p10` vs `p50`) has nothing to select and the
+  p10/p50 dispersion ratio used by **Solar-aware grid charging** reports "no
+  confidence data"; sizing falls back to the estimate as reported. **Solar
+  forecast scale** still applies.
+* **Refresh cadence and horizon are the unit's.** Slots beyond the published
+  window stay 0.0 (unknown solar), exactly as when a Solcast sensor is missing,
+  so a partially covered day plans on the part the unit did publish.
+* **Selection:** the dropdown in the config/options form. With `emaldo` selected
+  the two Solcast sensor fields become optional (blank); switching back to
+  `solcast` restores the defaults. Nothing else has to change — an existing
+  entry keeps using Solcast until you select `emaldo`.
 
 ### Idle Slot Strategy
 
@@ -1120,6 +1160,12 @@ Negative bars (refunds, when feed-in exceeds purchase in a slot) plot below zero
 ## PV Sell Strategy
 
 The PV sell strategy controls `switch.power_store_third_party_pv` (the Emaldo "third-party PV" switch) slot by slot to sell morning solar energy directly to the grid at a better price instead of always charging the battery first.
+
+The switch is only written while the strategy is switched on (including handing
+back a switch the strategy cut). An install with the strategy off — the default
+— is never told "third-party PV on": on a unit that has no third-party PV that
+write changes the Emaldo's own control model (top-off charge pulses, fan starts),
+which the integration has no business deciding.
 
 ### Background
 

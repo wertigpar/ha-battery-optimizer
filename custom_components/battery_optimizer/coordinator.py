@@ -81,6 +81,7 @@ from .const import (
     CONF_SOLAR_SELL_MIN_FORECAST_KWH,
     CONF_ENABLE_EMALDO_CONTROL,
     CONF_SOLAR_FORECAST_MODE,
+    CONF_SOLAR_FORECAST_SOURCE,
     CONF_SOLAR_FORECAST_SCALE,
     CONF_GRID_CHARGE_SOLAR_AWARE,
     CONF_SOLAR_ACTUAL_SENSOR,
@@ -113,12 +114,14 @@ from .const import (
     NORD_POOL_PUBLISH_TZ,
     NORD_POOL_PUBLISH_HOUR,
     PUBLISH_CUTOFF_SLOT,    SOLAR_FORECAST_P10, SOLAR_FORECAST_P50,
+    SOLAR_SOURCE_EMALDO,
     DEFAULT_AUTO_BASE_LOAD,
     DEFAULT_LOAD_ENERGY_SENSOR,
     DEFAULT_ENABLE_PV_STRATEGY,
     DEFAULT_ENABLE_EMALDO_CONTROL,
     DEFAULT_SOLAR_SELL_MIN_FORECAST_KWH,
     DEFAULT_SOLAR_FORECAST_MODE,
+    DEFAULT_SOLAR_FORECAST_SOURCE,
     DEFAULT_SOLAR_FORECAST_SCALE,
     DEFAULT_GRID_CHARGE_SOLAR_AWARE,
     DEFAULT_GRID_IMPORT_SENSOR,
@@ -159,6 +162,7 @@ from .const import (
 )
 from homeassistant.helpers import issue_registry as ir
 
+from .emaldo_solar import emaldo_solar_day
 from .money import (
     ORIGIN_LITERALS,
     currency_source,
@@ -729,6 +733,17 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # switch does not toggle as the battery hovers at full. Restored to
         # False on restart and when the feature is disabled.
         self._pv_cut_latch: bool = False
+        # The PV state this integration itself wrote (None = never wrote).  Only a
+        # state we own may be handed back when the strategy is switched off: on a
+        # unit without third-party PV the switch belongs to the user, and
+        # asserting "on" there changes the Emaldo's control model (top-off charge
+        # pulses, fan churn) for a system that has no third-party PV at all.
+        # The flag is process-local (not persisted): a cut made by an earlier
+        # process and left in place across a restart is not undone here — the
+        # next strategy-enabled run re-asserts its own plan instead.
+        self._pv_switch_owned: bool | None = None
+        # One-shot warnings for the Emaldo-native solar forecast source.
+        self._emaldo_solar_warned: bool = False
         # Emaldo control enable/disable
         self._emaldo_control_enabled: bool = self.config.get(
             CONF_ENABLE_EMALDO_CONTROL, DEFAULT_ENABLE_EMALDO_CONTROL
@@ -1290,6 +1305,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Returns:
             96 x 15-min kW values.
         """
+        if (
+            self.config.get(
+                CONF_SOLAR_FORECAST_SOURCE, DEFAULT_SOLAR_FORECAST_SOURCE
+            )
+            == SOLAR_SOURCE_EMALDO
+        ):
+            return self._get_emaldo_solar_forecast(which)
+
         if which == "today":
             sensor_id = self.config[CONF_SOLCAST_TODAY]
         else:
@@ -1319,6 +1342,57 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # commutes with the linear interpolation, so scaling AFTER it yields
         # the same profile as scaling the 30-min slots.
         return [v * self._solar_scale for v in forecast_15]
+
+    def _get_emaldo_solar_forecast(self, which: str = "today") -> list[float]:
+        """Read the Emaldo unit's own PV forecast.
+
+        Same return contract as `_get_solcast_forecast` (96 x 15-min kW values),
+        so every planner call site stays untouched.  The unit publishes its
+        forecast as the per-slot `solar` field (watts) of its `schedule_chart`
+        sensor -- the sensor the price path already reads -- so no forecast
+        integration or third-party account is needed.
+
+        Whether that field carries data depends on the unit model / third-party
+        PV setting (the backend reports zeros for e.g. a Store with third-party
+        PV off), so an all-zero day is warned about once instead of being
+        planned silently.
+        """
+        sensor_id = self._resolve_emaldo_entity("schedule_chart")
+        if sensor_id is None:
+            if not self._emaldo_solar_warned:
+                self._emaldo_solar_warned = True
+                _LOGGER.warning(
+                    "solar_forecast_source is 'emaldo' but no Emaldo "
+                    "schedule_chart sensor could be resolved -- solar is "
+                    "assumed zero"
+                )
+            return [0.0] * SLOTS_PER_DAY
+
+        state = self.hass.states.get(sensor_id)
+        if state is None:
+            _LOGGER.debug(
+                "Emaldo schedule_chart sensor %s unavailable -- solar assumed zero",
+                sensor_id,
+            )
+            return [0.0] * SLOTS_PER_DAY
+
+        local_tz = dt_util.get_time_zone(self.hass.config.time_zone)
+        day = dt_util.now().date()
+        if which == "tomorrow":
+            day = day + timedelta(days=1)
+        slots = emaldo_solar_day(state.attributes.get("schedule"), day, local_tz)
+
+        if not any(slots) and not self._emaldo_solar_warned:
+            self._emaldo_solar_warned = True
+            _LOGGER.warning(
+                "Emaldo solar forecast (%s) reports only zeros for %s -- this unit "
+                "may not expose solar data for its model / third-party-PV "
+                "configuration. Check the Emaldo settings, or set "
+                "solar_forecast_source back to 'solcast'.",
+                sensor_id,
+                day.isoformat(),
+            )
+        return [v * self._solar_scale for v in slots]
 
     def _get_solar_confidence_ratio(self, which: str = "today") -> float | None:
         """p10/p50 dispersion ratio for the requested day, or None if unavailable.
@@ -1352,6 +1426,16 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 forecast_mode,
             )
             return 1.0
+        if (
+            self.config.get(
+                CONF_SOLAR_FORECAST_SOURCE, DEFAULT_SOLAR_FORECAST_SOURCE
+            )
+            == SOLAR_SOURCE_EMALDO
+        ):
+            # The Emaldo forecast is a single estimate — there is no p10/p50 pair
+            # to take a dispersion from, so "no confidence data" is the honest
+            # answer and grid-charge sizing falls back to the forecast as-is.
+            return None
         sensor_id = (
             self.config[CONF_SOLCAST_TODAY]
             if which == "today"
@@ -5761,6 +5845,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "switch", service, {"entity_id": entity_id}, blocking=True,
             )
             self._pv_switch_state = turn_on
+            self._pv_switch_owned = turn_on
             _LOGGER.debug("PV switch %s: %s", entity_id, service)
         except Exception as err:
             _LOGGER.error(
@@ -5895,9 +5980,19 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         if not self._pv_strategy_enabled:
-            # Strategy is off — restore PV to on and clear the cut latch.
+            # Strategy is off — hand the switch back, but only if we were the one
+            # that took it.  Asserting "third-party PV on" on a unit that has no
+            # third-party PV writes a switch the user owns and changes the
+            # Emaldo's control model, so it must never happen.
+            owned_by_us_off = self._pv_switch_owned is False
             self._pv_cut_latch = False
-            await self._ensure_pv_switch_matches_plan(True)
+            self._pv_switch_owned = None
+            if owned_by_us_off:
+                await self._ensure_pv_switch_matches_plan(True)
+                # The hand-back write itself re-marked the switch as ours; we are
+                # done with it, so the invariant "after this branch we own
+                # nothing" has to be restored explicitly.
+                self._pv_switch_owned = None
             return
 
         # Solar forecast guard: skip on cloudy days.
