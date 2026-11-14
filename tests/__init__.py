@@ -142,6 +142,28 @@ def load_optional_value():
     return optional_value, pkg.const
 
 
+def load_battery_range():
+    """Return (battery_range_module, const_module) loaded from repo source.
+
+    ``battery_range.py`` is a pure module (no Home Assistant, no relative
+    imports), but it is loaded inside the fabricated ``bopt_pkg`` for
+    consistency with the other loaders.
+    """
+    if _PKG_NAME in sys.modules and hasattr(sys.modules[_PKG_NAME], "battery_range"):
+        return sys.modules[_PKG_NAME].battery_range, sys.modules[_PKG_NAME].const
+
+    load_optimizer()  # builds bopt_pkg + const
+    pkg = sys.modules[_PKG_NAME]
+    spec = spec_from_file_location(
+        f"{_PKG_NAME}.battery_range", str(_SRC_DIR / "battery_range.py")
+    )
+    mod = module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    pkg.battery_range = mod
+    return mod, pkg.const
+
+
 def load_marker_io():
     """Return (marker_io_module, const_module) loaded from the repo source.
 
