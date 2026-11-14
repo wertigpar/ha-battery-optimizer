@@ -535,6 +535,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Issue #42: last band-clamp warning, so it is logged once per
         # configuration rather than on every BatteryConfig build.
         self._band_clamp_warning: str | None = None
+        # Issue #42: last low-marker clamp warning, so the resolver logs once
+        # per marker conflict instead of on every push.
+        self._low_marker_clamp_warning: str | None = None
         self._activated_time: str | None = None
         # SoC Guard state
         self._unsub_guard: CALLBACK_TYPE | None = None
@@ -5049,12 +5052,18 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         requested = resolve_low_marker(cfg.soc_min, self._configured_low_marker())
         low_marker = clamp_marker_to_high(requested, high_marker)
+        warning = None
         if low_marker != requested:
-            _LOGGER.warning(
+            warning = (
                 "Battery Range low marker %d%% is above the SoC guard "
-                "high marker %d%%; sending %d%% instead (issue #42)",
-                requested, high_marker, low_marker,
+                "high marker %d%%; sending %d%% instead (issue #42)"
+                % (requested, high_marker, low_marker)
             )
+        if warning and warning != getattr(
+            self, "_low_marker_clamp_warning", None
+        ):
+            _LOGGER.warning(warning)
+        self._low_marker_clamp_warning = warning
         return low_marker
 
     def _normalise_discharge_bytes(

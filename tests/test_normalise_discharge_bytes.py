@@ -103,6 +103,22 @@ def test_resolved_low_marker_never_returns_the_idle_byte():
     assert _inst(marker=0.0)._resolved_low_marker(_cfg(13.0), None) == 1
 
 
+def test_low_marker_clamp_warning_logs_once_per_conflict(caplog):
+    import logging
+
+    o = _inst(marker=40.0)
+    with caplog.at_level(logging.WARNING, logger=mod._LOGGER.name):
+        assert o._resolved_low_marker(_cfg(13.0), 25) == 25
+        assert o._resolved_low_marker(_cfg(13.0), 25) == 25
+    assert caplog.text.count("Battery Range low marker") == 1
+    with caplog.at_level(logging.WARNING, logger=mod._LOGGER.name):
+        o._resolved_low_marker(_cfg(13.0), 30)
+    assert caplog.text.count("Battery Range low marker") == 2
+    with caplog.at_level(logging.WARNING, logger=mod._LOGGER.name):
+        o._resolved_low_marker(_cfg(13.0), None)
+    assert caplog.text.count("Battery Range low marker") == 2
+
+
 def test_fgr_frame_is_unchanged_for_normal_installs():
     # FGR-shaped config: zero reserves, marker unset.  The pushed frame must
     # stay the pre-#42 one: marker == the planned floor (bounded to 1..99)
