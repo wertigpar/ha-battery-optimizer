@@ -127,6 +127,9 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Discharge efficiency** | Discharge efficiency (0.5–1.0) | `0.9` |
 | **Min SoC** | Minimum allowed state of charge (%) | `20` |
 | **Max SoC** | Maximum allowed state of charge (%) | `100` |
+| **Battery Range low marker (%)** | Optional. The value to push as the Emaldo Battery Range low marker. Only needed for Guaranteed Grid Rewards contracts, where the app's slider scale is a percentage of the capacity left after the contract's reserves, unlike the whole-pack scale of the SoC sensor. Empty sends the planned floor (correct for Flexible Grid Rewards). | *(empty)* |
+| **Reserved at bottom (kWh)** | Optional. Capacity the contract reserves at the bottom of the pack. Raises the planned floor so discharge never aims into reserved capacity. `0` for Flexible Grid Rewards. | `0` |
+| **Reserved at top (kWh)** | Optional. Capacity the contract reserves at the top of the pack. Lowers the planned ceiling so charging never aims into it. `0` for Flexible Grid Rewards. | `0` |
 | **Base household load** | Estimated constant household load in kW. Used when auto-tune is disabled. | `1.0` |
 | **Battery wear cost** | Cost per kWh cycled (€/kWh) — accounts for battery degradation. Typical LFP: 1–5 snt/kWh. | `0.03` |
 | **Idle power consumption** | Constant power draw of the battery unit itself (kW). Drains SoC even when idle. | `0.1` |

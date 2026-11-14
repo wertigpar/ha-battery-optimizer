@@ -29,6 +29,29 @@
   confidence ratio).  Files: `emaldo_solar.py`, `coordinator.py`,
   `config_flow.py`, `const.py`, `strings.json`, `translations/en.json`.
 
+- **Grid Rewards contracts get their own Battery Range marker and a
+  reserve-aware SoC band (#42)** — Guaranteed Grid Rewards (GGR) contracts
+  reserve part of the pack and give the Emaldo app's Battery Range slider its
+  own scale: a percentage of the capacity left after the reserve, not of the
+  whole pack the SoC sensor reports. Since the #38 fix the low marker was sent
+  as `soc_min`, which on GGR either raised the real floor by several kWh (with
+  `soc_min` set to the real floor) or planned energy the battery would never
+  release (with `soc_min` set to the slider value). Three new optional
+  settings, all inert when left alone:
+  - **Battery Range low marker (%)** — the slider value to push. Empty keeps
+    the previous behaviour and sends the planned floor, which is correct for
+    Flexible Grid Rewards contracts.
+  - **Reserved at bottom (kWh)** — capacity the contract holds back at the
+    bottom. The planned floor is raised to cover it, so the optimizer never
+    schedules discharge into it. Defaults to 0.
+  - **Reserved at top (kWh)** — capacity the contract holds back at the top.
+    The planned ceiling is lowered to respect it. Defaults to 0.
+  A reserve that only narrows the band is accepted and the effective band is
+  shown in the options form; impossible values (a reserve larger than the
+  pack, or a band with no room left) are rejected. Flexible Grid Rewards
+  installs see no change: with 0 reserves and an empty marker the pushed
+  schedule is identical.
+
 ### Fixed
 
 - **The optimizer switched Third-party PV on for installs that have none** — with
