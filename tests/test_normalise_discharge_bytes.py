@@ -81,3 +81,23 @@ def test_configured_marker_is_bounded_like_the_floor():
     sv[60] = 256 - 55
     assert _inst(marker=0.0)._normalise_discharge_bytes(sv, 0) == 1
     assert sv[60] == 255
+
+
+def _cfg(soc_min=13.0):
+    return types.SimpleNamespace(soc_min=soc_min)
+
+
+def test_resolved_low_marker_follows_the_floor_when_unset():
+    assert _inst(soc_min=13.0)._resolved_low_marker(_cfg(13.0), None) == 13
+
+
+def test_resolved_low_marker_uses_the_configured_marker():
+    assert _inst(soc_min=31.0, marker=7.0)._resolved_low_marker(_cfg(31.0), None) == 7
+
+
+def test_resolved_low_marker_clamps_to_the_high_marker():
+    assert _inst(marker=40.0)._resolved_low_marker(_cfg(13.0), 25) == 25
+
+
+def test_resolved_low_marker_never_returns_the_idle_byte():
+    assert _inst(marker=0.0)._resolved_low_marker(_cfg(13.0), None) == 1

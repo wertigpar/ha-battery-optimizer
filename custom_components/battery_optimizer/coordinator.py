@@ -4932,14 +4932,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for i, val in enumerate(slot_values):
                 if val > 0x80:  # discharge byte (129-255)
                     slot_values[i] = (256 - high_marker) & 0xFF
-            requested = resolve_low_marker(cfg.soc_min, self._configured_low_marker())
-            low_marker = clamp_marker_to_high(requested, high_marker)
-            if low_marker != requested:
-                _LOGGER.warning(
-                    "Battery Range low marker %d%% is at or above the SoC guard "
-                    "high marker %d%%; sending %d%% instead (issue #42)",
-                    requested, high_marker, low_marker,
-                )
+            low_marker = self._resolved_low_marker(cfg, high_marker)
             service_data["high_marker"] = high_marker
             service_data["low_marker"] = low_marker
             self._current_guard_marker = high_marker
@@ -5042,6 +5035,25 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         return self.config.get(CONF_BATTERY_RANGE_LOW_MARKER)
 
+    def _resolved_low_marker(
+        self, cfg: BatteryConfig, high_marker: int | None
+    ) -> int:
+        """Return the Battery Range low marker to push (issue #42).
+
+        Three paths send this marker pair - the rolling schedule with the SoC
+        guard on, the rolling schedule with it off, and the periodic guard
+        update - so one resolver keeps them identical.
+        """
+        requested = resolve_low_marker(cfg.soc_min, self._configured_low_marker())
+        low_marker = clamp_marker_to_high(requested, high_marker)
+        if low_marker != requested:
+            _LOGGER.warning(
+                "Battery Range low marker %d%% is at or above the SoC guard "
+                "high marker %d%%; sending %d%% instead (issue #42)",
+                requested, high_marker, low_marker,
+            )
+        return low_marker
+
     def _normalise_discharge_bytes(
         self, slot_values: list[int], now_slot: int
     ) -> int | None:
@@ -5070,9 +5082,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if low_marker is None:
                 # At least 1: a marker of 0 would encode as byte 0, which is
                 # the idle byte, so soc_min = 0 would stop every discharge.
-                low_marker = resolve_low_marker(
-                    self._build_battery_config().soc_min,
-                    self._configured_low_marker(),
+                low_marker = self._resolved_low_marker(
+                    self._build_battery_config(), None
                 )
             slot_values[pos] = (256 - low_marker) & 0xFF
         return low_marker
@@ -5797,6 +5808,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         cfg = self._build_battery_config()
+        low_marker = self._resolved_low_marker(cfg, new_marker)
         old_marker = self._current_guard_marker
 
         # Rebuild slot values with the new discharge byte
@@ -5817,7 +5829,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             guard_data: dict[str, Any] = {
                 "slots": slot_values,
                 "high_marker": new_marker,
-                "low_marker": int(cfg.soc_min),
+                "low_marker": low_marker,
             }
             if self._emaldo_device_id is None:
                 self.resolve_emaldo_device()
