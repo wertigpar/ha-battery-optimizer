@@ -42,15 +42,28 @@
     the previous behaviour and sends the planned floor, which is correct for
     Flexible Grid Rewards contracts.
   - **Reserved at bottom (kWh)** — capacity the contract holds back at the
-    bottom. The planned floor is raised to cover it, so the optimizer never
-    schedules discharge into it. Defaults to 0.
+    bottom. When the reserve exceeds Min SoC, the planned floor is raised to
+    cover it (max()), so the optimizer never schedules discharge into it.
+    Defaults to 0.
   - **Reserved at top (kWh)** — capacity the contract holds back at the top.
-    The planned ceiling is lowered to respect it. Defaults to 0.
+    When the reserve lowers the ceiling below Max SoC, the planned ceiling is
+    lowered to respect it (min()). Defaults to 0.
   A reserve that only narrows the band is accepted and the effective band is
   shown in the options form; impossible values (a reserve larger than the
-  pack, or a band with no room left) are rejected. Flexible Grid Rewards
-  installs see no change: with 0 reserves and an empty marker the pushed
-  schedule is identical.
+  pack, or a band with no room left) are rejected. The band only moves when a
+  reserve exceeds the configured Min/Max SoC (it uses max()/min()), so a
+  reserve that stays inside the band changes nothing. Flexible Grid Rewards
+  installs see no change for normal installs with `1 <= Min SoC <= 99`: with
+  0 reserves and an empty marker the pushed schedule is unchanged. Min SoC 0
+  now sends marker 1 and Min SoC 100 sends 99 (the marker must stay in 1..99;
+  0 would be the idle byte).
+
+  **Caveat — SoC guard on Guaranteed Grid Rewards:** with the SoC guard
+  enabled, the guard's high marker is still computed on the whole-pack scale
+  while the device reads the Battery Range markers on the usable-capacity
+  scale, so on a Guaranteed contract discharge may stop above the planned
+  floor. This change does not alter the guard; run GGR with the SoC guard
+  disabled until a follow-up converts it.
 
 ### Fixed
 

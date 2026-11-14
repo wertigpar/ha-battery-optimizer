@@ -69,6 +69,7 @@
       "invalid_currency": "Currency must be a 3-letter code such as EUR, SEK, NOK or DKK, or empty.",
       "invalid_params": "Invalid parameters.",
       "invalid_reserved_band": "The reserved capacity leaves no usable band: lower the reserves or widen Min/Max SoC.",
+      "invalid_soc_band": "Min SoC must be below Max SoC.",
       "reserved_exceeds_capacity": "A reserve cannot be larger than the battery capacity."
     },
     "abort": {
@@ -80,6 +81,7 @@
       "sensor_not_found": "One or more configured sensors not found.",
       "invalid_currency": "Currency must be a 3-letter code such as EUR, SEK, NOK or DKK, or empty.",
       "invalid_reserved_band": "The reserved capacity leaves no usable band: lower the reserves or widen Min/Max SoC.",
+      "invalid_soc_band": "Min SoC must be below Max SoC.",
       "reserved_exceeds_capacity": "A reserve cannot be larger than the battery capacity."
     },
     "step": {

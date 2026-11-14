@@ -40,11 +40,17 @@ def effective_soc_band(
     """
     soc_min = float(soc_min)
     soc_max = float(soc_max)
-    if capacity_kwh <= 0:
+    capacity = float(capacity_kwh or 0.0)
+    if capacity <= 0:
         return soc_min, soc_max
-    bottom_pct = max(0.0, float(reserved_bottom_kwh)) / float(capacity_kwh) * 100.0
-    top_pct = max(0.0, float(reserved_top_kwh)) / float(capacity_kwh) * 100.0
+    bottom_pct = max(0.0, float(reserved_bottom_kwh or 0.0)) / capacity * 100.0
+    top_pct = max(0.0, float(reserved_top_kwh or 0.0)) / capacity * 100.0
     return max(soc_min, bottom_pct), min(soc_max, 100.0 - top_pct)
+
+
+def _bound_marker(value: float) -> int:
+    """Round and clamp a marker into the valid Battery Range window."""
+    return max(MARKER_MIN, min(MARKER_MAX, int(round(value))))
 
 
 def resolve_low_marker(soc_min: float, configured: float | None) -> int:
@@ -53,10 +59,17 @@ def resolve_low_marker(soc_min: float, configured: float | None) -> int:
     ``configured`` is the optional ``battery_range_low_marker`` setting.  When
     it is unset the marker follows the planned floor, which is the historical
     behaviour and correct for Flexible contracts, where both scales are the
-    same pack percentage.
+    same pack percentage.  A non-numeric stored value falls back to the
+    planned floor instead of raising inside the push path.
     """
-    value = float(soc_min) if configured is None else float(configured)
-    return max(MARKER_MIN, min(MARKER_MAX, int(round(value))))
+    planned = _bound_marker(float(soc_min))
+    if configured is None:
+        return planned
+    try:
+        value = float(configured)
+    except (TypeError, ValueError):
+        return planned
+    return _bound_marker(value)
 
 
 def clamp_marker_to_high(marker: int, high: int | None) -> int:
@@ -65,10 +78,20 @@ def clamp_marker_to_high(marker: int, high: int | None) -> int:
     ha-emaldo requires ``high >= low`` (``valid_marker_pair``) and refuses a
     Battery Range write whose smart marker is below the emergency one, so a
     marker above the guard's high marker would otherwise be dropped silently.
+    The marker is bounded into ``1..99`` first, and a high marker below
+    ``MARKER_MIN`` (including the idle byte 0) is treated as "no high clamp",
+    so this can never return a pair-breaking value.
     """
+    marker = max(MARKER_MIN, min(MARKER_MAX, int(marker)))
     if high is None:
         return marker
-    return min(marker, max(MARKER_MIN, int(high)))
+    try:
+        high_value = int(high)
+    except (TypeError, ValueError):
+        return marker
+    if high_value < MARKER_MIN:
+        return marker
+    return min(marker, high_value)
 
 
 def reserved_capacity_error(
@@ -92,6 +115,8 @@ def reserved_capacity_error(
         return "bottom", "reserved_exceeds_capacity"
     if top > capacity:
         return "top", "reserved_exceeds_capacity"
+    soc_min = float(soc_min)
+    soc_max = float(soc_max)
     eff_min, eff_max = effective_soc_band(
         capacity_kwh=capacity,
         soc_min=soc_min,
@@ -100,7 +125,16 @@ def reserved_capacity_error(
         reserved_top_kwh=top,
     )
     if eff_min >= eff_max:
-        return "bottom", "invalid_reserved_band"
+        if capacity > 0:
+            bottom_pct = max(0.0, bottom) / capacity * 100.0
+            top_pct = max(0.0, top) / capacity * 100.0
+        else:
+            bottom_pct = top_pct = 0.0
+        if eff_min == bottom_pct and bottom_pct > soc_min:
+            return "bottom", "invalid_reserved_band"
+        if eff_max == 100.0 - top_pct and eff_max < soc_max:
+            return "top", "invalid_reserved_band"
+        return "base", "invalid_soc_band"
     return None
 
 

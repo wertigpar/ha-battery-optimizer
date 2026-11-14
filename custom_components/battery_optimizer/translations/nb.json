@@ -68,6 +68,7 @@
       "invalid_currency": "Valutaen må være en kode med 3 bokstaver, for eksempel EUR, SEK, NOK eller DKK, eller tom.",
       "invalid_params": "Ugyldige parametere.",
       "invalid_reserved_band": "De reserverte kWh etterlater ingen brukbar bane: senk reservene eller utvid Min/Max SoC.",
+      "invalid_soc_band": "Min SoC må være lavere enn Max SoC.",
       "reserved_exceeds_capacity": "En reserve kan ikke være større enn batterikapasiteten."
     },
     "abort": {
@@ -79,6 +80,7 @@
       "sensor_not_found": "En eller flere konfigurerte sensorer ble ikke funnet.",
       "invalid_currency": "Valutaen må være en kode med 3 bokstaver, for eksempel EUR, SEK, NOK eller DKK, eller tom.",
       "invalid_reserved_band": "De reserverte kWh etterlater ingen brukbar bane: senk reservene eller utvid Min/Max SoC.",
+      "invalid_soc_band": "Min SoC må være lavere enn Max SoC.",
       "reserved_exceeds_capacity": "En reserve kan ikke være større enn batterikapasiteten."
     },
     "step": {

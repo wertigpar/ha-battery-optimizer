@@ -212,6 +212,8 @@ def _reserved_error_fields(user_input: dict[str, Any]) -> dict[str, str]:
     if problem is None:
         return {}
     side, error = problem
+    if side == "base":
+        return {"base": error}
     field = (
         CONF_RESERVED_BOTTOM_KWH if side == "bottom" else CONF_RESERVED_TOP_KWH
     )

@@ -214,6 +214,7 @@ from . import push_state
 from . import marker_io
 from . import sale_state
 from .battery_range import (
+    MARKER_MIN,
     clamp_marker_to_high,
     effective_soc_band,
     resolve_low_marker,
@@ -1066,12 +1067,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         capacity_kwh = c.get(CONF_BATTERY_CAPACITY_KWH, 5.0)
         soc_min = c.get(CONF_SOC_MIN, 20)
         soc_max = c.get(CONF_SOC_MAX, 100)
+        reserved_bottom_kwh = c.get(CONF_RESERVED_BOTTOM_KWH, 0.0) or 0.0
+        reserved_top_kwh = c.get(CONF_RESERVED_TOP_KWH, 0.0) or 0.0
         eff_soc_min, eff_soc_max = effective_soc_band(
             capacity_kwh=capacity_kwh,
             soc_min=soc_min,
             soc_max=soc_max,
-            reserved_bottom_kwh=c.get(CONF_RESERVED_BOTTOM_KWH, 0.0) or 0.0,
-            reserved_top_kwh=c.get(CONF_RESERVED_TOP_KWH, 0.0) or 0.0,
+            reserved_bottom_kwh=reserved_bottom_kwh,
+            reserved_top_kwh=reserved_top_kwh,
         )
         warning = None
         if (eff_soc_min, eff_soc_max) != (float(soc_min), float(soc_max)):
@@ -1079,10 +1082,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Reserved capacity clamps the planned SoC band: "
                 f"{float(soc_min):.0f}-{float(soc_max):.0f} % -> "
                 f"{eff_soc_min:.0f}-{eff_soc_max:.0f} % "
-                f"(reserves {c.get(CONF_RESERVED_BOTTOM_KWH, 0.0)} kWh bottom, "
-                f"{c.get(CONF_RESERVED_TOP_KWH, 0.0)} kWh top of "
-                f"{capacity_kwh} kWh). Adjust Min/Max SoC or the reserves "
-                "if that is not intended (issue #42)."
+                f"(reserves {float(reserved_bottom_kwh)} kWh bottom, "
+                f"{float(reserved_top_kwh)} kWh top of "
+                f"{float(capacity_kwh or 0.0)} kWh). Adjust Min/Max SoC or "
+                "the reserves if that is not intended (issue #42)."
             )
         if warning and warning != getattr(self, "_band_clamp_warning", None):
             _LOGGER.warning(warning)
@@ -1096,7 +1099,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else c.get(CONF_BASE_LOAD_KW, 0.5)
         )
         return BatteryConfig(
-            capacity_kwh=c.get(CONF_BATTERY_CAPACITY_KWH, 5.0),
+            capacity_kwh=capacity_kwh,
             max_charge_kw=c.get(CONF_MAX_CHARGE_KW, DEFAULT_MAX_CHARGE_KW),
             max_discharge_kw=c.get(
                 CONF_MAX_DISCHARGE_KW, DEFAULT_MAX_DISCHARGE_KW
@@ -5048,7 +5051,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         low_marker = clamp_marker_to_high(requested, high_marker)
         if low_marker != requested:
             _LOGGER.warning(
-                "Battery Range low marker %d%% is at or above the SoC guard "
+                "Battery Range low marker %d%% is above the SoC guard "
                 "high marker %d%%; sending %d%% instead (issue #42)",
                 requested, high_marker, low_marker,
             )
@@ -5738,13 +5741,13 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         cfg = self._build_battery_config()
         if self._last_result is None:
-            return int(cfg.soc_min)
+            return max(MARKER_MIN, int(cfg.soc_min))
 
         guard_interval = self._config_int(
             CONF_SOC_GUARD_INTERVAL, DEFAULT_SOC_GUARD_INTERVAL
         )
         if guard_interval <= 0:
-            return int(cfg.soc_min)
+            return max(MARKER_MIN, int(cfg.soc_min))
 
         now_slot = _current_slot_index()
         interval_slots = max(guard_interval // 15, 1)
@@ -5783,7 +5786,7 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 w = winners[s] if s < len(winners) else None
                 if w is not None and w.action == "discharge" and w.soc_target is not None:
                     marker = max(marker, w.soc_target)
-        return marker
+        return max(MARKER_MIN, int(marker))
 
     @callback
     def _soc_guard_callback(self, now: datetime) -> None:

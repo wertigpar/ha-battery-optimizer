@@ -8,7 +8,11 @@ BASE = (
 )
 
 FIELDS = ["battery_range_low_marker", "reserved_bottom_kwh", "reserved_top_kwh"]
-ERRORS = ["invalid_reserved_band", "reserved_exceeds_capacity"]
+ERRORS = [
+    "invalid_reserved_band",
+    "invalid_soc_band",
+    "reserved_exceeds_capacity",
+]
 FILES = ["strings.json"] + [
     f"translations/{lang}.json" for lang in ("en", "fi", "sv", "da", "nb")
 ]
@@ -40,3 +44,12 @@ def test_every_file_has_the_new_error_keys():
         for block in (doc["config"]["error"], doc["options"]["error"]):
             for key in ERRORS:
                 assert key in block, f"{name}: missing error key {key}"
+
+
+def test_options_step_description_shows_the_effective_band():
+    for name in FILES:
+        doc = _load(name)
+        description = doc["options"]["step"]["init"]["description"]
+        assert "{effective_band}" in description, (
+            f"{name}: options init description lacks {{effective_band}}"
+        )

@@ -68,6 +68,7 @@
       "invalid_currency": "Valuutan on oltava 3-kirjaiminen koodi, kuten EUR, SEK, NOK tai DKK, tai tyhjä.",
       "invalid_params": "Virheelliset parametrit.",
       "invalid_reserved_band": "Varattu kapasiteetti ei jätä käyttökelpoista aluetta: pienennä varauksia tai levennä Min/Max SoC -arvoja.",
+      "invalid_soc_band": "Min SoC -arvon on oltava pienempi kuin Max SoC.",
       "reserved_exceeds_capacity": "Varaus ei voi olla suurempi kuin akun kapasiteetti."
     },
     "abort": {
@@ -79,6 +80,7 @@
       "sensor_not_found": "Yhtä tai useampaa määritettyä anturia ei löytynyt.",
       "invalid_currency": "Valuutan on oltava 3-kirjaiminen koodi, kuten EUR, SEK, NOK tai DKK, tai tyhjä.",
       "invalid_reserved_band": "Varattu kapasiteetti ei jätä käyttökelpoista aluetta: pienennä varauksia tai levennä Min/Max SoC -arvoja.",
+      "invalid_soc_band": "Min SoC -arvon on oltava pienempi kuin Max SoC.",
       "reserved_exceeds_capacity": "Varaus ei voi olla suurempi kuin akun kapasiteetti."
     },
     "step": {

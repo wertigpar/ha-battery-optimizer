@@ -128,8 +128,8 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 | **Min SoC** | Minimum allowed state of charge (%) | `20` |
 | **Max SoC** | Maximum allowed state of charge (%) | `100` |
 | **Battery Range low marker (%)** | Optional. The value to push as the Emaldo Battery Range low marker. Only needed for Guaranteed Grid Rewards contracts, where the app's slider scale is a percentage of the capacity left after the contract's reserves, unlike the whole-pack scale of the SoC sensor. Empty sends the planned floor (correct for Flexible Grid Rewards). | *(empty)* |
-| **Reserved at bottom (kWh)** | Optional. Capacity the contract reserves at the bottom of the pack. Raises the planned floor so discharge never aims into reserved capacity. `0` for Flexible Grid Rewards. | `0` |
-| **Reserved at top (kWh)** | Optional. Capacity the contract reserves at the top of the pack. Lowers the planned ceiling so charging never aims into it. `0` for Flexible Grid Rewards. | `0` |
+| **Reserved at bottom (kWh)** | Optional. Capacity the contract reserves at the bottom of the pack. If the reserve exceeds Min SoC, the planned floor is raised to cover it (`max()`), so discharge never aims into reserved capacity. `0` for Flexible Grid Rewards. | `0` |
+| **Reserved at top (kWh)** | Optional. Capacity the contract reserves at the top of the pack. If the reserve lowers the ceiling below Max SoC, the planned ceiling is lowered to respect it (`min()`), so charging never aims into it. `0` for Flexible Grid Rewards. | `0` |
 | **Base household load** | Estimated constant household load in kW. Used when auto-tune is disabled. | `1.0` |
 | **Battery wear cost** | Cost per kWh cycled (€/kWh) — accounts for battery degradation. Typical LFP: 1–5 snt/kWh. | `0.03` |
 | **Idle power consumption** | Constant power draw of the battery unit itself (kW). Drains SoC even when idle. | `0.1` |
@@ -160,6 +160,17 @@ All parameters are set through the UI config flow. No YAML configuration needed.
 > **Internal PV-sell tuning constants** (not UI-configurable — edit the `BatteryConfig` dataclass defaults in `optimizer.py` to change): `pv_sell_solar_margin` (default `0.95`, minimum fraction of needed solar energy required to allow selling), `pv_sell_min_price_spread` (default `0.0`, absolute sell-price floor in €/kWh — selling also requires the sell price to exceed the slot's stored value), `pv_sell_margin` (default `1.0`, multiplier on the stored-value sell threshold — `1.05` requires a 5% premium over storage before exporting), `solar_forecast_margin` (default `0.85`, fraction of discharge-slot surplus solar credited to the grid-charge balance).
 
 All parameters can be changed later via **Settings → Devices & Services → Battery Optimizer → Configure**.
+
+**Guaranteed Grid Rewards caveat:** with the SoC guard enabled, the guard's
+high marker is still computed on the whole-pack scale while the device reads
+the Battery Range markers on the usable-capacity scale, so on a Guaranteed
+contract discharge may stop above the planned floor. This change does not
+alter the guard; run GGR with the SoC guard disabled until a follow-up
+converts it. The reserved-capacity band only moves when a reserve exceeds
+the configured Min/Max SoC (the code uses `max()`/`min()`). The pushed
+schedule is unchanged for normal installs with `1 <= Min SoC <= 99`; Min SoC
+0 sends marker 1 and Min SoC 100 sends 99, because the marker must stay in
+1..99 and 0 is the idle byte.
 
 ### PV Forecast Source
 

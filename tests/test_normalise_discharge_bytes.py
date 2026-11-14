@@ -101,3 +101,29 @@ def test_resolved_low_marker_clamps_to_the_high_marker():
 
 def test_resolved_low_marker_never_returns_the_idle_byte():
     assert _inst(marker=0.0)._resolved_low_marker(_cfg(13.0), None) == 1
+
+
+def test_fgr_frame_is_unchanged_for_normal_installs():
+    # FGR-shaped config: zero reserves, marker unset.  The pushed frame must
+    # stay the pre-#42 one: marker == the planned floor (bounded to 1..99)
+    # and every discharge byte == 256 - marker, never the idle byte 0.
+    for soc_min in (0, 13, 99):
+        sv = [128] * 96
+        discharge_slots = (5, 60, 90)
+        for pos in discharge_slots:
+            sv[pos] = 256 - 55
+        marker = _inst(soc_min=float(soc_min))._normalise_discharge_bytes(sv, 0)
+        expected = max(1, min(99, int(soc_min)))
+        assert marker == expected
+        for pos in discharge_slots:
+            assert sv[pos] == 256 - expected
+        assert 0 not in sv
+
+
+def test_guard_marker_never_below_the_idle_byte():
+    for soc_min, expected in ((0.0, 1), (-5.0, 1), (13.0, 13)):
+        o = _inst(soc_min=soc_min)
+        o._last_result = None
+        marker = o._compute_soc_guard_marker()
+        assert marker == expected
+        assert marker >= mod.MARKER_MIN

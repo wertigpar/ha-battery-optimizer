@@ -1,4 +1,5 @@
 """Issue #42: reserves narrow the band BatteryConfig is built with."""
+import logging
 import types
 
 import tests
@@ -53,3 +54,24 @@ def test_bottom_reserve_raises_the_planned_floor():
 def test_top_reserve_lowers_the_planned_ceiling():
     cfg = _inst(**{mod.CONF_RESERVED_TOP_KWH: 3.0})._build_battery_config()
     assert round(cfg.soc_max, 2) == 79.73
+
+
+def test_band_clamp_warning_logs_once_per_reserve_set(caplog):
+    inst = _inst(**{mod.CONF_RESERVED_BOTTOM_KWH: 3.0})
+    with caplog.at_level(logging.WARNING, logger=mod._LOGGER.name):
+        inst._build_battery_config()
+        assert caplog.text.count("Reserved capacity clamps") == 1
+
+        inst._build_battery_config()
+        assert caplog.text.count("Reserved capacity clamps") == 1
+
+        inst._entry.data[mod.CONF_RESERVED_TOP_KWH] = 3.0
+        inst._build_battery_config()
+        assert caplog.text.count("Reserved capacity clamps") == 2
+
+
+def test_configured_marker_prefers_options_over_data():
+    inst = _inst()
+    inst._entry.data[mod.CONF_BATTERY_RANGE_LOW_MARKER] = 7.0
+    inst._entry.options[mod.CONF_BATTERY_RANGE_LOW_MARKER] = 9.0
+    assert inst._configured_low_marker() == 9.0

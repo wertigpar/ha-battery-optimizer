@@ -72,13 +72,63 @@ def test_marker_is_clamped_to_the_high_marker():
     assert battery_range.clamp_marker_to_high(40, 50) == 40
 
 
+def test_marker_clamp_never_emits_an_invalid_pair():
+    # A high marker of 0 is the idle byte / below the valid window; it must
+    # not drag the low marker down with it.
+    assert battery_range.clamp_marker_to_high(1, 0) == 1
+    assert battery_range.clamp_marker_to_high(0, None) == 1
+    assert battery_range.clamp_marker_to_high(-5, None) == 1
+    assert battery_range.clamp_marker_to_high(500, 500) == 99
+    assert battery_range.clamp_marker_to_high(1, 0) >= battery_range.MARKER_MIN
+
+
+def test_marker_resolution_falls_back_when_the_setting_is_not_numeric():
+    assert battery_range.resolve_low_marker(31.0, "not-a-number") == 31
+    assert battery_range.resolve_low_marker(31.0, None) == 31
+
+
 def test_reserved_error_rejects_an_empty_band():
-    # floor 70 % vs ceiling 100 - 60 % = 40 %: no usable band left.
+    # floor 70 % is untouched; the top reserve pulls the ceiling to
+    # 100 - 60 % = 40 %, so the top is the side that caused the empty band.
     err = battery_range.reserved_capacity_error(
         capacity_kwh=10.0, soc_min=70, soc_max=100,
         reserved_bottom_kwh=4.0, reserved_top_kwh=6.0,
     )
+    assert err == ("top", "invalid_reserved_band")
+
+
+def test_reserved_error_attributes_a_bottom_only_empty_band():
+    # floor 0 % is moved up to the 40 % bottom reserve; the ceiling stays 30 %.
+    err = battery_range.reserved_capacity_error(
+        capacity_kwh=10.0, soc_min=0, soc_max=30,
+        reserved_bottom_kwh=4.0, reserved_top_kwh=0.0,
+    )
     assert err == ("bottom", "invalid_reserved_band")
+
+
+def test_reserved_error_attributes_an_invalid_soc_band_to_base():
+    # Zero reserves and Min SoC at/above Max SoC is a base-field problem.
+    err = battery_range.reserved_capacity_error(
+        capacity_kwh=10.0, soc_min=80, soc_max=50,
+        reserved_bottom_kwh=0.0, reserved_top_kwh=0.0,
+    )
+    assert err == ("base", "invalid_soc_band")
+
+
+def test_reserved_error_with_zero_capacity_and_a_positive_reserve():
+    err = battery_range.reserved_capacity_error(
+        capacity_kwh=0.0, soc_min=20, soc_max=100,
+        reserved_bottom_kwh=3.0, reserved_top_kwh=0.0,
+    )
+    assert err == ("bottom", "reserved_exceeds_capacity")
+
+
+def test_negative_reserves_are_floored_at_zero():
+    eff_min, eff_max = BAND(
+        capacity_kwh=14.8, soc_min=7, soc_max=100,
+        reserved_bottom_kwh=-3.0, reserved_top_kwh=-3.0,
+    )
+    assert (eff_min, eff_max) == (7.0, 100.0)
 
 
 def test_reserved_error_rejects_a_reserve_above_capacity():
