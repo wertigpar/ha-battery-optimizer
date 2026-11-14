@@ -53,6 +53,9 @@ from .const import (
     CONF_DISCHARGE_EFFICIENCY,
     CONF_SOC_MIN,
     CONF_SOC_MAX,
+    CONF_BATTERY_RANGE_LOW_MARKER,
+    CONF_RESERVED_BOTTOM_KWH,
+    CONF_RESERVED_TOP_KWH,
     CONF_BASE_LOAD_KW,
     CONF_BATTERY_WEAR_COST,
     CONF_IDLE_POWER_KW,
@@ -210,6 +213,11 @@ from .plan_export import render_analysis
 from . import push_state
 from . import marker_io
 from . import sale_state
+from .battery_range import (
+    clamp_marker_to_high,
+    effective_soc_band,
+    resolve_low_marker,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -523,6 +531,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_sources_tomorrow: list[str] | None = None
         self._last_user_winners_tomorrow: list[SlotWinner] | None = None
         self._last_pv_sources_tomorrow: list[str] | None = None
+        # Issue #42: last band-clamp warning, so it is logged once per
+        # configuration rather than on every BatteryConfig build.
+        self._band_clamp_warning: str | None = None
         self._activated_time: str | None = None
         # SoC Guard state
         self._unsub_guard: CALLBACK_TYPE | None = None
@@ -1052,6 +1063,30 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _build_battery_config(self) -> BatteryConfig:
         """Create a BatteryConfig from the current HA config."""
         c = self.config
+        capacity_kwh = c.get(CONF_BATTERY_CAPACITY_KWH, 5.0)
+        soc_min = c.get(CONF_SOC_MIN, 20)
+        soc_max = c.get(CONF_SOC_MAX, 100)
+        eff_soc_min, eff_soc_max = effective_soc_band(
+            capacity_kwh=capacity_kwh,
+            soc_min=soc_min,
+            soc_max=soc_max,
+            reserved_bottom_kwh=c.get(CONF_RESERVED_BOTTOM_KWH, 0.0) or 0.0,
+            reserved_top_kwh=c.get(CONF_RESERVED_TOP_KWH, 0.0) or 0.0,
+        )
+        warning = None
+        if (eff_soc_min, eff_soc_max) != (float(soc_min), float(soc_max)):
+            warning = (
+                "Reserved capacity clamps the planned SoC band: "
+                f"{float(soc_min):.0f}-{float(soc_max):.0f} % -> "
+                f"{eff_soc_min:.0f}-{eff_soc_max:.0f} % "
+                f"(reserves {c.get(CONF_RESERVED_BOTTOM_KWH, 0.0)} kWh bottom, "
+                f"{c.get(CONF_RESERVED_TOP_KWH, 0.0)} kWh top of "
+                f"{capacity_kwh} kWh). Adjust Min/Max SoC or the reserves "
+                "if that is not intended (issue #42)."
+            )
+        if warning and warning != getattr(self, "_band_clamp_warning", None):
+            _LOGGER.warning(warning)
+        self._band_clamp_warning = warning
         # Use auto-tuned base load if enabled and a value has been computed;
         # otherwise fall back to the configured static value.
         base_load_kw = (
@@ -1068,8 +1103,8 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             charge_efficiency=c.get(CONF_CHARGE_EFFICIENCY, 0.95),
             discharge_efficiency=c.get(CONF_DISCHARGE_EFFICIENCY, 0.95),
-            soc_min=c.get(CONF_SOC_MIN, 20),
-            soc_max=c.get(CONF_SOC_MAX, 100),
+            soc_min=eff_soc_min,
+            soc_max=eff_soc_max,
             vat_multiplier=c.get(CONF_VAT_MULTIPLIER, self._locale.vat_multiplier),
             transfer_fee_buy=c.get(CONF_TRANSFER_FEE_BUY, self._locale.transfer_fee_buy),
             grid_charge_solar_aware=c.get(
@@ -4897,12 +4932,20 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for i, val in enumerate(slot_values):
                 if val > 0x80:  # discharge byte (129-255)
                     slot_values[i] = (256 - high_marker) & 0xFF
+            requested = resolve_low_marker(cfg.soc_min, self._configured_low_marker())
+            low_marker = clamp_marker_to_high(requested, high_marker)
+            if low_marker != requested:
+                _LOGGER.warning(
+                    "Battery Range low marker %d%% is at or above the SoC guard "
+                    "high marker %d%%; sending %d%% instead (issue #42)",
+                    requested, high_marker, low_marker,
+                )
             service_data["high_marker"] = high_marker
-            service_data["low_marker"] = int(cfg.soc_min)
+            service_data["low_marker"] = low_marker
             self._current_guard_marker = high_marker
             _LOGGER.info(
                 "SoC guard active: high_marker=%d%%, low_marker=%d%%",
-                high_marker, int(cfg.soc_min),
+                high_marker, low_marker,
             )
         else:
             # Issue #38: with the guard off the planner's per-slot stop
@@ -4991,6 +5034,14 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return overrides_needed
 
+    def _configured_low_marker(self) -> float | None:
+        """Return the configured Battery Range low marker, or None (issue #42).
+
+        None means "not set": the marker then follows the planned floor, which
+        is what Flexible Grid Rewards installs want.
+        """
+        return self.config.get(CONF_BATTERY_RANGE_LOW_MARKER)
+
     def _normalise_discharge_bytes(
         self, slot_values: list[int], now_slot: int
     ) -> int | None:
@@ -4999,8 +5050,9 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ``slot_values`` is the rolling 96-slot array, edited in place:
         positions from ``now_slot`` on are today's slots, earlier positions
         are tomorrow's.  Discharge slots set by a user rule keep the level
-        the user asked for.  Returns the low marker to send with the push,
-        or None when no byte was rewritten.
+        the user asked for.  Returns the low marker to send with the push
+        (configured Battery Range marker, or the planned floor when unset —
+        issue #42), or None when no byte was rewritten.
         """
         today_sources = getattr(self, "_last_sources", None)
         tomorrow_sources = getattr(self, "_last_sources_tomorrow", None)
@@ -5018,7 +5070,10 @@ class BatteryOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if low_marker is None:
                 # At least 1: a marker of 0 would encode as byte 0, which is
                 # the idle byte, so soc_min = 0 would stop every discharge.
-                low_marker = max(int(self._build_battery_config().soc_min), 1)
+                low_marker = resolve_low_marker(
+                    self._build_battery_config().soc_min,
+                    self._configured_low_marker(),
+                )
             slot_values[pos] = (256 - low_marker) & 0xFF
         return low_marker
 

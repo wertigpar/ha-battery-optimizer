@@ -11,9 +11,13 @@ mod = tests.load_coordinator()[0]
 C = mod.BatteryOptimizerCoordinator
 
 
-def _inst(sources=None, tomorrow=None, soc_min=13.0):
+def _inst(sources=None, tomorrow=None, soc_min=13.0, marker=None):
     o = object.__new__(C)
     o._build_battery_config = lambda: types.SimpleNamespace(soc_min=soc_min)
+    o._entry = types.SimpleNamespace(
+        data={} if marker is None else {mod.CONF_BATTERY_RANGE_LOW_MARKER: marker},
+        options={},
+    )
     o._last_sources = sources
     o._last_sources_tomorrow = tomorrow
     return o
@@ -63,3 +67,17 @@ def test_soc_min_zero_never_produces_the_idle_byte():
     sv[60] = 256 - 55
     assert _inst(soc_min=0.0)._normalise_discharge_bytes(sv, 0) == 1
     assert sv[60] == 255  # 0 would be the idle byte
+
+
+def test_configured_marker_overrides_the_planned_floor():
+    sv = [128] * 96
+    sv[60] = 256 - 55
+    assert _inst(soc_min=31.0, marker=7.0)._normalise_discharge_bytes(sv, 0) == 7
+    assert sv[60] == 256 - 7
+
+
+def test_configured_marker_is_bounded_like_the_floor():
+    sv = [128] * 96
+    sv[60] = 256 - 55
+    assert _inst(marker=0.0)._normalise_discharge_bytes(sv, 0) == 1
+    assert sv[60] == 255

@@ -404,6 +404,8 @@ def load_coordinator():
         load_marker_io()
     if not hasattr(pkg, "sale_state"):
         load_sale_state()
+    if not hasattr(pkg, "battery_range"):
+        load_battery_range()
 
     def _exec(target, filename):
         spec = spec_from_file_location(target, str(filename))

@@ -20,6 +20,12 @@ CONF_DISCHARGE_EFFICIENCY = "discharge_efficiency"
 CONF_SOC_MIN = "soc_min"
 CONF_SOC_MAX = "soc_max"
 
+# Issue #42: Guaranteed Grid Rewards contracts reserve capacity and give the
+# Battery Range slider its own scale, so the marker is a separate setting.
+CONF_BATTERY_RANGE_LOW_MARKER = "battery_range_low_marker"
+CONF_RESERVED_BOTTOM_KWH = "reserved_bottom_kwh"
+CONF_RESERVED_TOP_KWH = "reserved_top_kwh"
+
 CONF_BASE_LOAD_KW = "base_load_kw"
 
 CONF_BATTERY_WEAR_COST = "battery_wear_cost"
