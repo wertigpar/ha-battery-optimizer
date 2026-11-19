@@ -164,7 +164,7 @@ from .rules import (
     LEVEL_DEFAULT,
     PV_BEHAVIORS,
 )
-from .optional_value import is_blank
+from .optional_value import form_default, is_blank
 from .money import LocaleMoney, locale_money
 from .battery_range import effective_soc_band, reserved_capacity_error
 
@@ -351,6 +351,12 @@ def _build_schema(
                 or "sensor.solcast_pv_forecast_forecast_tomorrow",
             ): str,
         }
+    marker_value = d.get(CONF_BATTERY_RANGE_LOW_MARKER)
+    publish_hour = (
+        d[CONF_PRECHARGE_PUBLISH_HOUR]
+        if CONF_PRECHARGE_PUBLISH_HOUR in d
+        else DEFAULT_PRECHARGE_PUBLISH_HOUR
+    )
     return vol.Schema(
         {
             **emaldo_field,
@@ -415,7 +421,7 @@ def _build_schema(
             ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
             vol.Optional(
                 CONF_BATTERY_RANGE_LOW_MARKER,
-                default=d.get(CONF_BATTERY_RANGE_LOW_MARKER),
+                **form_default(marker_value),
             ): _OptionalNumberSelector(
                 NumberSelectorConfig(min=1.0, max=99.0, mode=NumberSelectorMode.BOX)
             ),
@@ -619,9 +625,7 @@ def _build_schema(
             ),
             vol.Optional(
                 CONF_PRECHARGE_PUBLISH_HOUR,
-                default=d.get(
-                    CONF_PRECHARGE_PUBLISH_HOUR, DEFAULT_PRECHARGE_PUBLISH_HOUR
-                ),
+                **form_default(publish_hour),
             ): _OptionalNumberSelector(
                 NumberSelectorConfig(
                     min=0.0, max=23.0, mode=NumberSelectorMode.BOX
@@ -980,6 +984,10 @@ class BatteryOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
             errors.update(_reserved_error_fields(user_input))
 
             if not errors:
+                if is_blank(user_input.get(CONF_PRECHARGE_PUBLISH_HOUR)):
+                    user_input.pop(CONF_PRECHARGE_PUBLISH_HOUR, None)
+                if is_blank(user_input.get(CONF_BATTERY_RANGE_LOW_MARKER)):
+                    user_input.pop(CONF_BATTERY_RANGE_LOW_MARKER, None)
                 await self.async_set_unique_id(DOMAIN)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
@@ -1044,6 +1052,8 @@ class BatteryOptimizerOptionsFlow(OptionsFlowWithConfigEntry):
                 )
             if is_blank(user_input.get(CONF_PRECHARGE_PUBLISH_HOUR)):
                 user_input.pop(CONF_PRECHARGE_PUBLISH_HOUR, None)
+            if is_blank(user_input.get(CONF_BATTERY_RANGE_LOW_MARKER)):
+                user_input.pop(CONF_BATTERY_RANGE_LOW_MARKER, None)
             return self.async_create_entry(title="", data=user_input)
 
         # Merge config entry data with any existing options

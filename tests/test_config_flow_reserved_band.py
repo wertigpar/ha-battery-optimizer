@@ -1,5 +1,6 @@
 """Issue #42: the reserved-capacity fields are wired into the flow schema."""
 import ast
+import re
 from pathlib import Path
 
 SRC = (
@@ -68,3 +69,32 @@ def test_options_form_shows_the_effective_band():
             assert "effective_band" in texts
             return
     raise AssertionError("async_step_init not found")
+
+
+SRC_TEXT = SRC.read_text(encoding="utf-8")
+
+
+def test_no_selector_field_defaults_to_none():
+    """A null default makes the frontend drop the field (frontend#26101)."""
+    for key in ("CONF_BATTERY_RANGE_LOW_MARKER", "CONF_PRECHARGE_PUBLISH_HOUR"):
+        assert not re.search(rf"{key},\s*default=", SRC_TEXT), key
+
+
+def test_optional_number_fields_use_form_default():
+    """Both optional number fields offer their value via ``form_default``."""
+    tree = _tree()
+    spreads = [
+        kw
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Optional"
+        for kw in node.keywords
+        if kw.arg is None
+    ]
+    calls = [
+        ast.unparse(spread.value)
+        for spread in spreads
+        if isinstance(spread.value, ast.Call)
+    ]
+    assert sum(c.startswith("form_default(") for c in calls) >= 2

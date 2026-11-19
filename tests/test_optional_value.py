@@ -54,3 +54,18 @@ def test_non_numeric_string_is_not_blank():
     """A typo is an error, not an empty field - it must still be rejected."""
     assert is_blank("abc") is False
     assert is_blank("14h") is False
+
+
+def test_form_default_omits_the_default_when_unset():
+    """An unset value must not produce ``default=None`` (frontend#26101)."""
+    assert optional_value.form_default(None) == {}
+
+
+def test_form_default_suggests_a_real_value():
+    assert optional_value.form_default(7.0) == {
+        "description": {"suggested_value": 7.0}
+    }
+    assert optional_value.form_default(0) == {"description": {"suggested_value": 0}}
+    assert optional_value.form_default("") == {
+        "description": {"suggested_value": ""}
+    }

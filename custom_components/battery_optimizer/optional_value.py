@@ -20,4 +20,20 @@ def is_blank(value: object) -> bool:
     return isinstance(value, str) and not value.strip()
 
 
-__all__ = ["is_blank"]
+def form_default(value: object) -> dict:
+    """Schema kwargs for an optional form field whose value may be unset.
+
+    Home Assistant serialises ``vol.Optional(..., default=None)`` to a field
+    with ``"default": null``, and the frontend then drops the field entirely
+    (frontend#26101).  An unset value therefore must contribute NO default,
+    while a real value is offered as ``suggested_value`` so it still pre-fills
+    without becoming a hard default.
+
+    Usage: ``vol.Optional(KEY, **form_default(value))``.
+    """
+    if value is None:
+        return {}
+    return {"description": {"suggested_value": value}}
+
+
+__all__ = ["is_blank", "form_default"]

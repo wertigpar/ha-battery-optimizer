@@ -1,5 +1,19 @@
 # Changes
 
+## v0.3.33
+
+### Fix: the optional number fields disappeared from the options form
+
+Fields built as `vol.Optional(key, default=None)` serialise to a form field with
+`"default": null`, and the Home Assistant frontend drops such fields entirely
+(frontend#26101). Both optional number fields were affected: **Battery Range low
+marker (%)** (new in v0.3.32) and **Next-day price publish hour** (since v0.3.26,
+where a blank save stores `None` and the field then never rendered again).
+
+An unset value now contributes no default, and a set value is offered as
+`suggested_value`, so both fields render empty and still pre-fill when they hold a
+value. A blank value is no longer stored in the entry options.
+
 ## v0.3.32
 
 ### Added
